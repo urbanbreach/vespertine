@@ -17,6 +17,7 @@ use crate::selection::{Outcome, Selection, resolve_spans};
 use crate::theme::TextTheme;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem;
 use std::rc::Rc;
 use vespertine::{
     AnyElement, App, Bounds, ClipboardItem, DispatchPhase, Element, ElementId, Global,
@@ -65,6 +66,10 @@ struct State {
     on_change: Option<ChangeCallback>,
     on_drag_end: Option<DragEndCallback>,
     pending_request: Option<SelectionRequest>,
+    /// The pending request was tried at a frame end and found a run missing; it survives to the
+    /// end of the frame (deferred layers paint after the root finished) and is dropped at the
+    /// next frame's start.
+    request_tried: bool,
     frames: u64,
 }
 
@@ -149,7 +154,9 @@ impl TextService {
     /// Selects between two runs programmatically (select-all, find navigation). Applied when the
     /// current frame finishes painting, so the runs must paint in that frame.
     pub fn select_runs(&self, request: SelectionRequest) {
-        self.0.borrow_mut().pending_request = Some(request);
+        let mut state = self.0.borrow_mut();
+        state.pending_request = Some(request);
+        state.request_tried = false;
     }
 
     /// Strings painted in the last frame, in paint order (chrome text included).
@@ -288,6 +295,9 @@ impl TextService {
     fn begin_frame(&self, cx: &App) {
         let mut state = self.0.borrow_mut();
         state.registry.reset();
+        if mem::take(&mut state.request_tried) {
+            state.pending_request = None;
+        }
         state.lists.clear();
         state.surfaces.clear();
         state.highlights.clear();
@@ -296,7 +306,7 @@ impl TextService {
     }
 
     fn finish_frame(&self, window: &mut Window, cx: &mut App) {
-        let request = self.0.borrow_mut().pending_request.take();
+        let request = self.0.borrow().pending_request;
         if let Some(request) = request {
             let applied = {
                 let mut state = self.0.borrow_mut();
@@ -313,6 +323,14 @@ impl TextService {
                     _ => false,
                 }
             };
+            let mut state = self.0.borrow_mut();
+            if applied {
+                state.pending_request = None;
+                state.request_tried = false;
+            } else {
+                state.request_tried = true;
+            }
+            drop(state);
             if applied {
                 window.refresh();
             }
@@ -469,6 +487,7 @@ impl TextService {
 #[derive(Clone, Copy)]
 enum ScopeKind {
     Root,
+    Layer,
     Surface(SurfaceId),
     UserSelect(UserSelect),
     SelectionColor(Hsla),
@@ -485,6 +504,20 @@ pub struct Scope {
 pub fn text_root(child: impl IntoElement) -> Scope {
     Scope {
         kind: ScopeKind::Root,
+        child: child.into_any_element(),
+    }
+}
+
+/// Re-enters the window's text service for a subtree that paints in a deferred layer (a popover,
+/// a hover card, a menu). Deferred layers paint after the document root has finished, when no
+/// service is current, so text inside them would neither register for selection nor be
+/// addressable by [`TextService::select_runs`]; wrapping the layer's content makes its runs
+/// register like the rest of the document (selectable, copyable, searchable). Place it inside
+/// the deferred element. A programmatic selection requested for a run of the layer applies at the
+/// end of the layer's paint.
+pub fn text_layer(child: impl IntoElement) -> Scope {
+    Scope {
+        kind: ScopeKind::Layer,
         child: child.into_any_element(),
     }
 }
@@ -526,7 +559,7 @@ impl ScopeKind {
         let Some(service) = service else { return };
         let mut state = service.0.borrow_mut();
         match self {
-            ScopeKind::Root => {}
+            ScopeKind::Root | ScopeKind::Layer => {}
             ScopeKind::Surface(id) => state.surfaces.push(id),
             ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => {}
         }
@@ -536,7 +569,7 @@ impl ScopeKind {
         let Some(service) = service else { return };
         let mut state = service.0.borrow_mut();
         match self {
-            ScopeKind::Root => {}
+            ScopeKind::Root | ScopeKind::Layer => {}
             ScopeKind::Surface(_) => {
                 state.surfaces.pop();
             }
@@ -561,9 +594,10 @@ impl ScopeKind {
                 selection_color: Some(color),
                 ..Default::default()
             }),
-            ScopeKind::Root | ScopeKind::Surface(_) | ScopeKind::UserSelect(UserSelect::Auto) => {
-                None
-            }
+            ScopeKind::Root
+            | ScopeKind::Layer
+            | ScopeKind::Surface(_)
+            | ScopeKind::UserSelect(UserSelect::Auto) => None,
         }
     }
 
@@ -574,7 +608,10 @@ impl ScopeKind {
     fn retention_token(self) -> u64 {
         match self {
             ScopeKind::Surface(id) => id.0 ^ 0x9e37_79b9_7f4a_7c15,
-            ScopeKind::Root | ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => 0,
+            ScopeKind::Root
+            | ScopeKind::Layer
+            | ScopeKind::UserSelect(_)
+            | ScopeKind::SelectionColor(_) => 0,
         }
     }
 }
@@ -608,9 +645,10 @@ impl Element for Scope {
                 .with_retention_context(self.kind.retention_token(), |window| {
                     self.child.request_layout(window, cx)
                 }),
-            ScopeKind::Root | ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => {
-                self.child.request_layout(window, cx)
-            }
+            ScopeKind::Root
+            | ScopeKind::Layer
+            | ScopeKind::UserSelect(_)
+            | ScopeKind::SelectionColor(_) => self.child.request_layout(window, cx),
         };
         (layout_id, ())
     }
@@ -635,6 +673,16 @@ impl Element for Scope {
                     begin.push_current();
                 }),
             );
+            self.child.prepaint(window, cx);
+            window.prepaint_effect(cx, Rc::new(|_, _| TextService::pop_current()));
+            return ScopeState {
+                service: Some(service),
+            };
+        }
+        if matches!(kind, ScopeKind::Layer) {
+            let service = TextService::of(window, cx);
+            let entering = service.clone();
+            window.prepaint_effect(cx, Rc::new(move |_, _| entering.push_current()));
             self.child.prepaint(window, cx);
             window.prepaint_effect(cx, Rc::new(|_, _| TextService::pop_current()));
             return ScopeState {
@@ -676,6 +724,21 @@ impl Element for Scope {
                 return;
             };
             service.install_listeners(window);
+            let entering = service.clone();
+            window.paint_effect(cx, Rc::new(move |_, _| entering.push_current()));
+            self.child.paint(window, cx);
+            window.paint_effect(cx, Rc::new(|_, _| TextService::pop_current()));
+            window.paint_effect(
+                cx,
+                Rc::new(move |window, cx| service.finish_frame(window, cx)),
+            );
+            return;
+        }
+        if matches!(kind, ScopeKind::Layer) {
+            let Some(service) = service else {
+                self.child.paint(window, cx);
+                return;
+            };
             let entering = service.clone();
             window.paint_effect(cx, Rc::new(move |_, _| entering.push_current()));
             self.child.paint(window, cx);

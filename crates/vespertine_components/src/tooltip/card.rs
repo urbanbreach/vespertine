@@ -46,6 +46,7 @@ pub struct HoverCardHost<K: Clone + Eq + Hash + 'static> {
     interactive: bool,
     placement: CardPlacement,
     max_height: Pixels,
+    bare: bool,
     dwell: Option<Task<()>>,
     grace: Option<Task<()>>,
     card_bounds: TriggerBounds,
@@ -67,6 +68,7 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
             interactive: false,
             placement: CardPlacement::Below,
             max_height: px(320.),
+            bare: false,
             dwell: None,
             grace: None,
             card_bounds: TriggerBounds::new(),
@@ -91,6 +93,14 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
     /// The card's maximum height; longer content scrolls inside it (default 320 px).
     pub fn max_height(mut self, height: Pixels) -> Self {
         self.max_height = height;
+        self
+    }
+
+    /// The content brings its own chrome (padding, border, fill, scrolling), such as the
+    /// destination card of [`super::destination`]: the host then adds none and only places the
+    /// content.
+    pub fn bare(mut self, bare: bool) -> Self {
+        self.bare = bare;
         self
     }
 
@@ -222,6 +232,14 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
         let now = self.now(cx);
         if self.cards.shown() == Some(key) && self.interactive {
             let card = self.card_bounds.get();
+            if card.is_some_and(|card| card.contains(&pointer)) {
+                // The pointer went straight from the trigger into the card (a fast move, or a
+                // card with no gap): the card's own hover already fired before this leave, so
+                // nothing is left to cancel the grace; the card keeps the pointer.
+                self.hide.card_entered();
+                self.grace = None;
+                return;
+            }
             let left = matches!(self.placement, CardPlacement::Beside { left: true, .. });
             match card {
                 Some(card) => {
@@ -295,6 +313,16 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
         self.arm_grace(answer, window, cx);
     }
 
+    /// A wheel event at `position` anywhere in the window. Over the trigger it is the trigger's
+    /// own cold dismissal; over an interactive card it scrolls the card (R14) and keeps it open;
+    /// anywhere else it dismisses cold.
+    fn wheel(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interactive && self.card_bounds.contains(&position) {
+            return;
+        }
+        self.dismiss_cold(window, cx);
+    }
+
     /// A click, menu opening, drag start or scroll: cancel pending, hide the shown card and
     /// clear hidden-at, so the card does not chase the pointer straight back.
     pub fn dismiss_cold(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -324,6 +352,9 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
     fn card_body(&self, key: &K, window: &mut Window, cx: &mut App) -> AnyElement {
         let tokens = ComponentTokens::current(cx);
         let content = (self.content)(key, window, cx);
+        if self.bare {
+            return content;
+        }
         let viewport_height = f32::from(window.viewport_size().height);
         let max_height = px(f32::from(self.max_height).min((viewport_height - 16.).max(1.)));
         div()
@@ -408,8 +439,8 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
                         });
                     });
                     let scrolled = tracker_host;
-                    window.on_mouse_event(move |_: &ScrollWheelEvent, _, window, cx| {
-                        scrolled.update(cx, |this, cx| this.dismiss_cold(window, cx));
+                    window.on_mouse_event(move |event: &ScrollWheelEvent, _, window, cx| {
+                        scrolled.update(cx, |this, cx| this.wheel(event.position, window, cx));
                     });
                 },
             )

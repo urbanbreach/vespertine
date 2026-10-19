@@ -10,7 +10,8 @@
 //!   [`OriginalText`]/[`DisplayMap`] so that hit testing, selection and copy resolve to the source.
 //! - [`text_root`] is the root of a document: it resets the per-frame registry and installs the
 //!   window-level press, move, release and copy listeners. [`surface`], [`user_select`] and
-//!   [`selection_color`] scope state to a subtree.
+//!   [`selection_color`] scope state to a subtree; [`text_layer`] re-enters the service inside a
+//!   deferred layer (popover, hover card), which paints after the root has finished.
 //! - [`highlight`] declares search washes (a literal query and/or explicit UTF-16 ranges) for a
 //!   subtree; [`search`] holds the framework-independent matcher, numbering and find helper.
 //! - [`RichLayout`] answers the geometry questions of carets, link hitboxes, washes and overlays;
@@ -57,7 +58,7 @@ pub use rich_text::{RichText, UnderWash};
 pub use selection::{Outcome, Selection, Span, resolve_spans, word_range};
 pub use service::{
     SELECTION_ALPHA, Scope, SelectionRequest, TextService, UserSelect, selection_color, surface,
-    text_root, user_select,
+    text_layer, text_root, user_select,
 };
 pub use slot::{FILE_LINK_SLOT, SlottedText, insert_slots};
 pub use theme::TextTheme;

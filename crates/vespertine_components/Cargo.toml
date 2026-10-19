@@ -93,6 +93,18 @@ name = "floating_menus"
 path = "examples/floating_menus.rs"
 
 [[example]]
+name = "destination_card"
+path = "examples/destination_card.rs"
+
+[[example]]
+name = "native_tooltips"
+path = "examples/native_tooltips.rs"
+
+[[example]]
+name = "hover_card_host"
+path = "examples/hover_card_host.rs"
+
+[[example]]
 name = "controls_activation"
 path = "examples/controls_activation.rs"
 

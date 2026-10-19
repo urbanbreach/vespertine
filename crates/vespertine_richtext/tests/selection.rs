@@ -9,11 +9,11 @@ use support::{Build, Harness, at, near, rgb_at};
 use unicode_segmentation::UnicodeSegmentation;
 use vespertine::{
     AnyElement, FocusHandle, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-    div, px, rgb,
+    deferred, div, px, rgb,
 };
 use vespertine_richtext::{
-    RichText, RunKey, SelectionRequest, UserSelect, selection_color, surface, text_root,
-    user_select,
+    RichText, RunKey, SelectionRequest, UserSelect, selection_color, surface, text_layer,
+    text_root, user_select,
 };
 
 const WIDTH: f32 = 240.0;
@@ -523,6 +523,44 @@ fn programmatic_selection_applies_when_the_frame_finishes() {
     });
     harness.settle();
     assert_eq!(service.selected_text().as_deref(), Some("pha\nbe"));
+}
+
+#[test]
+fn text_in_a_deferred_layer_registers_through_a_text_layer_and_takes_a_programmatic_selection() {
+    let build: Build = Rc::new(|_, _| {
+        page([
+            RichText::new("a", "main")
+                .key(RunKey::new("k", 0))
+                .into_any_element(),
+            // A deferred layer paints after the document root has finished: without the layer
+            // scope its text would not register.
+            deferred(div().absolute().top(px(60.)).child(text_layer(
+                RichText::new("b", "layer text").key(RunKey::new("k", 1)),
+            )))
+            .into_any_element(),
+            deferred(
+                div()
+                    .absolute()
+                    .top(px(100.))
+                    .child(RichText::new("c", "unscoped").key(RunKey::new("k", 2))),
+            )
+            .into_any_element(),
+        ])
+    });
+    let mut harness = Harness::new(WIDTH, 160., build);
+    let service = harness.service();
+    harness.settle();
+    assert_eq!(
+        service.registered_runs(),
+        2,
+        "the main run and the layer's run register; the unscoped deferred run does not"
+    );
+    service.select_runs(SelectionRequest {
+        from: (RunKey::new("k", 0), 1),
+        to: (RunKey::new("k", 1), 5),
+    });
+    harness.settle();
+    assert_eq!(service.selected_text().as_deref(), Some("ain\nlayer"));
 }
 
 #[test]

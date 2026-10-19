@@ -15,11 +15,18 @@ struct Root {
     host: Entity<HoverCardHost<usize>>,
     mounted: Rc<Cell<[bool; 3]>>,
     shift: Rc<Cell<f32>>,
+    reconcile_in_render: Rc<Cell<bool>>,
 }
 
 impl Render for Root {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mounted = self.mounted.get();
+        if self.reconcile_in_render.get() {
+            // R13: the container reconciles at every render.
+            self.host.update(cx, |cards, cx| {
+                cards.reconcile(|key| mounted[*key], false, false, cx)
+            });
+        }
         let shift = self.shift.get();
         let mut root = div().size_full().relative();
         for (ix, (x, y)) in TRIGGERS.iter().enumerate() {
@@ -46,6 +53,7 @@ struct Fixture {
     cards: Entity<HoverCardHost<usize>>,
     mounted: Rc<Cell<[bool; 3]>>,
     shift: Rc<Cell<f32>>,
+    reconcile_in_render: Rc<Cell<bool>>,
 }
 
 fn fixture(interactive: bool, placement: CardPlacement) -> Fixture {
@@ -55,7 +63,8 @@ fn fixture(interactive: bool, placement: CardPlacement) -> Fixture {
     let root_sink = root_out.clone();
     let mounted = Rc::new(Cell::new([true; 3]));
     let shift = Rc::new(Cell::new(0.));
-    let (m, s) = (mounted.clone(), shift.clone());
+    let reconcile_in_render = Rc::new(Cell::new(false));
+    let (m, s, r) = (mounted.clone(), shift.clone(), reconcile_in_render.clone());
     let host = TestHost::with_view(HostOptions::with_size(400.0, 300.0), move |_, cx| {
         let cards = cx.new(|cx| {
             HoverCardHost::new(
@@ -76,6 +85,7 @@ fn fixture(interactive: bool, placement: CardPlacement) -> Fixture {
             host: cards,
             mounted: m,
             shift: s,
+            reconcile_in_render: r,
         });
         *root_sink.borrow_mut() = Some(root.clone());
         root
@@ -89,6 +99,7 @@ fn fixture(interactive: bool, placement: CardPlacement) -> Fixture {
         cards,
         mounted,
         shift,
+        reconcile_in_render,
     }
 }
 
@@ -115,7 +126,9 @@ impl Fixture {
         self.host.flush();
     }
 
-    /// The container re-renders (its state changed).
+    /// The container re-renders (its state changed). The fixture's `mounted` and `shift` cells
+    /// are not observed by the window: a change to them is only drawn when the container is
+    /// notified, exactly as with any state kept outside an entity.
     fn rerender(&mut self) {
         let root = self.root.clone();
         self.host
@@ -218,6 +231,100 @@ fn an_unmounted_trigger_is_reconciled_at_the_next_render() {
     );
 }
 
+/// The sequence the predecessor had to split: unmount the pointed-at trigger, reconcile from
+/// outside any window update, mount it again, then leave and re-enter it and move it away under a
+/// stationary pointer. A trigger that is not mounted cannot hear the pointer leave (that is why
+/// R13 reconciles from the container), and a container whose own state lives outside an entity
+/// must be notified to draw it again; with both done every leave and enter is delivered.
+#[test]
+fn a_reconcile_outside_a_window_update_leaves_every_later_leave_and_enter_working() {
+    require_backend!();
+    let mut f = fixture(false, CardPlacement::Below);
+    f.at(0);
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    // The container drops the trigger; the reconcile's own notification draws the window
+    // without it.
+    f.mounted.set([false, true, true]);
+    let cards = f.cards.clone();
+    f.host.app().update(|cx| {
+        cards.update(cx, |cards, cx| {
+            cards.reconcile(|key| *key != 0, false, false, cx)
+        })
+    });
+    f.host.flush();
+    assert_eq!(
+        f.shown(),
+        None,
+        "the card of an unmounted trigger is dismissed"
+    );
+    assert!(!f.host.painted_text().iter().any(|t| t == "trigger 0"));
+    // Mounting it again under the stationary pointer is drawn once the container is notified,
+    // and the paint-time hit test starts a fresh dwell: the cold dismissal cleared hidden-at.
+    f.mounted.set([true; 3]);
+    f.rerender();
+    assert!(f.host.painted_text().iter().any(|t| t == "trigger 0"));
+    assert_eq!(f.target(), Some(0));
+    assert_eq!(f.shown(), None);
+    // The pointer leaves: the pending dwell is cancelled and never settles.
+    f.move_to(300., 250.);
+    assert_eq!(f.target(), None, "the leave was delivered");
+    f.pass(600.);
+    assert_eq!(f.shown(), None);
+    // Entering again waits the dwell, shows, and leaving hides the card.
+    f.at(0);
+    assert_eq!(f.target(), Some(0));
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    f.move_to(300., 250.);
+    assert_eq!(f.shown(), None, "leaving hides the shown card");
+    // A pending dwell whose trigger moves away under a stationary pointer never settles.
+    f.pass(500.);
+    f.at(0);
+    f.pass(300.);
+    f.shift.set(200.);
+    f.rerender();
+    f.pass(300.);
+    assert_eq!(f.shown(), None);
+    // The moved trigger is hovered at its new place (the warm window has passed, so it dwells).
+    f.pass(500.);
+    f.move_to(260., 35.);
+    assert_eq!(f.target(), Some(0));
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+}
+
+#[test]
+fn a_container_reconciling_in_its_render_dismisses_the_card_and_keeps_hover_events_flowing() {
+    require_backend!();
+    let mut f = fixture(false, CardPlacement::Below);
+    f.reconcile_in_render.set(true);
+    f.at(0);
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    f.mounted.set([false, true, true]);
+    f.rerender();
+    f.host.flush();
+    assert_eq!(
+        f.shown(),
+        None,
+        "the render-time reconcile dismissed the card"
+    );
+    f.mounted.set([true; 3]);
+    f.rerender();
+    f.move_to(300., 250.);
+    f.at(0);
+    assert_eq!(
+        f.target(),
+        Some(0),
+        "the leave and the enter were both delivered"
+    );
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    f.move_to(300., 250.);
+    assert_eq!(f.shown(), None);
+}
+
 #[test]
 fn a_trigger_that_moves_under_a_stationary_pointer_cancels_the_pending_dwell() {
     require_backend!();
@@ -303,4 +410,45 @@ fn a_reversal_inside_the_corridor_closes_the_interactive_card_at_once() {
     assert_eq!(f.shown(), Some(0));
     f.move_to(106.0, 37.0);
     assert_eq!(f.shown(), None, "a move of -2 px or more away closes");
+}
+
+/// The pointer can jump from the trigger into the card in one move (a fast flick, or a card that
+/// touches the trigger): the card's hover is delivered before the trigger's leave, so the leave
+/// must not start a grace that nothing cancels.
+#[test]
+fn an_interactive_card_entered_in_one_move_stays_open() {
+    require_backend!();
+    let mut f = fixture(
+        true,
+        CardPlacement::Beside {
+            left: false,
+            clearance: px(30.),
+        },
+    );
+    f.mounted.set([true, false, false]);
+    f.rerender();
+    f.at(0);
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    let card = {
+        let cards = f.cards.clone();
+        f.host
+            .app()
+            .update(|cx| cards.read(cx).card_bounds())
+            .expect("card painted")
+    };
+    let center = card.center();
+    f.move_to(
+        f64::from(f32::from(center.x)),
+        f64::from(f32::from(center.y)),
+    );
+    f.pass(500.);
+    assert_eq!(f.shown(), Some(0), "the card keeps the pointer");
+    f.move_to(300.0, 250.0);
+    f.pass(80.);
+    assert_eq!(
+        f.shown(),
+        None,
+        "leaving the card closes it after the grace"
+    );
 }
