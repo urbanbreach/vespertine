@@ -1075,14 +1075,8 @@ impl<'a> Builder<'a> {
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
-    match level {
-        HeadingLevel::H1 => 1,
-        HeadingLevel::H2 => 2,
-        HeadingLevel::H3 => 3,
-        HeadingLevel::H4 => 4,
-        HeadingLevel::H5 => 5,
-        HeadingLevel::H6 => 6,
-    }
+    // The levels are numbered 1 to 6.
+    level as u8
 }
 
 /// Final inline pass: bare URLs become links and adjacent runs of identical style merge (R2).

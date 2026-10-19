@@ -373,14 +373,8 @@ impl RenderOnce for CodeBlock {
                 );
             }
             for (_, overlay) in self.overlays.iter().filter(|(line, _)| *line == index) {
-                row = row.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .child(overlay(window, cx)),
-                );
+                let anchored = div().size_full().absolute().left_0().top_0();
+                row = row.child(anchored.child(overlay(window, cx)));
             }
             rows.push(row.into_any_element());
             for (_, extra) in self.rows_after.iter().filter(|(line, _)| *line == index) {

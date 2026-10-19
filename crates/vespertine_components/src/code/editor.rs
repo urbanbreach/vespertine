@@ -986,14 +986,11 @@ fn paint_layer(
                 window.paint_quad(fill(frame.gutter, style.gutter_background));
             }
             for number in &mut frame.numbers {
-                let _ = number.line.paint(
-                    number.origin,
-                    line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+                let align = TextAlign::Left;
+                number
+                    .line
+                    .paint(number.origin, line_height, align, None, window, cx)
+                    .ok();
                 if let Some(marker) = number.marker.as_mut() {
                     marker.paint(window, cx);
                 }

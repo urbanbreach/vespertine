@@ -12,9 +12,9 @@ use crate::math::{DisplayBlock, MathBlock, MathTextOptions, inline_line_height, 
 use std::cell::Cell;
 use std::rc::Rc;
 use vespertine::{
-    AnyElement, App, ClickEvent, CursorStyle, ElementId, Font, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
-    TextRun, Window, div, font, px,
+    AnyElement, App, ClickEvent, CursorStyle, ElementId, Font, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Role, SharedString,
+    StatefulInteractiveElement, Styled, TextRun, Window, div, font, px,
 };
 use vespertine_richtext::{RichText, RunKey, UnderWash, UserSelect, user_select};
 use vespertine_theme::document::DocumentTheme;
@@ -329,15 +329,7 @@ fn quote(
         .bg(alpha(accent, 0.05))
         .rounded_tr(px(6.))
         .rounded_br(px(6.))
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(px(2.))
-                .bg(alpha(accent, 0.6)),
-        )
+        .child(rail(alpha(accent, 0.6)))
         .children(inner)
         .into_any_element()
 }
@@ -400,15 +392,7 @@ fn list(
                 .items_start()
                 .gap(px(8.))
                 .child(marker)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .children(content),
-                )
+                .child(item_content(content))
                 .into_any_element()
         })
         .collect();
@@ -853,14 +837,39 @@ fn table(
         .overflow_x_scroll()
         .restrict_scroll_to_axis()
         .track_scroll(scroll_state.handle())
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .w_full()
-                .min_w(px(geometry.min_width))
-                .children(row_elements),
-        )
+        .child(table_body(geometry.min_width, row_elements))
         .into_any_element()
+}
+
+/// The vertical stack of the table rows: full width, never shrinking below the columns' floors.
+fn table_body(min_width: f32, rows: Vec<AnyElement>) -> impl IntoElement {
+    div()
+        .w_full()
+        .min_w(px(min_width))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .children(rows)
+}
+
+/// The content column of a list item: its blocks stacked with the 4 px item content gap.
+fn item_content(blocks: Vec<AnyElement>) -> impl IntoElement {
+    div()
+        .gap(px(4.))
+        .min_w_0()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .children(blocks)
+}
+
+/// The 2 px rail along the left edge of a block quote.
+fn rail(color: Hsla) -> impl IntoElement {
+    div()
+        .w(px(2.))
+        .bg(color)
+        .absolute()
+        .left_0()
+        .top_0()
+        .bottom_0()
 }

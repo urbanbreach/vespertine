@@ -87,13 +87,11 @@ impl Render for Example {
                 .children(SOURCE.lines().map(|line| div().child(line.to_string())))
         };
         let chip = |id: &'static str, label: String| {
-            div()
-                .id(id)
-                .px_3()
-                .py_1()
+            let padded = div().id(id).px_3().py_1();
+            padded
+                .cursor_pointer()
                 .rounded_md()
                 .bg(theme.border)
-                .cursor_pointer()
                 .child(label)
         };
         let mut header = div().flex().gap_2().child(div().child("mermaid")).child(
