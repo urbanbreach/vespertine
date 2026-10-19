@@ -7886,6 +7886,7 @@ dependencies = [
  "merman",
  "parking_lot",
  "pulldown-cmark",
+ "resvg",
  "serde",
  "serde_json",
  "tempfile",

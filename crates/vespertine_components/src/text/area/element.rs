@@ -184,6 +184,13 @@ impl Element for AreaElement {
             if let Some((color, rect)) = wash {
                 window.paint_quad(fill(rect, color));
             }
+        });
+        // The text never paints into the gutter the owner reserved at the left.
+        let text_clip = Bounds {
+            origin: point(clip.origin.x + inset, clip.origin.y),
+            size: size((clip.size.width - inset).max(px(0.0)), clip.size.height),
+        };
+        window.with_content_mask(Some(ContentMask { bounds: text_clip }), |window| {
             for quad in span_washes {
                 let rect = Bounds {
                     origin: point(
@@ -284,7 +291,6 @@ impl Element for AreaElement {
                 window.paint_quad(fill(caret, theme.caret));
             }
         });
-        let _ = inset;
 
         let hitbox = prepaint.hitbox.clone();
         window.on_mouse_event({

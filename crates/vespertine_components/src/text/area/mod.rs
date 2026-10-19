@@ -95,6 +95,10 @@ pub enum TextAreaEvent {
         range: Range<usize>,
         /// Length in bytes of the text that replaced it.
         inserted: usize,
+        /// The core's edit epoch after the edit: events are delivered after the update that
+        /// made them, so a listener that learned the text some other way compares epochs to
+        /// tell the edits it has already seen.
+        epoch: u64,
     },
     /// The caret or selection moved.
     CursorMoved,
@@ -153,11 +157,13 @@ struct LayoutKey {
     width_bits: i32,
     font: Font,
     size: Pixels,
+    line_height: Pixels,
     color: Hsla,
     monospace: SharedString,
     padding: Font,
     marked: Option<Range<usize>>,
     edit_epoch: u64,
+    wrap: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -206,12 +212,16 @@ pub struct TextArea {
     line_cache: HashMap<u64, Vec<Rc<CachedLine>>>,
     shape_count: usize,
     pub(crate) scroll_y: Pixels,
+    /// Whether long lines wrap (the default); without wrapping the editor scrolls horizontally.
+    wrap: bool,
+    pub(crate) scroll_x: Pixels,
+    content_width: Pixels,
     follow: bool,
     preferred_x: Option<Pixels>,
     settled_height: Option<Pixels>,
     pub(crate) bounds: Option<Bounds<Pixels>>,
     measured_height: Pixels,
-    last_viewport: Option<(Pixels, Pixels, Pixels)>,
+    last_viewport: Option<(Pixels, Pixels, Pixels, Pixels)>,
     pub(crate) blink: Blink,
     drag: Option<Drag>,
     pointer_generation: u64,
@@ -300,6 +310,9 @@ impl TextArea {
             line_cache: HashMap::new(),
             shape_count: 0,
             scroll_y: px(0.0),
+            wrap: true,
+            scroll_x: px(0.0),
+            content_width: px(0.0),
             follow: true,
             preferred_x: None,
             settled_height: None,
@@ -317,6 +330,13 @@ impl TextArea {
     }
 
     // ---- builders ---------------------------------------------------------------------------
+
+    /// Whether long lines wrap to the width (the default). Without wrapping every logical line is
+    /// one row and the editor scrolls horizontally, following the caret.
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
 
     /// Sets the placeholder shown while the value is empty.
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
@@ -652,12 +672,17 @@ impl TextArea {
         let edit = self.core.take_edit();
         self.text_changed(cx);
         self.scroll_y = px(0.0);
+        self.scroll_x = px(0.0);
         self.follow = true;
         self.preferred_x = None;
         if changed {
             cx.emit(TextAreaEvent::Changed(self.core.text().to_owned()));
             if let Some((range, inserted)) = edit {
-                cx.emit(TextAreaEvent::Edited { range, inserted });
+                cx.emit(TextAreaEvent::Edited {
+                    range,
+                    inserted,
+                    epoch: self.core.edit_epoch(),
+                });
             }
         }
         self.blink.reset(cx);
@@ -678,6 +703,7 @@ impl TextArea {
             let _ = self.core.take_edit();
             self.text_changed(cx);
             self.scroll_y = px(0.0);
+            self.scroll_x = px(0.0);
             self.follow = true;
             self.blink.reset(cx);
             window.notify_text_input_changed(&self.focus_handle);
@@ -782,7 +808,11 @@ impl TextArea {
         let changed = self.core.replace_unrecorded(range, text);
         self.text_changed(cx);
         if let Some((range, inserted)) = self.core.take_edit() {
-            cx.emit(TextAreaEvent::Edited { range, inserted });
+            cx.emit(TextAreaEvent::Edited {
+                range,
+                inserted,
+                epoch: self.core.edit_epoch(),
+            });
         }
         self.follow = true;
         self.preferred_x = None;
@@ -844,6 +874,86 @@ impl TextArea {
         self.layers.push(layer);
         self.manual_epoch += 1;
         cx.notify();
+    }
+
+    /// Overrides the theme roles (`None` returns to the application theme).
+    pub fn set_theme(&mut self, theme: Option<FieldTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// Overrides the font (`None` returns to the inherited text font).
+    pub fn set_font(&mut self, font: Option<Font>, cx: &mut Context<Self>) {
+        self.font = font;
+        cx.notify();
+    }
+
+    /// Sets the text size and line height.
+    pub fn set_text_metrics(&mut self, size: Pixels, line_height: Pixels, cx: &mut Context<Self>) {
+        self.metrics = TextMetrics { size, line_height };
+        cx.notify();
+    }
+
+    /// Sets the width reserved at the left of the content for an owner-painted gutter.
+    pub fn set_content_inset(&mut self, left: Pixels, cx: &mut Context<Self>) {
+        self.content_inset = left;
+        cx.notify();
+    }
+
+    /// Sets the wash painted behind the logical line holding the caret.
+    pub fn set_active_line_wash(&mut self, wash: Option<Hsla>, cx: &mut Context<Self>) {
+        self.active_line_wash = wash;
+        cx.notify();
+    }
+
+    /// Sets the height bounds in rows (see [`TextArea::rows`]).
+    pub fn set_rows(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
+        self.min_rows = min_rows.max(1);
+        self.max_rows = max_rows.max(self.min_rows);
+        cx.notify();
+    }
+
+    /// Switches line wrapping on or off.
+    pub fn set_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
+        if self.wrap != wrap {
+            self.wrap = wrap;
+            self.scroll_x = px(0.0);
+            self.follow = true;
+            cx.notify();
+        }
+    }
+
+    /// Whether long lines wrap.
+    pub fn is_wrap(&self) -> bool {
+        self.wrap
+    }
+
+    /// The horizontal scroll offset (always 0 while lines wrap).
+    pub fn scroll_offset_x(&self) -> Pixels {
+        self.scroll_x
+    }
+
+    /// Width of the widest line as of the last layout (0 before the first one).
+    pub fn content_width(&self) -> Pixels {
+        self.content_width
+    }
+
+    /// Sets the horizontal scroll offset (clamped; ignored while lines wrap); suspends
+    /// caret-follow like wheel scrolling.
+    pub fn set_scroll_offset_x(&mut self, offset: Pixels, cx: &mut Context<Self>) {
+        if self.wrap {
+            return;
+        }
+        let viewport = self.horizontal_viewport();
+        self.scroll_x = clamp_scroll(offset, self.content_width, viewport);
+        self.follow = false;
+        cx.notify();
+    }
+
+    fn horizontal_viewport(&self) -> Pixels {
+        self.bounds.map_or(px(0.0), |bounds| {
+            (bounds.size.width - self.content_inset).max(px(0.0))
+        })
     }
 
     /// Sets the vertical scroll offset (clamped); suspends caret-follow like wheel scrolling.
@@ -1009,11 +1119,13 @@ impl TextArea {
             width_bits: display_width_bits(width),
             font: self.resolved_font.clone(),
             size: self.metrics.size,
+            line_height: self.metrics.line_height,
             color,
             monospace: monospace.clone(),
             padding: padding_font.clone(),
             marked: marked_source.clone(),
             edit_epoch: self.core.edit_epoch(),
+            wrap: self.wrap,
         };
         if let (Some(layout), Some(previous)) = (&self.layout, &self.layout_key)
             && *previous == key
@@ -1056,9 +1168,18 @@ impl TextArea {
                 chip_cursor += 1;
             }
             let source_line = source_lines.next().unwrap_or("");
-            let indent = self.hanging_indent(source, source_line, text, &runs, width, window);
+            let indent = if self.wrap {
+                self.hanging_indent(source, source_line, text, &runs, width, window)
+            } else {
+                px(0.0)
+            };
             let indent_bits = display_width_bits(indent);
-            let width_bits = display_width_bits((width - indent).max(px(layout::MIN_SHAPE_WIDTH)));
+            // Without wrapping the shaped rows do not depend on the width.
+            let width_bits = if self.wrap {
+                display_width_bits((width - indent).max(px(layout::MIN_SHAPE_WIDTH)))
+            } else {
+                i32::MIN
+            };
             let hash = hash_line(text, width_bits, indent_bits, size_bits);
             let reused = old.get(&hash).and_then(|bucket| {
                 bucket
@@ -1078,9 +1199,13 @@ impl TextArea {
                 None => {
                     self.shape_count += 1;
                     let wrap_width = (width - indent).max(px(layout::MIN_SHAPE_WIDTH));
-                    let breaks = (!line_chips.is_empty()).then(|| {
-                        layout::chip_breaks(window, text, &runs, size, wrap_width, &line_chips)
-                    });
+                    let breaks = if !self.wrap {
+                        Some(Vec::new())
+                    } else {
+                        (!line_chips.is_empty()).then(|| {
+                            layout::chip_breaks(window, text, &runs, size, wrap_width, &line_chips)
+                        })
+                    };
                     let shape =
                         LineShape::shape(window, text, &runs, size, wrap_width, indent, breaks);
                     Rc::new(CachedLine {
@@ -1184,7 +1309,29 @@ impl TextArea {
             scroll = follow_scroll(scroll, point.y, layout.line_height, content, viewport);
         }
         self.scroll_y = clamp_scroll(scroll, content, viewport);
-        let snapshot = (self.scroll_y, bounds.size.height, content);
+        self.content_width = layout
+            .lines
+            .iter()
+            .map(|line| line.shape.max_width())
+            .fold(px(0.0), Pixels::max);
+        if self.wrap {
+            self.scroll_x = px(0.0);
+        } else {
+            let mut scroll_x = self.scroll_x;
+            if self.follow && !self.core.text().is_empty() {
+                let cursor = self.display_of(self.core.cursor());
+                let point = layout.point_for(cursor, self.core.affinity());
+                scroll_x = follow_scroll(
+                    scroll_x,
+                    point.x,
+                    self.metrics.size,
+                    self.content_width + self.metrics.size,
+                    inner,
+                );
+            }
+            self.scroll_x = clamp_scroll(scroll_x, self.content_width + self.metrics.size, inner);
+        }
+        let snapshot = (self.scroll_y, bounds.size.height, content, self.scroll_x);
         if self.last_viewport != Some(snapshot) {
             let first = self.last_viewport.is_none();
             self.last_viewport = Some(snapshot);
@@ -1207,7 +1354,7 @@ impl TextArea {
 
     pub(crate) fn content_origin(&self, bounds: Bounds<Pixels>) -> Point<Pixels> {
         point(
-            bounds.left() + self.content_inset,
+            bounds.left() + self.content_inset - self.scroll_x,
             bounds.top() - self.scroll_y,
         )
     }
@@ -1217,7 +1364,7 @@ impl TextArea {
     fn content_point(&self, position: Point<Pixels>) -> Option<Point<Pixels>> {
         let bounds = self.bounds?;
         Some(point(
-            position.x - bounds.left() - self.content_inset,
+            position.x - bounds.left() - self.content_inset + self.scroll_x,
             position.y - bounds.top() + self.scroll_y,
         ))
     }
@@ -1234,7 +1381,7 @@ impl TextArea {
         };
         let at = layout.point_for(self.display_of(source_offset), affinity);
         Some(point(
-            bounds.left() + self.content_inset + at.x,
+            bounds.left() + self.content_inset - self.scroll_x + at.x,
             bounds.top() - self.scroll_y + at.y,
         ))
     }
@@ -1394,7 +1541,11 @@ impl TextArea {
             self.text_changed(cx);
             if let Some((range, inserted)) = self.core.take_edit() {
                 cx.emit(TextAreaEvent::Changed(self.core.text().to_owned()));
-                cx.emit(TextAreaEvent::Edited { range, inserted });
+                cx.emit(TextAreaEvent::Edited {
+                    range,
+                    inserted,
+                    epoch: self.core.edit_epoch(),
+                });
             }
             self.follow = true;
             self.preferred_x = None;
@@ -1767,12 +1918,24 @@ impl TextArea {
         self.refs.invalidate_hover();
         let viewport = self.settled_viewport();
         let content = self.content_height();
-        if self.disabled || content <= viewport {
+        let delta = event.delta.pixel_delta(self.metrics.line_height);
+        let horizontal_content = self.content_width + self.metrics.size;
+        let horizontal = !self.wrap && horizontal_content > self.horizontal_viewport();
+        let vertical = content > viewport;
+        // A vertical gesture over an editor that only scrolls horizontally passes through.
+        if self.disabled || !(vertical || horizontal && delta.x != px(0.0)) {
             return false;
         }
-        let delta = event.delta.pixel_delta(self.metrics.line_height);
-        self.scroll_y = clamp_scroll(self.scroll_y - delta.y, content, viewport);
-        self.refs.invalidate_hover();
+        if horizontal {
+            self.scroll_x = clamp_scroll(
+                self.scroll_x - delta.x,
+                horizontal_content,
+                self.horizontal_viewport(),
+            );
+        }
+        if vertical {
+            self.scroll_y = clamp_scroll(self.scroll_y - delta.y, content, viewport);
+        }
         self.follow = false;
         cx.notify();
         true
@@ -1906,7 +2069,11 @@ impl EditorHost for TextArea {
             let edit = self.core.take_edit();
             cx.emit(TextAreaEvent::Changed(self.core.text().to_owned()));
             if let Some((range, inserted)) = edit {
-                cx.emit(TextAreaEvent::Edited { range, inserted });
+                cx.emit(TextAreaEvent::Edited {
+                    range,
+                    inserted,
+                    epoch: self.core.edit_epoch(),
+                });
             }
         }
         self.follow = true;

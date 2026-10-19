@@ -33,7 +33,6 @@ merman.workspace = true
 url.workspace = true
 usvg.workspace = true
 resvg.workspace = true
-serde_json.workspace = true
 alacritty_terminal.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
@@ -184,3 +183,7 @@ path = "examples/diagram_toggle.rs"
 [[example]]
 name = "markdown_stream"
 path = "examples/markdown_stream.rs"
+
+[[example]]
+name = "code_editor"
+path = "examples/code_editor.rs"

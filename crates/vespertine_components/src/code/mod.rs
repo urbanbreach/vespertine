@@ -8,6 +8,7 @@
 
 pub mod block;
 pub mod card;
+pub mod editor;
 pub mod indicator;
 pub mod lines;
 pub mod spans;
@@ -16,6 +17,9 @@ pub mod widgets;
 
 pub use block::{CodeBlock, GutterLine, LineBounds, LineClick};
 pub use card::{CardAction, CodeCard, CopyOptions, WrapToggle};
+pub use editor::{
+    CodeEditor, CodeEditorEvent, ContextMenuRequest, EditorStyle, ResolvedEditorStyle,
+};
 pub use indicator::{CodeScrollState, ThumbMetrics};
 pub use lines::{digits, gutter_width, line_ranges, normalize};
 pub use spans::{CodeHighlighter, SpanHighlighter, StyledRun, TextEdit};
