@@ -52,3 +52,6 @@ mod tests_image_hosts;
 
 #[cfg(test)]
 mod tests_style_pixels;
+
+#[cfg(test)]
+mod tests_floating;

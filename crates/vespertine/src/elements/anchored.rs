@@ -139,7 +139,7 @@ impl Element for Anchored {
             .reduce(|acc, bounds| acc.union(&bounds))
             .unwrap();
 
-        let (origin, mut desired) = self.position_mode.get_position_and_bounds(
+        let (origin, desired) = self.position_mode.get_position_and_bounds(
             self.anchor_position,
             self.anchor,
             children_bounds.size,
@@ -151,58 +151,15 @@ impl Element for Anchored {
             origin: Point::default(),
             size: window.viewport_size(),
         };
-
-        if self.fit_mode == AnchoredFitMode::SwitchAnchor {
-            let mut anchor = self.anchor;
-
-            if desired.left() < limits.left() || desired.right() > limits.right() {
-                let switched = Bounds::from_anchor_and_size(
-                    anchor.other_side_along(Axis::Horizontal),
-                    origin,
-                    children_bounds.size,
-                );
-                if !(switched.left() < limits.left() || switched.right() > limits.right()) {
-                    anchor = anchor.other_side_along(Axis::Horizontal);
-                    desired = switched
-                }
-            }
-
-            if desired.top() < limits.top() || desired.bottom() > limits.bottom() {
-                let switched = Bounds::from_anchor_and_size(
-                    anchor.other_side_along(Axis::Vertical),
-                    origin,
-                    children_bounds.size,
-                );
-                if !(switched.top() < limits.top() || switched.bottom() > limits.bottom()) {
-                    desired = switched;
-                }
-            }
-        }
-
         let client_inset = window.client_inset.unwrap_or(px(0.));
-        let edges = match self.fit_mode {
-            AnchoredFitMode::SnapToWindowWithMargin(edges) => edges,
-            _ => Edges::default(),
-        }
-        .map(|edge| *edge + client_inset);
-
-        // Snap the horizontal edges of the anchored element to the horizontal edges of the window if
-        // its horizontal bounds overflow, aligning to the left if it is wider than the limits.
-        if desired.right() > limits.right() {
-            desired.origin.x -= desired.right() - limits.right() + edges.right;
-        }
-        if desired.left() < limits.left() {
-            desired.origin.x = limits.origin.x + edges.left;
-        }
-
-        // Snap the vertical edges of the anchored element to the vertical edges of the window if
-        // its vertical bounds overflow, aligning to the top if it is taller than the limits.
-        if desired.bottom() > limits.bottom() {
-            desired.origin.y -= desired.bottom() - limits.bottom() + edges.bottom;
-        }
-        if desired.top() < limits.top() {
-            desired.origin.y = limits.origin.y + edges.top;
-        }
+        let desired = fit_anchored_bounds(
+            self.fit_mode,
+            self.anchor,
+            origin,
+            desired,
+            limits,
+            client_inset,
+        );
 
         let offset = desired.origin - bounds.origin;
         let offset = point(offset.x.round(), offset.y.round());
@@ -236,6 +193,69 @@ impl IntoElement for Anchored {
     fn into_element(self) -> Self::Element {
         self
     }
+}
+
+/// Fits `desired` (the content bounds placed with `anchor` at `origin` plus offset) inside
+/// `limits` according to `fit_mode`. Shared by the [`Anchored`] element and the pure
+/// placement computation of the floating layer host.
+pub(crate) fn fit_anchored_bounds(
+    fit_mode: AnchoredFitMode,
+    anchor: Anchor,
+    origin: Point<Pixels>,
+    mut desired: Bounds<Pixels>,
+    limits: Bounds<Pixels>,
+    client_inset: Pixels,
+) -> Bounds<Pixels> {
+    let size = desired.size;
+    if fit_mode == AnchoredFitMode::SwitchAnchor {
+        let mut anchor = anchor;
+
+        if desired.left() < limits.left() || desired.right() > limits.right() {
+            let switched = Bounds::from_anchor_and_size(
+                anchor.other_side_along(Axis::Horizontal),
+                origin,
+                size,
+            );
+            if !(switched.left() < limits.left() || switched.right() > limits.right()) {
+                anchor = anchor.other_side_along(Axis::Horizontal);
+                desired = switched
+            }
+        }
+
+        if desired.top() < limits.top() || desired.bottom() > limits.bottom() {
+            let switched =
+                Bounds::from_anchor_and_size(anchor.other_side_along(Axis::Vertical), origin, size);
+            if !(switched.top() < limits.top() || switched.bottom() > limits.bottom()) {
+                desired = switched;
+            }
+        }
+    }
+
+    let edges = match fit_mode {
+        AnchoredFitMode::SnapToWindowWithMargin(edges) => edges,
+        _ => Edges::default(),
+    }
+    .map(|edge| *edge + client_inset);
+
+    // Snap the horizontal edges of the anchored element to the horizontal edges of the window if
+    // its horizontal bounds overflow, aligning to the left if it is wider than the limits.
+    if desired.right() > limits.right() {
+        desired.origin.x -= desired.right() - limits.right() + edges.right;
+    }
+    if desired.left() < limits.left() {
+        desired.origin.x = limits.origin.x + edges.left;
+    }
+
+    // Snap the vertical edges of the anchored element to the vertical edges of the window if
+    // its vertical bounds overflow, aligning to the top if it is taller than the limits.
+    if desired.bottom() > limits.bottom() {
+        desired.origin.y -= desired.bottom() - limits.bottom() + edges.bottom;
+    }
+    if desired.top() < limits.top() {
+        desired.origin.y = limits.origin.y + edges.top;
+    }
+
+    desired
 }
 
 /// Which algorithm to use when fitting the anchored element to be inside the window.

@@ -22,13 +22,17 @@ mod color_css;
 pub mod colors;
 #[cfg(test)]
 mod counting_allocator;
+mod custom_element;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 pub mod drag_drop;
 mod element;
 mod elements;
 mod executor;
+mod floating;
 pub mod focus_restore;
+mod host_surface;
+mod host_text;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
 #[cfg(test)]
@@ -157,16 +161,20 @@ pub use assets::*;
 pub use color::*;
 pub use color_css::{css_color_to_packed, css_color_to_rgba, oklch_to_rgba, parse_css_color};
 pub use ctor::ctor;
+pub use custom_element::*;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
+pub use floating::*;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
 pub use glyph_blur::*;
 pub use gpu_context::*;
+pub use host_surface::*;
+pub use host_text::*;
 pub use spring::*;
 pub use vespertine_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,

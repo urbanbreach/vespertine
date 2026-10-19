@@ -26,6 +26,7 @@ pub mod autoscroll;
 pub mod display_map;
 pub mod geometry;
 pub mod highlight;
+pub mod host_text;
 pub mod label;
 pub mod link_layer;
 pub mod links;
@@ -41,6 +42,7 @@ pub mod syntax;
 pub use display_map::{DisplayMap, OriginalText, Replacement, with_break_opportunities};
 pub use geometry::{IndexHit, MAX_RANGE_ROWS, RichLayout, RowGeometry, RowInfo, range_rects};
 pub use highlight::{Highlight, highlight};
+pub use host_text::{RichHostText, host_run_key};
 pub use label::{ELLIPSIS, FlatText, Shortened, fit_labels};
 pub use link_layer::{LinkActivation, LinkLayer, LinkOptions};
 pub use links::{
