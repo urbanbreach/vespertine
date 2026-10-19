@@ -138,7 +138,10 @@ impl Window {
 
     /// Whether the row's recorded output may be replayed in this frame, whether it is shown
     /// or kept without being shown.
-    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
+    #[allow(
+        dead_code,
+        reason = "the recording of scroll layers shares the row helpers (PRF-004)"
+    )]
     pub(crate) fn row_reusable(&self, key: ViewKey) -> bool {
         self.row_reusable_for(key, false)
     }
@@ -290,7 +293,10 @@ impl Window {
     /// Prepaints a freshly built row under the mask `extent` (which covers the whole row), clips
     /// the hitboxes it produced to `clip`, and records its prepaint range. Ends the build's
     /// read phase.
-    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
+    #[allow(
+        dead_code,
+        reason = "the recording of scroll layers shares the row helpers (PRF-004)"
+    )]
     pub(crate) fn row_prepaint<R>(
         &mut self,
         key: ViewKey,
@@ -349,8 +355,11 @@ impl Window {
             .retention
             .views
             .get(key)
-            .map_or(start.accessed_element_states_index, |record| record.row_mark);
-        let mut has_states = end.accessed_element_states_index > start.accessed_element_states_index
+            .map_or(start.accessed_element_states_index, |record| {
+                record.row_mark
+            });
+        let mut has_states = end.accessed_element_states_index
+            > start.accessed_element_states_index
             || self
                 .retention
                 .views
@@ -388,7 +397,11 @@ impl Window {
         if self.next_frame.accessed_element_states.len() <= mark {
             return;
         }
-        let keys: Vec<_> = self.next_frame.accessed_element_states.drain(mark..).collect();
+        let keys: Vec<_> = self
+            .next_frame
+            .accessed_element_states
+            .drain(mark..)
+            .collect();
         for key in keys {
             self.next_frame.element_states.remove(&key);
         }
@@ -396,7 +409,10 @@ impl Window {
 
     /// Paints a freshly built row under `extent`, into a scene of its own, and records its
     /// paint range.
-    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
+    #[allow(
+        dead_code,
+        reason = "the recording of scroll layers shares the row helpers (PRF-004)"
+    )]
     pub(crate) fn row_paint<R>(
         &mut self,
         key: ViewKey,
@@ -428,7 +444,8 @@ impl Window {
         let switched = end.surface_switches_index != start.surface_switches_index;
         start.scene_index = scene_position;
         end.scene_index = scene_position;
-        let mut has_states = end.accessed_element_states_index > start.accessed_element_states_index;
+        let mut has_states =
+            end.accessed_element_states_index > start.accessed_element_states_index;
         if !shown {
             self.forget_accessed_states(start.accessed_element_states_index);
             end.accessed_element_states_index = start.accessed_element_states_index;

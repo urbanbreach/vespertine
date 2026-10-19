@@ -161,7 +161,13 @@ impl RowSession {
         key
     }
 
-    fn placement(&self, window: &Window, key: ViewKey, origin: Point<Pixels>, shown: bool) -> Placement {
+    fn placement(
+        &self,
+        window: &Window,
+        key: ViewKey,
+        origin: Point<Pixels>,
+        shown: bool,
+    ) -> Placement {
         Placement {
             offset: row_offset(window.row_anchor(key), origin),
             clip: self.clip,
@@ -172,7 +178,13 @@ impl RowSession {
 
     /// Whether the row can be replayed at `placement`: it moves by whole device pixels and its
     /// hover state does not change there.
-    fn replayable(&self, window: &Window, key: ViewKey, placement: &Placement, shown: bool) -> bool {
+    fn replayable(
+        &self,
+        window: &Window,
+        key: ViewKey,
+        placement: &Placement,
+        shown: bool,
+    ) -> bool {
         let on_grid = |value: f32| {
             let device = value * self.scale;
             (device - device.round()).abs() < 0.01
@@ -296,10 +308,7 @@ impl StateInner {
         }
         let mut element = element?;
         let row_size = self.mounted_item(ix).map_or(Size::default(), |item| {
-            size(
-                item.size().map_or(px(0.), |size| size.width),
-                item.height(),
-            )
+            size(item.size().map_or(px(0.), |size| size.width), item.height())
         });
         let extent = rows.extent_for(Bounds {
             origin,

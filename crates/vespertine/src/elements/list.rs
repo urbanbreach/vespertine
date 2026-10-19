@@ -2092,20 +2092,15 @@ impl StateInner {
                 measured_items.push(item.clone());
                 continue;
             }
-            let size = item.size().unwrap_or_else(|| {
-                self.measure_row(
-                    mounted.start + ix,
-                    available_item_space,
-                    render_item,
-                    window,
-                    cx,
-                )
-            });
-
-            measured_items.push(ListItem::Measured {
-                size,
-                focus_handle: item.focus_handle(),
-            });
+            let size = match item.size() {
+                Some(known) => known,
+                None => {
+                    let row = mounted.start + ix;
+                    self.measure_row(row, available_item_space, render_item, window, cx)
+                }
+            };
+            let focus_handle = item.focus_handle();
+            measured_items.push(ListItem::Measured { focus_handle, size });
         }
 
         self.items = SumTree::from_iter(measured_items, ());
@@ -2240,7 +2235,9 @@ impl StateInner {
                     let reusable = if visible
                         && size.is_some()
                         && !remeasure_last
-                        && prerendered.as_ref().is_none_or(|prerendered| prerendered.0 != ix)
+                        && prerendered
+                            .as_ref()
+                            .is_none_or(|prerendered| prerendered.0 != ix)
                     {
                         rows.as_deref().and_then(|rows| rows.reusable(window, ix))
                     } else {
@@ -2256,34 +2253,29 @@ impl StateInner {
                             rendered_focus_id = Some(focus_id);
                         }
                     } else {
-                        let (element, element_size, row) =
-                            match prerendered.take_if(|prerendered| prerendered.0 == ix) {
-                                Some((_, element, element_size, row)) => {
-                                    (Some(element), element_size, row)
-                                }
-                                None if visible => {
-                                    let (element, element_size, row) = self.build_row(
-                                        ix,
-                                        available_item_space,
-                                        rows.as_deref_mut(),
-                                        render_item,
-                                        window,
-                                        cx,
-                                    );
-                                    (Some(element), element_size, row)
-                                }
-                                None => (
-                                    None,
-                                    self.measure_row(
-                                        ix,
-                                        available_item_space,
-                                        render_item,
-                                        window,
-                                        cx,
-                                    ),
-                                    None,
-                                ),
-                            };
+                        let (element, element_size, row) = match prerendered
+                            .take_if(|prerendered| prerendered.0 == ix)
+                        {
+                            Some((_, element, element_size, row)) => {
+                                (Some(element), element_size, row)
+                            }
+                            None if visible => {
+                                let (element, element_size, row) = self.build_row(
+                                    ix,
+                                    available_item_space,
+                                    rows.as_deref_mut(),
+                                    render_item,
+                                    window,
+                                    cx,
+                                );
+                                (Some(element), element_size, row)
+                            }
+                            None => (
+                                None,
+                                self.measure_row(ix, available_item_space, render_item, window, cx),
+                                None,
+                            ),
+                        };
                         size = Some(element_size);
 
                         if visible {
@@ -2335,8 +2327,10 @@ impl StateInner {
                 let prev_ix = top_ix - 1;
                 if let Some(item) = self.mounted_item(prev_ix) {
                     let stored = item.size();
-                    let reusable = stored
-                        .and_then(|_| rows.as_deref().and_then(|rows| rows.reusable(window, prev_ix)));
+                    let reusable = stored.and_then(|_| {
+                        rows.as_deref()
+                            .and_then(|rows| rows.reusable(window, prev_ix))
+                    });
                     let (element, element_size, row) = match (reusable, stored) {
                         (Some(key), Some(stored)) => (None, stored, Some(key)),
                         _ => {
@@ -2870,7 +2864,8 @@ impl Element for List {
             // to do so); not while accessibility is active.
             let mut session = match id {
                 Some(id)
-                    if self.sizing_behavior == ListSizingBehavior::Auto && window.rows_enabled() =>
+                    if self.sizing_behavior == ListSizingBehavior::Auto
+                        && window.rows_enabled() =>
                 {
                     Some(row_replay::RowSession::begin(
                         window,
@@ -2968,13 +2963,10 @@ impl Element for List {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
                 accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
                 let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
-                let notification = list_state.edit().scroll(
-                    &scroll_top,
-                    height,
-                    pixel_delta,
-                    current_view,
-                    cx,
-                );
+                let notification =
+                    list_state
+                        .edit()
+                        .scroll(&scroll_top, height, pixel_delta, current_view, cx);
                 if let Some((handler, event)) = notification {
                     (handler.borrow_mut())(&event, window, cx);
                 }

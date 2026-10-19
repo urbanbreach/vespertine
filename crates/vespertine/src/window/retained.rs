@@ -12,7 +12,9 @@ use super::{
 };
 use crate::key_dispatch::DispatchNodeId;
 use crate::taffy::LayoutKeyContext;
-use crate::{Bounds, ContentMask, EntityId, GlobalElementId, LayoutId, Pixels, TextStyle};
+use crate::{
+    Bounds, ContentMask, EntityId, GlobalElementId, HitboxId, LayoutId, Pixels, TextStyle,
+};
 use smallvec::SmallVec;
 use std::{any::TypeId, ops::Range};
 use vespertine_collections::{FxHashMap, FxHashSet};
@@ -124,6 +126,8 @@ pub(crate) struct ViewRecord {
     pub cache_key: Option<CacheKey>,
     /// Frame epoch in which the record was last built or replayed.
     pub live_epoch: u64,
+    /// Frame epoch in which the record was last built (not merely replayed).
+    pub built_epoch: u64,
     /// What a row of a virtual list keeps besides the above (rows only).
     pub row: Option<Box<RowData>>,
 }
@@ -214,6 +218,7 @@ pub(crate) struct RetainedViews {
     pointer_readers: FxHashSet<ViewKey>,
     modifier_readers: FxHashSet<ViewKey>,
     capslock_readers: FxHashSet<ViewKey>,
+    hover_readers: FxHashMap<HitboxId, SmallVec<[ViewKey; 2]>>,
     pub frame_epoch: u64,
 }
 
@@ -301,6 +306,7 @@ impl RetainedViews {
             paint: None,
             cache_key: None,
             live_epoch: self.frame_epoch,
+            built_epoch: 0,
             row: None,
         };
         let key = if let Some(index) = self.free.pop() {
@@ -372,6 +378,9 @@ impl RetainedViews {
         for global in &reads.presence {
             remove_key(&mut self.presence_readers, *global, key);
         }
+        for hitbox in &reads.hovers {
+            remove_key(&mut self.hover_readers, *hitbox, key);
+        }
         if reads.pointer {
             self.pointer_readers.remove(&key);
         }
@@ -392,6 +401,9 @@ impl RetainedViews {
         }
         for global in &reads.presence {
             add_key(&mut self.presence_readers, *global, key);
+        }
+        for hitbox in &reads.hovers {
+            add_key(&mut self.hover_readers, *hitbox, key);
         }
         if reads.pointer {
             self.pointer_readers.insert(key);
@@ -429,6 +441,19 @@ impl RetainedViews {
             parent_record.dirty_descendants = true;
             parent = parent_record.parent;
         }
+    }
+
+    /// The views that read the hover state of any of `hitboxes` while they were built.
+    pub fn hover_readers_of(&self, hitboxes: &[HitboxId]) -> SmallVec<[ViewKey; 4]> {
+        let mut readers = SmallVec::new();
+        for hitbox in hitboxes {
+            for key in self.hover_readers.get(hitbox).into_iter().flatten() {
+                if !readers.contains(key) {
+                    readers.push(*key);
+                }
+            }
+        }
+        readers
     }
 
     /// Applies everything that happened since the preceding frame: notified
@@ -660,6 +685,7 @@ impl RetainedViews {
             record.splice_unsafe = false;
             record.parent = parent;
             record.live_epoch = epoch;
+            record.built_epoch = epoch;
         }
         self.register_with_parent(key);
     }

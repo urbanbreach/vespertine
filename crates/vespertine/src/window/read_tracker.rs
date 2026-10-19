@@ -7,7 +7,7 @@
 //! frame's [`ReadSet`]. Writes are versioned with a monotonic clock so the
 //! window can later decide whether a view's recorded reads are stale.
 
-use crate::EntityId;
+use crate::{EntityId, HitboxId};
 use std::{
     any::TypeId,
     cell::{Cell, RefCell},
@@ -35,6 +35,9 @@ pub(crate) struct ReadSet {
     pub entities: FxHashSet<EntityId>,
     /// Globals whose value was read.
     pub globals: FxHashSet<TypeId>,
+    /// Hitboxes whose hover state was queried: the view's output depends on whether they are
+    /// hovered (PRF-001 R5).
+    pub hovers: FxHashSet<HitboxId>,
     /// Globals whose presence (existence) alone was queried.
     pub presence: FxHashSet<TypeId>,
     pub pointer: bool,
@@ -55,6 +58,7 @@ impl ReadSet {
         self.entities.extend(other.entities.iter().copied());
         self.globals.extend(other.globals.iter().copied());
         self.presence.extend(other.presence.iter().copied());
+        self.hovers.extend(other.hovers.iter().copied());
         self.pointer |= other.pointer;
         self.modifiers |= other.modifiers;
         self.capslock |= other.capslock;
@@ -213,6 +217,14 @@ impl ReadTracker {
     pub fn read_pointer(&self) {
         if let Some(frame) = self.frames.borrow_mut().last_mut() {
             frame.reads.pointer = true;
+        }
+    }
+
+    /// Records that the view being built asked whether `hitbox` is hovered.
+    #[inline]
+    pub fn read_hover(&self, hitbox: HitboxId) {
+        if let Some(frame) = self.frames.borrow_mut().last_mut() {
+            frame.reads.hovers.insert(hitbox);
         }
     }
 

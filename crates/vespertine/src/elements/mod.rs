@@ -9,6 +9,8 @@ mod img;
 #[cfg(test)]
 mod interactivity_storage_tests;
 mod list;
+#[cfg(test)]
+mod list_row_tests;
 mod paint_scopes;
 #[cfg(test)]
 mod painted_observer_tests;
@@ -16,8 +18,6 @@ mod surface;
 mod svg;
 mod text;
 mod uniform_list;
-#[cfg(test)]
-mod list_row_tests;
 #[cfg(test)]
 mod uniform_list_row_tests;
 

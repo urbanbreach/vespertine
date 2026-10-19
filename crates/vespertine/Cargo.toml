@@ -210,6 +210,11 @@ path = "examples/inert_elements.rs"
 required-features = ["test-support"]
 
 [[example]]
+name = "list_transcript"
+path = "examples/list_transcript.rs"
+required-features = ["test-support"]
+
+[[example]]
 name = "motion_retarget"
 path = "examples/motion_retarget.rs"
 

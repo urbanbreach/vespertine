@@ -222,6 +222,9 @@ impl Scene {
         offset: Point<ScaledPixels>,
         clip: Option<Bounds<ScaledPixels>>,
     ) {
+        // A layer whose bounds the clip cuts down to nothing is not opened, as when it is first
+        // painted (`Window::paint_layer`); its end marker is dropped with it.
+        let mut skipped: Vec<bool> = Vec::new();
         for operation in &source.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => {
@@ -229,7 +232,11 @@ impl Scene {
                 }
                 PaintOperation::StartLayer(bounds) => {
                     let bounds = moved(*bounds, offset);
-                    self.push_layer(clip.map_or(bounds, |clip| bounds.intersect(&clip)))
+                    let bounds = clip.map_or(bounds, |clip| bounds.intersect(&clip));
+                    skipped.push(bounds.is_empty());
+                    if !bounds.is_empty() {
+                        self.push_layer(bounds);
+                    }
                 }
                 PaintOperation::BackdropBlur(blur) => {
                     let mut blur = *blur;
@@ -237,7 +244,11 @@ impl Scene {
                     blur.content_mask = moved_mask(blur.content_mask, offset, clip);
                     self.insert_backdrop_blur(blur)
                 }
-                PaintOperation::EndLayer => self.pop_layer(),
+                PaintOperation::EndLayer => {
+                    if !skipped.pop().unwrap_or(false) {
+                        self.pop_layer();
+                    }
+                }
                 PaintOperation::PushCurvedClip(shape) => {
                     self.push_curved_clip(shape.translated(offset.x.0, offset.y.0))
                 }

@@ -7,14 +7,10 @@ use crate::{
     FrameStats, GlobalElementId, InputEvent as _, InspectorElementId, InteractiveElement as _,
     IntoElement, LayoutId, ListAlignment, ListState, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, ScrollDelta,
-    ScrollWheelEvent, Style, Styled as _, TestAppContext, TouchPhase, UniformListScrollHandle,
-    StatefulInteractiveElement as _, Window, div, list, point, px, size, uniform_list,
+    ScrollWheelEvent, StatefulInteractiveElement as _, Style, Styled as _, TestAppContext,
+    TouchPhase, UniformListScrollHandle, Window, div, list, point, px, size, uniform_list,
 };
-use std::{
-    cell::RefCell,
-    collections::BTreeSet,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 const ROW_HEIGHT: f32 = 20.0;
 const VIEWPORT: f32 = 160.0;
@@ -76,14 +72,6 @@ impl Element for Probe {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
-    fn id(&self) -> Option<ElementId> {
-        Some(ElementId::named_usize("probe", self.ix))
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
     fn request_layout(
         &mut self,
         _: Option<&GlobalElementId>,
@@ -130,6 +118,13 @@ impl Element for Probe {
         _: &mut Window,
         _: &mut App,
     ) {
+    }
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::named_usize("probe", self.ix))
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
     }
 }
 
@@ -205,7 +200,9 @@ fn row_element(
                 f32::from(event.position.y) as i32,
             ));
         })
-        .child(format!("row {ix} value {value} seen {seen} variant {variant}"));
+        .child(format!(
+            "row {ix} value {value} seen {seen} variant {variant}"
+        ));
     if spec.probe {
         row = row.child(Probe {
             ix,
@@ -373,49 +370,46 @@ fn wheel(cx: &mut TestAppContext, win: &Win, dy: f32) {
     draw(cx, win);
 }
 
-fn move_pointer(cx: &mut TestAppContext, win: &Win, x: f32, y: f32) {
+/// Delivers the events to the window through its input dispatch, then draws a frame.
+fn send(cx: &mut TestAppContext, win: &Win, events: Vec<crate::PlatformInput>) {
     cx.update_window(win.handle, |_, window, cx| {
-        window.dispatch_event(
-            MouseMoveEvent {
-                position: point(px(x), px(y)),
-                pressed_button: None,
-                modifiers: Modifiers::default(),
-            }
-            .to_platform_input(),
-            cx,
-        );
+        for event in events {
+            window.dispatch_event(event, cx);
+        }
     })
     .unwrap();
     draw(cx, win);
 }
 
+fn move_pointer(cx: &mut TestAppContext, win: &Win, x: f32, y: f32) {
+    let moved = MouseMoveEvent {
+        modifiers: Modifiers::default(),
+        position: point(px(x), px(y)),
+        pressed_button: None,
+    };
+    send(cx, win, vec![moved.to_platform_input()]);
+}
+
 fn click(cx: &mut TestAppContext, win: &Win, x: f32, y: f32) {
-    cx.update_window(win.handle, |_, window, cx| {
-        let position = point(px(x), px(y));
-        window.dispatch_event(
-            MouseDownEvent {
-                button: MouseButton::Left,
-                position,
-                modifiers: Modifiers::default(),
-                click_count: 1,
-                first_mouse: false,
-            }
-            .to_platform_input(),
-            cx,
-        );
-        window.dispatch_event(
-            MouseUpEvent {
-                button: MouseButton::Left,
-                position,
-                modifiers: Modifiers::default(),
-                click_count: 1,
-            }
-            .to_platform_input(),
-            cx,
-        );
-    })
-    .unwrap();
-    draw(cx, win);
+    let position = point(px(x), px(y));
+    let down = MouseDownEvent {
+        click_count: 1,
+        first_mouse: false,
+        modifiers: Modifiers::default(),
+        position,
+        button: MouseButton::Left,
+    };
+    let up = MouseUpEvent {
+        click_count: 1,
+        modifiers: Modifiers::default(),
+        position,
+        button: MouseButton::Left,
+    };
+    send(
+        cx,
+        win,
+        vec![down.to_platform_input(), up.to_platform_input()],
+    );
 }
 
 /// Sets the scroll offset the way a scrollbar does (the same path a thumb drag takes) and
@@ -488,7 +482,11 @@ fn brief(primitive: &str) -> String {
     let find = |key: &str| {
         primitive
             .split_once(key)
-            .map(|(_, rest)| rest.chars().take_while(|c| *c != ',' && *c != ' ' && *c != '}').collect::<String>())
+            .map(|(_, rest)| {
+                rest.chars()
+                    .take_while(|c| *c != ',' && *c != ' ' && *c != '}')
+                    .collect::<String>()
+            })
             .unwrap_or_default()
     };
     format!(
@@ -708,7 +706,9 @@ fn a3_exactly_the_required_rows_invalidate(cx: &mut TestAppContext) {
         );
         assert!(!rebuilt.is_empty(), "{kind:?}: suspect rows were rebuilt");
 
-        // 3. A row is inserted.
+        // 3. A row is inserted. The notification makes the test app draw the dirty windows at
+        // once, so the logs are emptied before it.
+        take_renders(&retained);
         for win in [&retained, &full] {
             win.root.as_ref().unwrap().update(cx, |view, cx| {
                 let model = cx.new(|_| Model { value: 0 });
@@ -719,7 +719,6 @@ fn a3_exactly_the_required_rows_invalidate(cx: &mut TestAppContext) {
                 cx.notify();
             });
         }
-        take_renders(&retained);
         draw(cx, &retained);
         draw(cx, &full);
         let mut built = take_renders(&retained);
@@ -810,7 +809,11 @@ fn a3_a_nested_view_notification_rebuilds_its_row(cx: &mut TestAppContext) {
         .copied()
         .filter(|ix| *ix != 0)
         .collect();
-    assert_eq!(built, vec![3], "the row of the notified nested view rebuilds");
+    assert_eq!(
+        built,
+        vec![3],
+        "the row of the notified nested view rebuilds"
+    );
     assert_same(cx, &retained, &full, "after the nested view was notified");
 }
 
@@ -874,14 +877,26 @@ fn a5_element_state_lifetime_and_render_time_writes(cx: &mut TestAppContext) {
         let retained = fixture.window(cx, true);
         let full = fixture.window(cx, false);
         assert!(retained.env.live.borrow().contains(&0), "row 0 has state");
-        assert_eq!(retained.env.created.borrow().iter().filter(|ix| **ix == 0).count(), 1);
+        assert_eq!(
+            retained
+                .env
+                .created
+                .borrow()
+                .iter()
+                .filter(|ix| **ix == 0)
+                .count(),
+            1
+        );
         // Row 0 leaves the viewport; its state goes with it although the row stays retained.
         for _ in 0..4 {
             both_scroll(cx, &retained, &full, -60.0);
         }
         draw(cx, &retained);
         draw(cx, &retained);
-        assert!(!retained.env.live.borrow().contains(&0), "{kind:?}: row 0 dropped its state");
+        assert!(
+            !retained.env.live.borrow().contains(&0),
+            "{kind:?}: row 0 dropped its state"
+        );
         assert_same(cx, &retained, &full, "after leaving");
         // And back: the state is constructed again before the row is shown.
         for _ in 0..4 {
@@ -889,7 +904,14 @@ fn a5_element_state_lifetime_and_render_time_writes(cx: &mut TestAppContext) {
         }
         assert!(retained.env.live.borrow().contains(&0));
         assert!(
-            retained.env.created.borrow().iter().filter(|ix| **ix == 0).count() >= 2,
+            retained
+                .env
+                .created
+                .borrow()
+                .iter()
+                .filter(|ix| **ix == 0)
+                .count()
+                >= 2,
             "{kind:?}: the state of row 0 was constructed again before the row was shown again"
         );
         assert_same(cx, &retained, &full, "after returning");
@@ -904,19 +926,30 @@ fn a5_element_state_lifetime_and_render_time_writes(cx: &mut TestAppContext) {
             draw(cx, &win);
         }
         take_renders(&win);
+        // The notification makes the test app draw the dirty window at once: that frame
+        // rebuilds the notified row.
         notify_model(cx, &fixture.models[2]);
-        draw(cx, &win);
-        let first = take_renders(&win);
-        assert!(first.contains(&2), "{kind:?}: the notified row rebuilds ({first:?})");
-        draw(cx, &win);
-        let second = take_renders(&win);
+        let notified_frame = take_renders(&win);
         assert!(
-            second.contains(&4),
-            "{kind:?}: the write of row 2 invalidates the row that reads it ({second:?})"
+            notified_frame.contains(&2),
+            "{kind:?}: the notified row rebuilds ({notified_frame:?})"
+        );
+        // Row 2 wrote `shared` while it was built: the row that reads it is invalidated, in
+        // that frame (it comes after row 2) or in the next one, and rebuilds exactly once.
+        draw(cx, &win);
+        let next_frame = take_renders(&win);
+        let row_4 = notified_frame
+            .iter()
+            .chain(&next_frame)
+            .filter(|ix| **ix == 4)
+            .count();
+        assert_eq!(
+            row_4, 1,
+            "{kind:?}: the write of row 2 invalidates the row that reads it ({notified_frame:?} {next_frame:?})"
         );
         assert!(
-            !second.contains(&2),
-            "{kind:?}: a row is not invalidated by its own render-time write ({second:?})"
+            !next_frame.contains(&2),
+            "{kind:?}: a row is not invalidated by its own render-time write ({next_frame:?})"
         );
         draw(cx, &win);
         draw(cx, &win);
@@ -943,6 +976,15 @@ fn a6_extension_budget_fills_visible_rows_first_and_splits_the_remainder(cx: &mu
             "{kind:?}: the initial construction fills the overscan ({} rows)",
             initial.len()
         );
+        // The pointer rests where the wheel events are dispatched (and hover is not suppressed
+        // by them), so that the arrival of the pointer does not change a row's hover state in
+        // the middle of the measurement.
+        cx.update_window(win.handle, |_, window, _| {
+            window.set_hover_suppression_enabled(false)
+        })
+        .unwrap();
+        move_pointer(cx, &win, 10.0, 10.0);
+        take_renders(&win);
         // Jump far away: every visible row is missing and is built in the same frame, more
         // than the budget of 6 rows; nothing else is built in that frame.
         set_offset(cx, &win, 2000.0);
@@ -971,7 +1013,10 @@ fn a6_extension_budget_fills_visible_rows_first_and_splits_the_remainder(cx: &mu
             wheel(cx, &win, -1.0);
             let mut more = take_renders(&win);
             more.retain(|ix| *ix != 0);
-            assert!(more.len() <= 6, "{kind:?}: at most the budget per frame ({more:?})");
+            assert!(
+                more.len() <= 6,
+                "{kind:?}: at most the budget per frame ({more:?})"
+            );
         }
     }
 }
@@ -990,7 +1035,12 @@ fn a7_flipped_lists_and_accessibility_bypass_row_replay(cx: &mut TestAppContext)
             div().size_full().child(
                 uniform_list("rows", 100, |range, _, _| {
                     range
-                        .map(|ix| div().id(("row", ix)).h(px(ROW_HEIGHT)).child(format!("row {ix}")))
+                        .map(|ix| {
+                            div()
+                                .id(("row", ix))
+                                .h(px(ROW_HEIGHT))
+                                .child(format!("row {ix}"))
+                        })
                         .collect::<Vec<_>>()
                 })
                 .track_scroll(&self.scroll)
@@ -1034,8 +1084,10 @@ fn a7_flipped_lists_and_accessibility_bypass_row_replay(cx: &mut TestAppContext)
         let win = fixture.window(cx, true);
         draw(cx, &win);
         reset_stats(cx, &win);
-        cx.update_window(win.handle, |_, window, _| window.set_a11y_active_for_tests(true))
-            .unwrap();
+        cx.update_window(win.handle, |_, window, _| {
+            window.set_a11y_active_for_tests(true)
+        })
+        .unwrap();
         for _ in 0..4 {
             wheel(cx, &win, -20.0);
         }
@@ -1062,7 +1114,9 @@ fn a7_flipped_lists_and_accessibility_bypass_row_replay(cx: &mut TestAppContext)
             .unwrap();
         let _ = Role::Group;
         assert!(
-            labels.iter().all(|label| !label.contains("row ") || visible_label(label)),
+            labels
+                .iter()
+                .all(|label| !label.contains("row ") || visible_label(label)),
             "{kind:?}: only visible rows are in the tree: {labels:?}"
         );
     }
@@ -1104,12 +1158,20 @@ fn a8_hover_is_predicted_so_only_the_changing_rows_rebuild(cx: &mut TestAppConte
         built.dedup();
         // Row 3 loses hover, row 4 gains it; the row that enters at the bottom (row 8 or 9)
         // is built because it comes from the overscan.
-        assert!(built.contains(&3) && built.contains(&4), "{kind:?}: {built:?}");
+        assert!(
+            built.contains(&3) && built.contains(&4),
+            "{kind:?}: {built:?}"
+        );
         assert!(
             built.iter().all(|ix| (3..=4).contains(ix) || *ix >= 8),
             "{kind:?}: no other visible row rebuilds ({built:?})"
         );
-        assert_same(cx, &retained, &full, "after the content moved under the pointer");
+        assert_same(
+            cx,
+            &retained,
+            &full,
+            "after the content moved under the pointer",
+        );
     }
 }
 

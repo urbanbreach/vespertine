@@ -72,6 +72,8 @@ use vespertine_util::{ResultExt, measure};
 pub(crate) mod a11y;
 #[cfg(test)]
 mod a11y_retained_tests;
+#[cfg(test)]
+mod hover_retained_tests;
 pub(crate) mod read_tracker;
 pub(crate) mod retained;
 #[cfg(test)]
@@ -847,6 +849,7 @@ impl HitboxId {
     /// See [`Hitbox::is_hovered`] for details.
     pub fn is_hovered(self, window: &Window) -> bool {
         window.hover_reads.set(window.hover_reads.get() + 1);
+        window.retention.tracker.read_hover(self);
         // While the pointer is captured only the captured hitbox reports hovered and every
         // other hitbox reports not hovered, wherever the pointer physically is.
         if let Some(captured) = window.captured_hitbox {
@@ -866,6 +869,7 @@ impl HitboxId {
     /// See [`HitboxId::is_hovered`] for more details.
     pub(crate) fn is_hovered_ignoring_last_input(self, window: &Window) -> bool {
         window.hover_reads.set(window.hover_reads.get() + 1);
+        window.retention.tracker.read_hover(self);
         if let Some(captured) = window.captured_hitbox {
             return captured == self;
         }
@@ -4092,6 +4096,7 @@ impl Window {
         self.reset_cursor_style(cx);
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
+        self.finish_hover_redraws(cx);
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
@@ -4404,6 +4409,7 @@ impl Window {
         } else {
             self.next_frame.hit_test(self.mouse_position)
         };
+        self.hover_changed_by_frame();
         if self.composition.is_some() {
             self.next_frame.overlay_capture = !self.next_frame.deferred_draws.is_empty()
                 || prompt_element.is_some()
@@ -7627,6 +7633,7 @@ impl Window {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
         }
+        self.hover_changed_by_event(cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx) {

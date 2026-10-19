@@ -8,8 +8,8 @@ use vespertine_scheduler::Instant;
 
 use super::{HitboxId, Window};
 use crate::{
-    App, GlobalElementId, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, PinchEvent,
-    Pixels, Point, ScrollWheelEvent, Task,
+    App, EntityId, GlobalElementId, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
+    PinchEvent, Pixels, Point, ScrollWheelEvent, Task,
 };
 
 /// Squared distance, in logical pixels, an idle pointer may travel from the position at which
@@ -47,6 +47,12 @@ pub(super) struct PointerState {
     pub paint_hover_suppressed: bool,
     /// Redraw scheduled for the end of the suppression interval.
     pub hover_suppression_timer: Option<Task<()>>,
+    /// The hitboxes that were reported as hovered when hover was last evaluated (see
+    /// [`Window::take_hover_changes`]).
+    pub hover_seen: SmallVec<[HitboxId; 4]>,
+    /// Views whose hover state changed during a frame without being rebuilt in it: they are
+    /// notified when the frame is finished.
+    pub hover_redraws: SmallVec<[EntityId; 2]>,
 }
 
 impl Window {
@@ -114,6 +120,106 @@ impl Window {
     /// or pinch event.
     pub fn is_pointer_present(&self) -> bool {
         !self.pointer.absent
+    }
+
+    /// The hitboxes painting reports as hovered under the current hit test (`suppressed`: hover
+    /// is frozen by wheel scrolling).
+    fn hovered_set(&self, suppressed: bool) -> SmallVec<[HitboxId; 4]> {
+        if let Some(captured) = self.captured_hitbox {
+            let mut set = SmallVec::new();
+            set.push(captured);
+            return set;
+        }
+        if self.last_input_was_keyboard() || self.pointer.absent || suppressed {
+            return SmallVec::new();
+        }
+        let hit_test = &self.mouse_hit_test;
+        hit_test
+            .ids
+            .iter()
+            .take(hit_test.hover_hitbox_count)
+            .copied()
+            .collect()
+    }
+
+    /// The hitboxes whose hovered state differs from the one seen by the previous call, and
+    /// remembers the current one.
+    fn take_hover_changes(&mut self, suppressed: bool) -> SmallVec<[HitboxId; 4]> {
+        let now = self.hovered_set(suppressed);
+        let seen = std::mem::replace(&mut self.pointer.hover_seen, now);
+        let now = &self.pointer.hover_seen;
+        seen.iter()
+            .filter(|id| !now.contains(id))
+            .chain(now.iter().filter(|id| !seen.contains(id)))
+            .copied()
+            .collect()
+    }
+
+    /// Flags the views that painted the hover state of `changed` as dirty and returns their
+    /// entities (the owner of the list for a list row). With `skip_built`, views built in the
+    /// frame being drawn are left alone: they painted the new state.
+    fn flag_hover_readers(
+        &mut self,
+        changed: &[HitboxId],
+        skip_built: bool,
+    ) -> SmallVec<[EntityId; 2]> {
+        let epoch = self.retention.views.frame_epoch;
+        let mut entities = SmallVec::new();
+        for key in self.retention.views.hover_readers_of(changed) {
+            let Some(record) = self.retention.views.get(key) else {
+                continue;
+            };
+            if skip_built && record.built_epoch == epoch {
+                continue;
+            }
+            let entity = record.entity_id;
+            self.retention.views.flag_dirty(key);
+            if !entities.contains(&entity) {
+                entities.push(entity);
+            }
+        }
+        entities
+    }
+
+    /// After a mouse event changed what the pointer is over: views that painted the hover state
+    /// of a hitbox whose state changed rebuild, whether or not a listener of theirs noticed the
+    /// change (a hover listener compares against state it keeps, which can be out of date: PRF-001
+    /// R5).
+    pub(super) fn hover_changed_by_event(&mut self, cx: &mut App) {
+        let suppressed = self.hover_suppressed(cx);
+        let changed = self.take_hover_changes(suppressed);
+        if changed.is_empty() {
+            return;
+        }
+        for entity in self.flag_hover_readers(&changed, false) {
+            self.retention.tracker.note_hover_notification();
+            cx.notify(entity);
+        }
+    }
+
+    /// In a frame, after prepaint: hitboxes whose hover state changed under the frame's own hit
+    /// test (content moved, a view that blocked the pointer went away) and that views replayed
+    /// in the frame painted with the old state. Those views are rebuilt by a frame requested at
+    /// the end of this one.
+    pub(super) fn hover_changed_by_frame(&mut self) {
+        let changed = self.take_hover_changes(self.pointer.paint_hover_suppressed);
+        if changed.is_empty() {
+            return;
+        }
+        for entity in self.flag_hover_readers(&changed, true) {
+            if !self.pointer.hover_redraws.contains(&entity) {
+                self.pointer.hover_redraws.push(entity);
+            }
+        }
+    }
+
+    /// Frame end: asks for the frame that rebuilds the views found by
+    /// [`Self::hover_changed_by_frame`].
+    pub(super) fn finish_hover_redraws(&mut self, cx: &mut App) {
+        for entity in std::mem::take(&mut self.pointer.hover_redraws) {
+            self.retention.tracker.note_hover_notification();
+            cx.notify(entity);
+        }
     }
 
     /// Tracks pointer presence and the wheel-scroll hover suppression state for an event that is
