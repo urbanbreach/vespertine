@@ -116,4 +116,44 @@ check "main has p1 p2 p3" test "$(subjects 3)" = "add p1 add p2 add p3 "
 check "f1's log path is reported" grep -q "failed the landing gates; log: " "$T/f1.log"
 check "bisection used four gate runs" test "$(gate_runs)" = 4
 check "main passes the gate" bash -c "cd '$S' && ! grep -rq PLANTED_FAILURE --exclude-dir=.git ."
+echo "== 4. C conflicts with B (not with main): deferred, never skipped silently"
+rm -rf "$S/.git/land-logs"
+printf 'base\n' >"$S/d.txt"
+printf 'base\n' >"$S/e.txt"
+git -C "$S" add -A
+git -C "$S" commit -qm "bases for scenarios 4 and 5"
+branch da da.txt da
+branch db d.txt 'b line'
+branch dc d.txt 'c line'
+hold_lock 3
+start da; sleep 0.3; start db; sleep 0.3; start dc
+finish da; check "da exits 0" test "$RC" = 0
+finish db; check "db exits 0" test "$RC" = 0
+finish dc; check "dc exits 1 in the end (main now has db)" test "$RC" = 1
+check "A and B landed in the first train, in one gate run" test "$(gate_runs)" = 1
+check "dc was deferred, naming work/db, and did not exit" grep -q "work/dc conflicts with work/db ahead of it in the train" "$T/dc.log"
+check "dc was not skipped as a conflict in train 1" grep -q "it stays queued and goes first in the next train" "$T/dc.log"
+check "in train 2 the conflict is with main and names work/db" grep -q "work/dc conflicts with main, which now contains work/db" "$T/dc.log"
+check "dc is reserved for its owner" grep -q '^work/dc ' "$S/.git/vespertine-land.reserved"
+rm -f "$S/.git/vespertine-land.reserved"
+
+echo "== 5. deferred (and reserved) entries go first in the next train"
+rm -rf "$S/.git/land-logs"
+export VSP_LAND_CAP=3
+branch ea ea.txt ea
+branch eb e.txt PLANTED_FAILURE
+branch ec e.txt 'c line'
+branch en en.txt en
+branch em em.txt em
+hold_lock 3
+start ea; sleep 0.3; start eb; sleep 0.3; start ec; sleep 0.3; start en; sleep 0.3; start em
+finish ea; check "ea exits 0" test "$RC" = 0
+finish eb; check "eb fails (exit 1)" test "$RC" = 1
+finish ec; check "ec exits 0 in the next train" test "$RC" = 0
+finish en; check "en exits 0" test "$RC" = 0
+finish em; check "em exits 0" test "$RC" = 0
+check "ec was deferred behind work/eb" grep -q "work/ec conflicts with work/eb ahead of it in the train" "$T/ec.log"
+check "train 2 applied ec first, then en, em" test "$(subjects 4)" = "add ea add ec add en add em "
+check "train 2 lists ec first" bash -c "grep -h 'train of' '$T'/e[cnm].log | grep -q 'work/ec work/en work/em'"
+unset VSP_LAND_CAP
 echo "all land train tests passed"

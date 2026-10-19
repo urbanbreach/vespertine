@@ -8,13 +8,18 @@
 # (at most 6 per train; reserved branches first), runs the gates once on the candidate and
 # fast-forwards main to it. If the gates fail, the entries are bisected by halves (re-testing exactly
 # composed candidates) until the culprits are isolated; culprits are marked `failed` with their gate
-# log under .git/land-logs/ and the green remainder lands. A branch that conflicts with main or with
-# earlier entries is skipped, marked `conflict` and reserved for 20 minutes: no new train starts
-# until the reserved branch has been re-enqueued, and it then goes first.
+# log under .git/land-logs/ and the green remainder lands. A branch that conflicts with main itself
+# is skipped, marked `conflict` and reserved for 20 minutes: no new train starts until the reserved
+# branch has been re-enqueued, and it then goes first. A branch that applies to main alone but
+# conflicts with an earlier entry of the train is `deferred`: it stays queued and goes first in the
+# next train (after reserved branches).
 # Only a candidate that passed the gates as exactly that commit is ever fast-forwarded into main.
 #
 # Entry status, one line in .git/land-queue/<branch>.status:
-#   queued | landed <sha> | landed-dry <sha> | conflict | failed <log>
+#   queued | deferred <branch> | landed <sha> | landed-dry <sha> | conflict <with what> | failed <log>
+# `deferred`: the entry applies to main alone but conflicts with <branch>, an entry ahead of it in
+# the train. It stays queued (its land keeps waiting) and goes first in the next train, right after
+# reserved branches. `conflict` (and a reservation) only when it conflicts with main itself.
 #
 # `--dry-run` does everything except moving main (entries end as `landed-dry`). Test overrides:
 # VSP_LAND_MAIN (main checkout), VSP_LAND_LOCK, VSP_LAND_WORKTREE, VSP_LAND_QUEUE, VSP_LAND_LOGS,
@@ -58,6 +63,8 @@ WAIT_FOR_RESERVATION=0
 COMPOSED_SHA=""
 COMPOSED_IDS=""
 APPLIED_SHA=""
+CONFLICT_FILES=""
+BASE_IDS=""
 
 die() { echo "land: $*" >&2; exit 1; }
 say() { echo "land: $*"; }
@@ -124,14 +131,14 @@ enqueue() {
     set_status "$id" queued
 }
 
-# Entry ids with status `queued`, oldest first.
+# Entry ids with status `queued` or `deferred`, oldest first.
 list_queued() {
     local f name
     for f in "$QUEUE_DIR"/*; do
         [ -f "$f" ] || continue
         name=${f##*/}
         case $name in *.status) continue ;; esac
-        [ "$(get_status "$name")" = queued ] || continue
+        case "$(get_status "$name")" in queued | "deferred "*) ;; *) continue ;; esac
         echo "$(entry_get "$name" enqueued) $name"
     done | sort -n -s -k1,1 | cut -d' ' -f2
 }
@@ -174,12 +181,21 @@ checkout_clean() {
     LW clean -fdq -e /target
 }
 
+# mark_conflict <id> <what it conflicts with> [files]: the entry conflicts with main itself, so its
+# owner has to rebase: status `conflict`, plus a reservation.
 mark_conflict() {
-    local branch_of
+    local branch_of detail=$2
     branch_of=$(entry_get "$1" branch)
-    say "$branch_of conflicts with main or an earlier entry of the train; skipped"
-    set_status "$1" conflict
+    say "$branch_of conflicts with $detail${3:+ ($3)}; skipped"
+    set_status "$1" "conflict $detail${3:+ ($3)}"
     reserve "$branch_of"
+}
+
+# mark_deferred <id> <blocking branch>: the entry applies to main alone but conflicts with an entry
+# ahead of it in this train; it stays queued and goes first in the next train.
+mark_deferred() {
+    say "$(entry_get "$1" branch) conflicts with $2 ahead of it in the train; deferred to the front of the next train"
+    set_status "$1" "deferred $2"
 }
 
 mark_failed() {
@@ -197,27 +213,64 @@ apply_entry() {
     if LW rebase -q --onto "$1" "$base" >/dev/null 2>&1; then
         APPLIED_SHA=$(LW rev-parse HEAD)
     else
+        CONFLICT_FILES=$(LW diff --name-only --diff-filter=U | head -n 5 | tr '\n' ' ')
+        CONFLICT_FILES=${CONFLICT_FILES% }
         LW rebase --abort >/dev/null 2>&1 || true
         return 1
     fi
 }
 
-# compose <base sha> <ids...>: applies the entries in order; entries that conflict are marked and
-# dropped. Sets COMPOSED_SHA and COMPOSED_IDS (the ids that were applied).
+# find_blocker <id> <ids ahead>: replays the entries ahead on main one by one and prints the branch
+# of the first one the entry conflicts with.
+find_blocker() {
+    local entry=$1 sha=$MAIN_SHA ahead blocker=""
+    shift
+    for ahead in "$@"; do
+        apply_entry "$sha" "$ahead" || continue
+        sha=$APPLIED_SHA
+        blocker=$ahead
+        if ! apply_entry "$sha" "$entry"; then
+            entry_get "$ahead" branch
+            return 0
+        fi
+    done
+    [ -z "$blocker" ] || entry_get "$blocker" branch
+}
+
+# compose <base sha> <ids...>: applies the entries in order (BASE_IDS are the entries already in
+# the base). An entry that conflicts with main itself is marked `conflict` (and reserved); one that
+# applies to main alone but conflicts with an entry ahead is marked `deferred`. Both are dropped
+# from this composition. Sets COMPOSED_SHA and COMPOSED_IDS (the ids that were applied).
 compose() {
-    local sha=$1 entry
+    local sha=$1 entry blocker
     shift
     COMPOSED_IDS=""
     for entry in "$@"; do
         if apply_entry "$sha" "$entry"; then
             sha=$APPLIED_SHA
             COMPOSED_IDS="$COMPOSED_IDS $entry"
+        elif ! apply_entry "$MAIN_SHA" "$entry"; then
+            blocker=$(status_blocker "$entry")
+            if [ -n "$blocker" ]; then
+                mark_conflict "$entry" "main, which now contains $blocker (the entry it was deferred behind)" "$CONFLICT_FILES"
+            else
+                mark_conflict "$entry" main "$CONFLICT_FILES"
+            fi
         else
-            mark_conflict "$entry"
+            # shellcheck disable=SC2086
+            blocker=$(find_blocker "$entry" $BASE_IDS $COMPOSED_IDS)
+            mark_deferred "$entry" "${blocker:-an entry ahead of it}"
         fi
     done
     COMPOSED_SHA=$sha
     COMPOSED_IDS=${COMPOSED_IDS# }
+}
+
+# The branch an entry was deferred behind, if its status says so.
+status_blocker() {
+    local status
+    status=$(get_status "$1")
+    case $status in "deferred "*) echo "${status#deferred }" ;; esac
 }
 
 run_gates() {
@@ -269,6 +322,7 @@ solve() {
     key="${G:+$G }$C"
     if [ -z "${SHA_OF["k:$key"]:-}" ]; then
         read -ra cs <<<"$C"
+        BASE_IDS=$G
         compose "${SHA_OF["k:$G"]}" "${cs[@]}"
         C=$COMPOSED_IDS
         [ -n "$C" ] || { SOLVE_G=$G; return; }
@@ -345,6 +399,11 @@ run_train() {
         return 0
     fi
     for entry in "${queued[@]}"; do
+        case "$(get_status "$entry")" in "deferred "*)
+            if ! printf '%s\n' "${ordered[@]:-}" | grep -qxF "$entry"; then ordered+=("$entry"); fi ;;
+        esac
+    done
+    for entry in "${queued[@]}"; do
         if ! printf '%s\n' "${ordered[@]:-}" | grep -qxF "$entry"; then ordered+=("$entry"); fi
     done
     train=("${ordered[@]:0:$TRAIN_CAP}")
@@ -408,7 +467,7 @@ main() {
     enqueue
     say "queued $branch at $(git rev-parse --short HEAD)"
 
-    local status position last_position="" landed_sha
+    local status position last_position="" last_status="" landed_sha
     while :; do
         status=$(get_status "$id")
         case "$status" in
@@ -422,10 +481,16 @@ main() {
                 say "dry run: ${status#landed-dry } passed the gates as part of its train; nothing was landed"
                 exit 0
                 ;;
-            conflict)
+            "deferred "*)
+                if [ "$status" != "$last_status" ]; then
+                    say "$branch conflicts with ${status#deferred } ahead of it in the train; it stays queued and goes first in the next train"
+                    last_status=$status
+                fi
+                ;;
+            conflict*)
                 conflicted=1
                 {
-                    echo "land: $branch conflicts with main (or with an entry ahead of it in the train) and was skipped."
+                    echo "land: $branch conflicts with ${status#conflict } and was skipped."
                     echo "land: it holds a $RESERVATION_MINUTES-minute reservation and goes first in the next train: rebase onto main now (git rebase main), resolve the conflicts, then re-run ./scripts/land."
                 } >&2
                 exit 1
@@ -446,8 +511,8 @@ main() {
             flock -u 9
             if [ "$WAIT_FOR_RESERVATION" = 1 ]; then
                 sleep "$POLL_SECONDS"
-            elif [ "$(get_status "$id")" = queued ]; then
-                sleep 2
+            else
+                case "$(get_status "$id")" in queued | "deferred "*) sleep 2 ;; esac
             fi
         else
             position=$(list_queued | grep -nxF "$id" | cut -d: -f1 || true)
