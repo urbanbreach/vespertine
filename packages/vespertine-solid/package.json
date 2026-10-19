@@ -6,7 +6,10 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
     "./jsx-runtime": "./src/jsx-runtime.js",
     "./jsx-dev-runtime": "./src/jsx-runtime.js",
     "./preload": "./src/preload.js",
@@ -30,5 +33,6 @@
   },
   "devDependencies": {
     "solid-js": "^1.9.16"
-  }
+  },
+  "types": "src/index.d.ts"
 }
