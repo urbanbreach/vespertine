@@ -6,7 +6,9 @@
     scripts/third-party --stale    also fail when THIRD_PARTY.md differs from what would be written
 
 Policy: every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause,
-ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, CDLA-Permissive-2.0 or OFL-1.1 (fonts). An SPDX `OR` expression is satisfied
+ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, CDLA-Permissive-2.0 or OFL-1.1 (fonts; bundled fonts may also be under the
+GUST Font License, an instance of the LaTeX Project Public License that allows unmodified
+redistribution). An SPDX `OR` expression is satisfied
 when one alternative is allowed (that alternative is the elected license); an `AND` expression
 needs every part allowed. MPL-2.0 is accepted for unmodified crates used as ordinary dependencies.
 Anything else, in particular GPL, AGPL or LGPL, fails the audit and has to be replaced.
@@ -63,14 +65,39 @@ VENDORED = [
     ("taffy", "0.13.0", "MIT", "modified measurement cache for persistent layout nodes (LAY-001)"),
 ]
 
-# Files that ship with the repository or with a dependency, other than code.
+# Files that ship with the repository or with a dependency, other than code: (name, version,
+# license, upstream source, license text, use).
 ASSETS = [
-    ("Lilex (Regular, Bold)", "OFL-1.1", "assets/fonts/lilex/OFL.txt", "test/example font"),
-    ("IBM Plex Sans (Regular)", "OFL-1.1", "assets/fonts/ibm-plex-sans/license.txt", "test/example font"),
-    ("Noto Sans Math (Regular)", "OFL-1.1",
+    ("Lilex (Regular, Bold)", "", "OFL-1.1", "", "assets/fonts/lilex/OFL.txt", "test/example font"),
+    ("IBM Plex Sans (Regular)", "", "OFL-1.1", "",
+     "assets/fonts/ibm-plex-sans/license.txt", "test/example font"),
+    ("Noto Sans Math (Regular)", "3.000", "OFL-1.1", "https://github.com/notofonts/math",
      "crates/vespertine_components/src/math/fonts/LICENSE-NotoSansMath-OFL.txt",
-     "math face of CMP-012"),
+     "math face 0 of CMP-012 (default sans)"),
+    ("STIX Two Math (Regular, OTF)", "2.13", "OFL-1.1",
+     "https://github.com/stipub/stixfonts (tag v2.13, `fonts/static_otf`)",
+     "crates/vespertine_components/src/math/fonts/LICENSE-STIXTwoMath-OFL.txt",
+     "math face 1 of CMP-012 (Times-style serif, backs missing glyphs)"),
+    ("Latin Modern Math (OTF)", "1.959", "GUST-Font-License",
+     "https://ctan.org/pkg/lm-math (`fonts/lm-math/opentype`)",
+     "crates/vespertine_components/src/math/fonts/LICENSE-LatinModernMath-GUST.txt",
+     "math face 2 of CMP-012 (classic LaTeX)"),
+    ("Libertinus Math (Regular, OTF)", "7.051", "OFL-1.1",
+     "https://github.com/alerque/libertinus (release v7.051, `static/OTF`)",
+     "crates/vespertine_components/src/math/fonts/LICENSE-LibertinusMath-OFL.txt",
+     "math face 3 of CMP-012 (old-style book serif)"),
+    ("TeX Gyre Pagella Math (OTF)", "1.632", "GUST-Font-License",
+     "https://ctan.org/pkg/tex-gyre-math (`fonts/tex-gyre-math/opentype`)",
+     "crates/vespertine_components/src/math/fonts/LICENSE-TeXGyrePagellaMath-GUST.txt",
+     "math face 4 of CMP-012 (calligraphic-humanist book serif)"),
+    ("Euler Math (OTF, formerly Neo Euler)", "0.75", "OFL-1.1",
+     "https://ctan.org/pkg/euler-math (`fonts/euler-math`)",
+     "crates/vespertine_components/src/math/fonts/LICENSE-EulerMath-OFL.txt",
+     "math face 5 of CMP-012 (upright handwritten style)"),
 ]
+
+# Licenses an asset may be under: the dependency list plus the GUST Font License (fonts only).
+ASSET_ALLOWED = ALLOWED + ["GUST-Font-License"]
 
 # What `two-face` embeds (its `generated/*.bin` dumps of the `bat` asset set), per license text
 # (from the crate's own acknowledgements, `two_face::acknowledgement`). Vespertine's highlighter
@@ -233,8 +260,8 @@ def find_violations(rust, npm_rows, npm_first):
     for name, version, license in npm_first:
         if license != "Apache-2.0":
             problems.append(f"first-party npm package {name}: license `{license or 'none'}` is not Apache-2.0")
-    for name, license, path, _ in ASSETS:
-        if license not in ALLOWED:
+    for name, _, license, _, path, _ in ASSETS:
+        if license not in ASSET_ALLOWED:
             problems.append(f"asset {name}: license {license}")
         if not os.path.exists(os.path.join(ROOT, path)):
             problems.append(f"asset {name}: license file {path} is missing")
@@ -268,7 +295,8 @@ def render(rust, lock_only, npm_rows, npm_first):
     out.append(
         "Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, "
         "ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, CDLA-Permissive-2.0, or OFL-1.1 for "
-        "fonts. A dual-licensed crate "
+        "fonts (bundled fonts may also be under the GUST Font License, an instance of the LaTeX "
+        "Project Public License that allows unmodified redistribution). A dual-licensed crate "
         "(`A OR B`) is used under an allowed alternative, shown as the *used under* column. "
         "MPL-2.0 (file-level copyleft) is accepted for unmodified crates used as ordinary "
         "dependencies; GPL, AGPL and LGPL are not. Only crates with functional modifications are "
@@ -286,8 +314,8 @@ def render(rust, lock_only, npm_rows, npm_first):
     out.append(table(["Crate", "Version", "License", "Change from the published crate"], VENDORED) + "\n")
     out.append("## Bundled fonts\n")
     out.append(table(
-        ["Font", "License", "License text", "Use"],
-        [(n, l, f"`{p}`", u) for n, l, p, u in ASSETS],
+        ["Font", "Version", "License", "Upstream source", "License text", "Use"],
+        [(n, v or "-", l, s or "-", f"`{p}`", u) for n, v, l, s, p, u in ASSETS],
     ) + "\n")
     out.append("## Data bundled by dependencies\n")
     out.append(

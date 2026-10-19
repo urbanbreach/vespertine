@@ -34,12 +34,9 @@ pub fn layout(source: &str, display: bool, face: MathFace) -> Result<Formula, Ma
         return Err(MathError::TooLong);
     }
     let tree = parse::parse(source)?;
-    let order: Vec<&'static FaceData> = faces::lookup_order(face)
-        .filter_map(faces::face_data)
-        .collect();
-    let primary = *order.first().ok_or(MathError::MissingGlyph('?'))?;
+    let primary = faces::face_data(face.index()).ok_or(MathError::MissingGlyph('?'))?;
     let mut ctx = Ctx {
-        order,
+        face,
         c: *primary.constants(),
         budget: item_limit(source.len()),
     };
@@ -201,8 +198,8 @@ fn shift(item: DisplayItem, dx: f32, up: f32) -> DisplayItem {
 }
 
 struct Ctx {
-    /// Faces in lookup order; the first is the selected face.
-    order: Vec<&'static FaceData>,
+    /// The selected face; the others back glyphs it lacks, and are parsed only when one does.
+    face: MathFace,
     /// The constants of the selected face.
     c: Constants,
     /// Items that may still be emitted.
@@ -308,9 +305,9 @@ impl Ctx {
     }
 
     fn find_glyph(&self, ch: char) -> Result<(&'static FaceData, GlyphId), MathError> {
-        self.order
-            .iter()
-            .find_map(|face| face.glyph(ch).map(|glyph| (*face, glyph)))
+        faces::lookup_order(self.face)
+            .filter_map(faces::face_data)
+            .find_map(|face| face.glyph(ch).map(|glyph| (face, glyph)))
             .ok_or(MathError::MissingGlyph(ch))
     }
 

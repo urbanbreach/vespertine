@@ -9,14 +9,19 @@ use std::thread;
 use std::time::Duration;
 use vespertine::{IntoElement, ParentElement, Styled, div, px, rgb};
 use vespertine_components::math::{
-    DisplayBlock, DisplayItem, FaceStatus, Formula, FormulaCache, MathBlock, MathFace, MathFonts,
-    MathStyle, MathText, Presentation, ShapedSample, display_line_height, inline_line_height,
-    present_display, present_inline, reserved_slot_text, slot_chars, slot_runs, space_advance,
-    verify_face,
+    DisplayBlock, DisplayItem, FACE_COUNT, FACE_TABLE, FaceStatus, Formula, FormulaCache,
+    MathBlock, MathFace, MathFonts, MathStyle, MathText, Presentation, SLOT_REFERENCE_FACE,
+    ShapedSample, display_line_height, inline_line_height, lookup, present_display, present_inline,
+    reserved_slot_text, slot_chars, slot_runs, space_advance, verify_face,
 };
 use vespertine_richtext::text_root;
 
 const FACE: MathFace = MathFace::DEFAULT;
+
+/// The process-wide cache's formula of `source` in `face`.
+fn formula_in(source: &str, display: bool, face: MathFace) -> Arc<Formula> {
+    lookup(source, display, face).unwrap_or_else(|| panic!("{source} lays out in {}", face.label()))
+}
 
 fn rule_formula(items: usize, width: f32) -> Formula {
     Formula::from_items(
@@ -549,16 +554,16 @@ fn layout_runs_with_enough_stack_even_when_called_from_a_small_thread() {
 // ---- A9 -------------------------------------------------------------------------------------
 
 #[test]
-fn a_renumbered_system_copy_fails_verification() {
-    let shape = |renumber: u32, matches: bool, drop_last: bool| {
+fn a_renumbered_system_copy_fails_verification_for_every_face() {
+    let shape = |index: usize, renumber: u32, matches: bool, drop_last: bool| {
         move |text: &str| {
-            let face = vespertine_components::math::faces::face_data(0).unwrap();
+            let face = vespertine_components::math::faces::face_data(index).unwrap();
             let mut out = Vec::new();
-            for (index, ch) in text.char_indices() {
+            for (at, ch) in text.char_indices() {
                 out.push(ShapedSample {
                     font_matches: matches,
                     glyph: u32::from(face.glyph(ch).unwrap().0) + renumber,
-                    index,
+                    index: at,
                 });
             }
             if drop_last {
@@ -567,21 +572,39 @@ fn a_renumbered_system_copy_fails_verification() {
             out
         }
     };
-    assert!(verify_face(0, &mut shape(0, true, false)));
+    for face in MathFace::all() {
+        let index = face.index();
+        let name = face.label();
+        assert!(
+            verify_face(index, &mut shape(index, 0, true, false)),
+            "{name}: bundled glyphs verify"
+        );
+        assert!(
+            !verify_face(index, &mut shape(index, 1, true, false)),
+            "{name}: renumbered glyphs"
+        );
+        assert!(
+            !verify_face(index, &mut shape(index, 0, false, false)),
+            "{name}: another font"
+        );
+        assert!(
+            !verify_face(index, &mut shape(index, 0, true, true)),
+            "{name}: missing glyph"
+        );
+    }
     assert!(
-        !verify_face(0, &mut shape(1, true, false)),
-        "renumbered glyphs"
+        !verify_face(FACE_COUNT, &mut |_: &str| Vec::new()),
+        "an index outside the table never verifies"
     );
-    assert!(!verify_face(0, &mut shape(0, false, false)), "another font");
-    assert!(!verify_face(0, &mut shape(0, true, true)), "missing glyph");
 }
 
 fn paint_fraction(
+    face: MathFace,
     status: Option<FaceStatus>,
 ) -> (vespertine_components::math::PaintReport, Option<FaceStatus>) {
     let reports = Reports::default();
     let observer = reports.observer();
-    let style = MathStyle::new();
+    let style = MathStyle::new().face(face);
     let text = paragraph(
         &[
             Piece::Text("a "),
@@ -594,7 +617,7 @@ fn paint_fraction(
     let status_sink = final_status.clone();
     let Some(mut page) = host(200.0, 80.0, move |window, cx| {
         if let Some(status) = status {
-            MathFonts::set_status(cx, 0, status);
+            MathFonts::set_status(cx, face.index(), status);
         }
         let element = paragraph_page(
             &text,
@@ -606,7 +629,7 @@ fn paint_fraction(
             window,
             cx,
         );
-        *status_sink.lock().unwrap() = MathFonts::status(cx, 0);
+        *status_sink.lock().unwrap() = MathFonts::status(cx, face.index());
         element
     }) else {
         return (Default::default(), None);
@@ -621,26 +644,29 @@ fn an_unverified_copy_paints_outlines_and_a_verified_font_paints_through_the_atl
     if !vespertine_test_host::is_available() {
         return;
     }
-    // The bundled face is registered on first use and verified: glyphs use the atlas.
-    let (report, status) = paint_fraction(None);
-    assert!(
-        matches!(status, Some(FaceStatus::Verified(_))),
-        "the registered bundled face verifies: {status:?}"
-    );
-    assert!(report.atlas_glyphs > 0);
-    assert_eq!(report.outline_glyphs, 0);
-    assert!(
-        report.rules > 0,
-        "the fraction bar and the radical bar are quads"
-    );
+    for face in MathFace::all() {
+        let name = face.label();
+        // The bundled face is registered on first use and verified: glyphs use the atlas.
+        let (report, status) = paint_fraction(face, None);
+        assert!(
+            matches!(status, Some(FaceStatus::Verified(_))),
+            "{name}: the registered bundled face verifies: {status:?}"
+        );
+        assert!(report.atlas_glyphs > 0, "{name}");
+        assert_eq!(report.outline_glyphs, 0, "{name}");
+        assert!(
+            report.rules > 0,
+            "{name}: the fraction bar and the radical bar are quads"
+        );
 
-    // A system copy with renumbered glyph identifiers is unverified: outlines from the
-    // bundled data, never another copy of the family.
-    let (report, status) = paint_fraction(Some(FaceStatus::Unverified));
-    assert_eq!(status, Some(FaceStatus::Unverified));
-    assert!(report.outline_glyphs > 0);
-    assert_eq!(report.atlas_glyphs, 0);
-    assert!(report.rules > 0);
+        // A system copy with renumbered glyph identifiers is unverified: outlines from the
+        // bundled data (TrueType or CFF), never another copy of the family.
+        let (report, status) = paint_fraction(face, Some(FaceStatus::Unverified));
+        assert_eq!(status, Some(FaceStatus::Unverified), "{name}");
+        assert!(report.outline_glyphs > 0, "{name}");
+        assert_eq!(report.atlas_glyphs, 0, "{name}");
+        assert!(report.rules > 0, "{name}");
+    }
 }
 
 #[test]
@@ -648,12 +674,232 @@ fn outline_and_atlas_painting_agree_on_the_formula_geometry() {
     if !vespertine_test_host::is_available() {
         return;
     }
-    let (atlas, _) = paint_fraction(None);
-    let (outline, _) = paint_fraction(Some(FaceStatus::Unverified));
-    assert_eq!(atlas.slots, outline.slots);
+    for face in MathFace::all() {
+        let (atlas, _) = paint_fraction(face, None);
+        let (outline, _) = paint_fraction(face, Some(FaceStatus::Unverified));
+        assert_eq!(atlas.slots, outline.slots, "{}", face.label());
+        assert_eq!(
+            atlas.atlas_glyphs,
+            outline.outline_glyphs,
+            "{}: the same glyphs paint either way",
+            face.label()
+        );
+    }
+}
+
+// ---- R2: the face set -----------------------------------------------------------------------
+
+/// A fraction, a radical, sub- and superscripts, a matrix and stretchy delimiters: what every face
+/// has to lay out.
+const FACE_FORMULAS: [&str; 7] = [
+    r"\frac{a+b}{c}",
+    r"\sqrt{x^2+1}",
+    r"x_i^2",
+    r"x_{i}^{2}+\sum_{k=1}^{n}k",
+    r"\begin{pmatrix}a & b \\ c & d\end{pmatrix}",
+    r"\left(\frac{a}{b}\right)",
+    r"\left|\frac{a}{b}\right|",
+];
+
+#[test]
+fn at_least_six_faces_are_offered_with_the_default_sans_face_first() {
+    assert!(FACE_COUNT >= 6, "{FACE_COUNT}");
+    assert_eq!(MathFace::DEFAULT.index(), 0);
+    assert_eq!(MathFace::DEFAULT, MathFace::NOTO_SANS_MATH);
+    assert_eq!(SLOT_REFERENCE_FACE, 0);
+    assert_eq!(MathFace::all().count(), FACE_COUNT);
     assert_eq!(
-        atlas.atlas_glyphs, outline.outline_glyphs,
-        "the same glyphs paint either way"
+        [
+            MathFace::NOTO_SANS_MATH,
+            MathFace::STIX_TWO_MATH,
+            MathFace::LATIN_MODERN_MATH,
+            MathFace::LIBERTINUS_MATH,
+            MathFace::TEX_GYRE_PAGELLA_MATH,
+            MathFace::EULER_MATH,
+        ]
+        .map(MathFace::index),
+        [0, 1, 2, 3, 4, 5],
+        "glyph font indices are stable"
+    );
+    let labels: Vec<_> = MathFace::all().map(MathFace::label).collect();
+    assert_eq!(
+        labels,
+        [
+            "Noto Sans Math",
+            "STIX Two Math",
+            "Latin Modern Math",
+            "Libertinus Math",
+            "TeX Gyre Pagella Math",
+            "Euler Math"
+        ]
+    );
+    assert_eq!(MathFace::from_index(FACE_COUNT), None);
+    for face in MathFace::all() {
+        assert_eq!(MathFace::from_index(face.index()), Some(face));
+        assert!(!FACE_TABLE[face.index()].data.is_empty());
+    }
+}
+
+#[test]
+fn every_face_lays_out_fractions_radicals_scripts_and_matrices_with_finite_metrics() {
+    let cache = FormulaCache::with_limits(1024, usize::MAX);
+    for face in MathFace::all() {
+        for display in [false, true] {
+            for source in FACE_FORMULAS {
+                let name = format!("{} {source} (display {display})", face.label());
+                let formula = cache
+                    .lookup(source, display, face)
+                    .unwrap_or_else(|| panic!("{name} lays out"));
+                for (what, value) in [
+                    ("advance", formula.advance()),
+                    ("ascent", formula.ascent()),
+                    ("height", formula.height()),
+                    ("extent", formula.extent()),
+                ] {
+                    assert!(value.is_finite() && value > 0.0, "{name}: {what} {value}");
+                }
+                assert!(
+                    formula.descent().is_finite() && formula.descent() >= 0.0,
+                    "{name}: descent {}",
+                    formula.descent()
+                );
+                assert!(!formula.items().is_empty(), "{name}");
+                for item in formula.items() {
+                    match *item {
+                        DisplayItem::Glyph {
+                            font, x, y, scale, ..
+                        } => {
+                            assert!(usize::from(font) < FACE_COUNT, "{name}");
+                            assert!(
+                                x.is_finite() && y.is_finite() && scale > 0.0 && scale <= 1.0,
+                                "{name}: glyph at ({x}, {y}) scale {scale}"
+                            );
+                        }
+                        DisplayItem::Rule {
+                            x,
+                            y,
+                            width,
+                            height,
+                        } => assert!(
+                            x.is_finite() && y.is_finite() && width > 0.0 && height > 0.0,
+                            "{name}: rule"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_face_measures_and_paints_its_own_glyphs() {
+    for face in MathFace::all() {
+        let formula = formula_in(r"\frac{a}{b}+x^2", false, face);
+        let mut glyphs = 0;
+        for item in formula.items() {
+            if let DisplayItem::Glyph { font, .. } = *item {
+                glyphs += 1;
+                assert_eq!(
+                    usize::from(font),
+                    face.index(),
+                    "{}: letters, digits and operators come from the selected face",
+                    face.label()
+                );
+            }
+        }
+        assert!(glyphs >= 5, "{}: {glyphs}", face.label());
+        assert!(
+            formula
+                .items()
+                .iter()
+                .any(|item| matches!(item, DisplayItem::Rule { .. })),
+            "{}: the fraction bar is a rule",
+            face.label()
+        );
+    }
+}
+
+#[test]
+fn faces_differ_in_measured_extent() {
+    let cache = FormulaCache::with_limits(64, usize::MAX);
+    for source in [r"\frac{a+b}{c}=\sqrt{x^2}", r"x_i^2+\sum_{k=1}^{n}k"] {
+        let mut extents: Vec<(f32, &str)> = MathFace::all()
+            .map(|face| {
+                let formula = cache.lookup(source, false, face).expect("lays out");
+                (formula.extent(), face.label())
+            })
+            .collect();
+        extents.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in extents.windows(2) {
+            assert!(
+                pair[1].0 - pair[0].0 > 1e-3,
+                "{source}: {} and {} measure the same extent {} / {}",
+                pair[0].1,
+                pair[1].1,
+                pair[0].0,
+                pair[1].0
+            );
+        }
+    }
+    // The vertical metrics differ as well: a face's MATH constants drive the stacking.
+    let heights: Vec<f32> = MathFace::all()
+        .map(|face| {
+            cache
+                .lookup(r"\frac{a}{b}", true, face)
+                .expect("lays out")
+                .height()
+        })
+        .collect();
+    let min = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = heights.iter().copied().fold(0.0, f32::max);
+    assert!(max - min > 0.01, "display fraction heights {heights:?}");
+}
+
+#[test]
+fn the_cache_is_keyed_by_face() {
+    let cache = FormulaCache::with_limits(64, usize::MAX);
+    let source = r"\frac{a}{b}";
+    let first = cache
+        .lookup(source, false, MathFace::DEFAULT)
+        .expect("lays out");
+    assert_eq!(cache.layout_count(), 1);
+    for face in MathFace::all().skip(1) {
+        assert!(!cache.contains(source, false, face), "{}", face.label());
+        let other = cache.lookup(source, false, face).expect("lays out");
+        assert!(
+            !Arc::ptr_eq(&first, &other),
+            "{}: a different face is a different entry",
+            face.label()
+        );
+        assert_ne!(*first, *other, "{}", face.label());
+        assert!(cache.contains(source, false, face));
+    }
+    assert_eq!(cache.layout_count(), FACE_COUNT);
+    assert_eq!(cache.len(), FACE_COUNT);
+    // Every face's entry is served again without a layout, and is the very same formula.
+    for face in MathFace::all() {
+        let before = cache.layout_count();
+        let again = cache.lookup(source, false, face).expect("cached");
+        assert_eq!(cache.layout_count(), before, "{}", face.label());
+        assert_eq!(
+            again.items().len(),
+            formula_in(source, false, face).items().len()
+        );
+    }
+    // The display flag is a further part of the key, and an error is cached per face.
+    assert!(!cache.contains(source, true, MathFace::EULER_MATH));
+    assert!(
+        cache
+            .lookup(r"\nosuchcommand", false, MathFace::EULER_MATH)
+            .is_none()
+    );
+    assert_eq!(
+        cache.is_cached_error(r"\nosuchcommand", false, MathFace::EULER_MATH),
+        Some(true)
+    );
+    assert_eq!(
+        cache.is_cached_error(r"\nosuchcommand", false, MathFace::LATIN_MODERN_MATH),
+        None
     );
 }
 

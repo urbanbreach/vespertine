@@ -2,19 +2,27 @@
 //!
 //! A face is identified by its index in [`FACE_TABLE`]; a glyph in a display list names the face
 //! that produced it by that index, whichever [`MathFace`] was selected. Faces are parsed on first
-//! use only: a face nobody lays out is never parsed.
+//! use only: a face nobody lays out is never parsed, and a face that only backs glyphs another
+//! face lacks is parsed when such a glyph occurs.
 //!
 //! # Faces
 //!
-//! Every face must carry a complete OpenType MATH table (constants, glyph variants and assemblies)
-//! and be available under a permissive license. The table currently holds one face, Noto Sans Math
-//! (SIL Open Font License 1.1, `fonts/LICENSE-NotoSansMath-OFL.txt`), the default sans face. The
-//! other faces the specification lists (a Times-style serif, a classic LaTeX face, two book
-//! serifs, an upright handwriting face) could not be obtained offline under a permissive license:
-//! the DejaVu faces on the machine carry placeholder MATH constants (superscript and fraction
-//! shifts of zero), Linux Libertine G has no mathematical alphabets and is GPL-dual, and the
-//! remaining math fonts exist only in a tree this project may not read. Adding a face means
-//! adding one [`FaceInfo`] row; nothing else in the engine depends on the number of faces.
+//! Every face carries a complete OpenType MATH table (constants, glyph variants and assemblies),
+//! is bundled unmodified from its original upstream release and is available under a permissive
+//! license (the SIL Open Font License 1.1 or the GUST Font License); `THIRD_PARTY.md` records the
+//! source, version and license text of each. The indices are stable: new faces are appended.
+//!
+//! | Index | Face | Style | License |
+//! | --- | --- | --- | --- |
+//! | 0 | Noto Sans Math 3.000 | the default sans face, beside UI sans-serifs | OFL-1.1 |
+//! | 1 | STIX Two Math 2.13 | Times-style serif covering every glyph; backs glyphs missing from the others | OFL-1.1 |
+//! | 2 | Latin Modern Math 1.959 | classic LaTeX (Computer Modern) | GUST Font License |
+//! | 3 | Libertinus Math 7.051 | warm old-style book serif | OFL-1.1 |
+//! | 4 | TeX Gyre Pagella Math 1.632 | calligraphic-humanist book serif (Palatino style) | GUST Font License |
+//! | 5 | Euler Math 0.75 | upright handwritten style (Zapf's Euler) | OFL-1.1 |
+//!
+//! The license texts are in `fonts/`. Adding a face means appending one [`FaceInfo`] row and one
+//! [`MathFace`] constant; nothing else in the engine depends on the number of faces.
 
 use std::sync::OnceLock;
 use ttf_parser::GlyphId;
@@ -32,11 +40,38 @@ pub struct FaceInfo {
 }
 
 /// The fixed face table. A glyph's `font` index is an index into this table.
-pub static FACE_TABLE: [FaceInfo; 1] = [FaceInfo {
-    label: "Noto Sans Math",
-    family: "Noto Sans Math",
-    data: include_bytes!("fonts/NotoSansMath-Regular.ttf"),
-}];
+pub static FACE_TABLE: [FaceInfo; 6] = [
+    FaceInfo {
+        label: "Noto Sans Math",
+        family: "Noto Sans Math",
+        data: include_bytes!("fonts/NotoSansMath-Regular.ttf"),
+    },
+    FaceInfo {
+        label: "STIX Two Math",
+        family: "STIX Two Math",
+        data: include_bytes!("fonts/STIXTwoMath-Regular.otf"),
+    },
+    FaceInfo {
+        label: "Latin Modern Math",
+        family: "Latin Modern Math",
+        data: include_bytes!("fonts/LatinModernMath-Regular.otf"),
+    },
+    FaceInfo {
+        label: "Libertinus Math",
+        family: "Libertinus Math",
+        data: include_bytes!("fonts/LibertinusMath-Regular.otf"),
+    },
+    FaceInfo {
+        label: "TeX Gyre Pagella Math",
+        family: "TeX Gyre Pagella Math",
+        data: include_bytes!("fonts/TeXGyrePagellaMath-Regular.otf"),
+    },
+    FaceInfo {
+        label: "Euler Math",
+        family: "Euler Math",
+        data: include_bytes!("fonts/EulerMath-Regular.otf"),
+    },
+];
 
 /// Number of faces in [`FACE_TABLE`].
 pub const FACE_COUNT: usize = FACE_TABLE.len();
@@ -45,6 +80,10 @@ pub const FACE_COUNT: usize = FACE_TABLE.len();
 /// (CMP-012 R4): one fixed reference face regardless of the selected math face.
 pub const SLOT_REFERENCE_FACE: usize = 0;
 
+/// The face that backs glyphs the selected face lacks: the Times-style serif that covers every
+/// glyph the engine uses.
+pub const BACKING_FACE: usize = 1;
+
 /// A selectable math face: an index into [`FACE_TABLE`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MathFace(u8);
@@ -52,8 +91,23 @@ pub struct MathFace(u8);
 impl MathFace {
     /// The default sans face, Noto Sans Math.
     pub const NOTO_SANS_MATH: MathFace = MathFace(0);
+    /// The Times-style serif, STIX Two Math; it also backs glyphs missing from the other faces.
+    pub const STIX_TWO_MATH: MathFace = MathFace(1);
+    /// The classic-LaTeX face, Latin Modern Math.
+    pub const LATIN_MODERN_MATH: MathFace = MathFace(2);
+    /// The warm old-style book serif, Libertinus Math.
+    pub const LIBERTINUS_MATH: MathFace = MathFace(3);
+    /// The calligraphic-humanist book serif, TeX Gyre Pagella Math.
+    pub const TEX_GYRE_PAGELLA_MATH: MathFace = MathFace(4);
+    /// The upright handwritten-style face, Euler Math.
+    pub const EULER_MATH: MathFace = MathFace(5);
     /// The default face: a sans face that sits beside UI sans-serifs.
     pub const DEFAULT: MathFace = Self::NOTO_SANS_MATH;
+
+    /// The face's human-readable label.
+    pub fn label(self) -> &'static str {
+        self.info().label
+    }
 
     /// The face at `index` of the face table, if there is one.
     pub fn from_index(index: usize) -> Option<MathFace> {
@@ -387,15 +441,18 @@ impl FaceData {
         self.face
             .names()
             .into_iter()
-            .find(|name| name.name_id == ttf_parser::name_id::FAMILY)
-            .and_then(|name| name.to_string())
+            .filter(|name| name.name_id == ttf_parser::name_id::FAMILY)
+            .find_map(|name| name.to_string())
     }
 }
 
-/// The face lookup order for a selected face: the selected face first, then every other face in
-/// table order (a glyph missing from the selected face is backed by the others).
+/// The face lookup order for a selected face: the selected face first, then the backing face
+/// ([`BACKING_FACE`]), then every other face in table order (a glyph missing from the selected
+/// face is backed by the others). Lazy: a face is parsed only when the search reaches it.
 pub fn lookup_order(selected: MathFace) -> impl Iterator<Item = usize> {
-    std::iter::once(selected.index()).chain((0..FACE_COUNT).filter(move |&i| i != selected.index()))
+    std::iter::once(selected.index())
+        .chain((selected.index() != BACKING_FACE).then_some(BACKING_FACE))
+        .chain((0..FACE_COUNT).filter(move |&i| i != selected.index() && i != BACKING_FACE))
 }
 
 #[cfg(test)]
@@ -405,17 +462,127 @@ mod tests {
     #[test]
     fn every_bundled_face_parses_with_a_complete_math_table() {
         for face in MathFace::all() {
+            let name = face.label();
             let data = face_data(face.index()).expect("face parses");
             let c = data.constants();
-            assert!(c.axis_height > 0.0 && c.fraction_rule_thickness > 0.0);
-            assert!(c.superscript_shift_up > 0.0 && c.subscript_shift_down > 0.0);
-            assert!(c.script_percent > 0.0 && c.script_script_percent > 0.0);
+            for (what, value) in [
+                ("script_percent", c.script_percent),
+                ("script_script_percent", c.script_script_percent),
+                ("display_operator_min_height", c.display_operator_min_height),
+                (
+                    "delimited_sub_formula_min_height",
+                    c.delimited_sub_formula_min_height,
+                ),
+                ("axis_height", c.axis_height),
+                ("subscript_shift_down", c.subscript_shift_down),
+                ("subscript_top_max", c.subscript_top_max),
+                ("superscript_shift_up", c.superscript_shift_up),
+                (
+                    "superscript_shift_up_cramped",
+                    c.superscript_shift_up_cramped,
+                ),
+                ("superscript_bottom_min", c.superscript_bottom_min),
+                ("sub_superscript_gap_min", c.sub_superscript_gap_min),
+                ("upper_limit_gap_min", c.upper_limit_gap_min),
+                ("lower_limit_gap_min", c.lower_limit_gap_min),
+                ("stack_top_shift_up", c.stack_top_shift_up),
+                ("stack_bottom_shift_down", c.stack_bottom_shift_down),
+                ("stack_gap_min", c.stack_gap_min),
+                ("fraction_numerator_shift_up", c.fraction_numerator_shift_up),
+                (
+                    "fraction_denominator_shift_down",
+                    c.fraction_denominator_shift_down,
+                ),
+                ("fraction_numerator_gap_min", c.fraction_numerator_gap_min),
+                ("fraction_rule_thickness", c.fraction_rule_thickness),
+                (
+                    "fraction_denominator_gap_min",
+                    c.fraction_denominator_gap_min,
+                ),
+                ("overbar_vertical_gap", c.overbar_vertical_gap),
+                ("overbar_rule_thickness", c.overbar_rule_thickness),
+                ("underbar_vertical_gap", c.underbar_vertical_gap),
+                ("underbar_rule_thickness", c.underbar_rule_thickness),
+                ("radical_vertical_gap", c.radical_vertical_gap),
+                (
+                    "radical_display_style_vertical_gap",
+                    c.radical_display_style_vertical_gap,
+                ),
+                ("radical_rule_thickness", c.radical_rule_thickness),
+            ] {
+                assert!(
+                    value.is_finite() && value > 0.0,
+                    "{name}: MATH constant {what} is {value}"
+                );
+            }
+            assert!(
+                c.script_percent < 1.0 && c.script_script_percent < c.script_percent,
+                "{name}: script scales"
+            );
+            assert!(c.min_connector_overlap > 0.0, "{name}: connector overlap");
             assert_eq!(
                 data.family_name().as_deref(),
                 Some(face.info().family),
-                "the registered family name is the font's own family name"
+                "{name}: the registered family name is the font's own family name"
             );
         }
+    }
+
+    #[test]
+    fn every_bundled_face_has_stretchy_delimiter_data_and_the_alphabets() {
+        for face in MathFace::all() {
+            let name = face.label();
+            let data = face_data(face.index()).expect("face parses");
+            for ch in [
+                '(', ')', '[', ']', '{', '}', '\u{221A}', '\u{222B}', '\u{2211}',
+            ] {
+                let glyph = data
+                    .glyph(ch)
+                    .unwrap_or_else(|| panic!("{name}: no glyph for {ch:?}"));
+                assert!(
+                    data.variants(glyph, true).len() >= 2,
+                    "{name}: {ch:?} has no vertical size variants"
+                );
+            }
+            let brace = data.glyph('{').unwrap();
+            let parts = data
+                .assembly(brace, true)
+                .unwrap_or_else(|| panic!("{name}: no vertical assembly for a brace"));
+            assert!(parts.iter().any(|part| part.extender), "{name}");
+            for ch in [
+                'A', 'a', 'x', '0', '+', '=', '\u{3B1}', '\u{3C0}', '\u{2192}', '\u{2264}',
+            ] {
+                let glyph = data
+                    .glyph(ch)
+                    .unwrap_or_else(|| panic!("{name}: no glyph for {ch:?}"));
+                assert!(data.advance(glyph) > 0.0, "{name}: {ch:?}");
+            }
+            for ch in ['\u{1D44E}', '\u{1D49C}', '\u{211D}', '\u{1D53B}'] {
+                assert!(
+                    data.glyph(ch).is_some(),
+                    "{name}: no mathematical alphabet glyph for {ch:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_lookup_order_starts_with_the_selected_face_then_the_backing_face() {
+        for face in MathFace::all() {
+            let order: Vec<usize> = lookup_order(face).collect();
+            assert_eq!(order.len(), FACE_COUNT, "{}", face.label());
+            assert_eq!(order[0], face.index());
+            if face.index() != BACKING_FACE {
+                assert_eq!(order[1], BACKING_FACE, "{}", face.label());
+            }
+            let mut sorted = order.clone();
+            sorted.sort_unstable();
+            assert!(
+                sorted.iter().copied().eq(0..FACE_COUNT),
+                "every face exactly once"
+            );
+        }
+        assert_eq!(FACE_TABLE[BACKING_FACE].family, "STIX Two Math");
     }
 
     #[test]
