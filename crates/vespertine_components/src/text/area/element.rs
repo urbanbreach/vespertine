@@ -1,14 +1,17 @@
 //! The element and render function of the multiline editor.
 
 use super::{TextArea, TextAreaEvent, WASH_INSET_Y, WASH_RADIUS, layout::painted_height};
-use crate::text::{actions::*, editor::EditorHost};
+use crate::{
+    layout::paint_left_aligned,
+    text::{actions::*, editor::EditorHost},
+};
 use vespertine::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, Corners, CursorStyle,
     DispatchPhase, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
     HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign,
-    Window, div, fill, point, px, relative, size,
+    Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Style, Styled, Window, div,
+    fill, point, px, relative, size,
 };
 
 struct AreaElement {
@@ -210,14 +213,7 @@ impl Element for AreaElement {
                         &[run],
                         None,
                     );
-                    let _ = line.paint(
-                        point(origin.x, origin.y),
-                        line_height,
-                        TextAlign::Left,
-                        None,
-                        window,
-                        cx,
-                    );
+                    paint_left_aligned(&line, point(origin.x, origin.y), line_height, window, cx);
                 }
             } else if let Some(layout) = layout {
                 let top = bounds.top() - line_height;
@@ -241,11 +237,10 @@ impl Element for AreaElement {
                         } else {
                             origin.x + line.shape.indent
                         };
-                        let _ = line.shape.rows[row].paint(
+                        paint_left_aligned(
+                            &line.shape.rows[row],
                             point(x, row_top),
                             line_height,
-                            TextAlign::Left,
-                            None,
                             window,
                             cx,
                         );

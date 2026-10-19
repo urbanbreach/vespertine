@@ -131,8 +131,8 @@ impl Render for IndicatorView {
                         div()
                             .w(px(cell))
                             .h(px(cell))
-                            .flex_none()
                             .flex()
+                            .flex_none()
                             .items_center()
                             .justify_center()
                             .child(

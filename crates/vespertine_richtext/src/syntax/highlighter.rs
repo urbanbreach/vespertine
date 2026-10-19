@@ -246,72 +246,63 @@ fn is_boolean_word(text: &str) -> bool {
     )
 }
 
+const C_BUILTIN_TYPES: &[&str] = &[
+    "int",
+    "void",
+    "char",
+    "unsigned",
+    "signed",
+    "long",
+    "short",
+    "float",
+    "double",
+    "_Bool",
+    "bool",
+    "size_t",
+    "ssize_t",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
+    "uintptr_t",
+    "intptr_t",
+    "ptrdiff_t",
+];
+
+const RUST_BUILTIN_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32",
+    "f64", "bool", "char", "str", "Self",
+];
+
+const SCRIPT_BUILTIN_TYPES: &[&str] = &[
+    "string",
+    "number",
+    "boolean",
+    "bigint",
+    "symbol",
+    "object",
+    "undefined",
+    "never",
+    "unknown",
+    "any",
+    "void",
+];
+
 /// Built-in type names per language (TXT-007 R8).
 fn is_builtin_type(language: Language, text: &str) -> bool {
-    match language {
-        Language::C => matches!(
-            text,
-            "int"
-                | "void"
-                | "char"
-                | "unsigned"
-                | "signed"
-                | "long"
-                | "short"
-                | "float"
-                | "double"
-                | "_Bool"
-                | "bool"
-                | "size_t"
-                | "ssize_t"
-                | "int8_t"
-                | "int16_t"
-                | "int32_t"
-                | "int64_t"
-                | "uint8_t"
-                | "uint16_t"
-                | "uint32_t"
-                | "uint64_t"
-                | "uintptr_t"
-                | "intptr_t"
-                | "ptrdiff_t"
-        ),
-        Language::Rust => matches!(
-            text,
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "i128"
-                | "isize"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "u128"
-                | "usize"
-                | "f32"
-                | "f64"
-                | "bool"
-                | "char"
-                | "str"
-                | "Self"
-        ),
-        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => matches!(
-            text,
-            "string"
-                | "number"
-                | "boolean"
-                | "bigint"
-                | "symbol"
-                | "object"
-                | "undefined"
-                | "never"
-                | "unknown"
-                | "any"
-                | "void"
-        ),
-        _ => false,
-    }
+    let names = match language {
+        Language::C => C_BUILTIN_TYPES,
+        Language::Rust => RUST_BUILTIN_TYPES,
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => {
+            SCRIPT_BUILTIN_TYPES
+        }
+        _ => &[],
+    };
+    names.contains(&text)
 }
 
 /// The shared grammar set (loaded once, about 3 ms).

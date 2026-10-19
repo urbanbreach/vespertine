@@ -196,9 +196,7 @@ fn search_row(
                 .child(default_identity(node.kind, !row.collapsed && is_dir, theme)),
         )
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
+            crate::layout::flexible_cell()
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()

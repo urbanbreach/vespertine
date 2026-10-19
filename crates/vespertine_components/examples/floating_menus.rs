@@ -242,14 +242,12 @@ fn main() {
     }
     application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(CornerMenus::new),
-        )
-        .expect("open the window");
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        cx.open_window(options, |_, cx| cx.new(CornerMenus::new))
+            .expect("open the window");
         cx.activate(true);
     });
 }

@@ -275,10 +275,7 @@ impl vespertine::Render for DetailCard {
                         .bg(tokens.accent.opacity(0.35)),
                 )
                 .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
+                    crate::layout::centered_row()
                         .gap(px(8.))
                         .child(location)
                         .children(tag),

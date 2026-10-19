@@ -61,11 +61,11 @@ impl NoticeAction {
     /// An action button.
     pub fn new(
         label: impl Into<SharedString>,
-        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
             label: label.into(),
-            on_click: Rc::new(on_click),
+            on_click: Rc::new(handler),
         }
     }
 }

@@ -128,16 +128,14 @@ fn run() {
         let hook: SharedHook = Rc::default();
         let bounds = Bounds::centered(None, size(px(720.0), px(420.0)), cx);
         let window_hook = hook.clone();
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            move |window, cx| {
-                appearance::observe_window(window, cx);
-                cx.new(|_| Status { hook: window_hook })
-            },
-        )
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        cx.open_window(options, move |window, cx| {
+            appearance::observe_window(window, cx);
+            cx.new(|_| Status { hook: window_hook })
+        })
         .unwrap();
         cx.activate(true);
 

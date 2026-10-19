@@ -73,8 +73,8 @@ impl Render for Page {
         }
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .gap_2()
             .p_2()
             .bg(rgb(0x101216))

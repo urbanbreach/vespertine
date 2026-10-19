@@ -186,15 +186,13 @@ impl AddressInput {
     }
 
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
-        if self.selection_reversed {
-            self.selected_range.start = offset;
+        let (start, end) = if self.selection_reversed {
+            (offset, self.selected_range.end)
         } else {
-            self.selected_range.end = offset;
-        }
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = self.selected_range.end..self.selected_range.start;
-        }
+            (self.selected_range.start, offset)
+        };
+        self.selection_reversed ^= end < start;
+        self.selected_range = start.min(end)..start.max(end);
         window.notify_text_selection_changed(&self.focus_handle);
         cx.notify();
     }
@@ -202,15 +200,17 @@ impl AddressInput {
     fn previous_boundary(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
-            .rev()
-            .find_map(|(index, _)| (index < offset).then_some(index))
+            .map(|(index, _)| index)
+            .take_while(|&index| index < offset)
+            .last()
             .unwrap_or(0)
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
-            .find_map(|(index, _)| (index > offset).then_some(index))
+            .map(|(index, _)| index)
+            .find(|&index| index > offset)
             .unwrap_or(self.content.len())
     }
 
@@ -453,11 +453,21 @@ impl AddressInput {
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+        let [start, end] = [range.start, range.end].map(|offset| self.offset_to_utf16(offset));
+        start..end
     }
 
     fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
         self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
+    }
+
+    /// The range an edit replaces: the given UTF-16 range, else the marked range, else the
+    /// selection.
+    fn edit_target(&self, range_utf16: Option<&Range<usize>>) -> Range<usize> {
+        range_utf16
+            .map(|range| self.range_from_utf16(range))
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone())
     }
 }
 
@@ -534,11 +544,7 @@ impl EntityInputHandler for AddressInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+        let range = self.edit_target(range_utf16.as_ref());
         self.edit(range, new_text, window, cx);
     }
 
@@ -550,11 +556,7 @@ impl EntityInputHandler for AddressInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+        let range = self.edit_target(range_utf16.as_ref());
         let new_text = sanitize(new_text);
         self.content =
             (self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..])

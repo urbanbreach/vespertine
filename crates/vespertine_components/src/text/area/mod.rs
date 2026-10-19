@@ -793,14 +793,14 @@ impl TextArea {
     /// Pastes a clipboard item exactly as the Paste action pastes the system clipboard.
     pub fn paste_item(
         &mut self,
-        item: &ClipboardItem,
+        entry: &ClipboardItem,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.disabled || self.core.is_read_only() {
             return;
         }
-        self.paste_content(ClipboardContent::from_item(item), window, cx);
+        self.paste_content(ClipboardContent::from_item(entry), window, cx);
     }
 
     /// Installs a projection directly (R16): an ordered list of non-overlapping replacements.

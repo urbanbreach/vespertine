@@ -66,10 +66,10 @@ pub struct DiffFile {
     pub path: String,
     /// The old path, recorded only when it differs from [`DiffFile::path`].
     pub old_path: Option<String>,
-    /// Added, deleted, renamed or modified.
-    pub status: FileStatus,
     /// Whether the patch only says the contents are binary.
     pub binary: bool,
+    /// Added, deleted, renamed or modified.
+    pub status: FileStatus,
     /// Parser notices (mode changes) and the truncation notice, in order. The status notices
     /// of R4 come first in [`file_notices`].
     pub notices: Vec<String>,

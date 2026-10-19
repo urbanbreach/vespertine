@@ -780,8 +780,8 @@ fn a_payload_of_another_strip_is_rejected(cx: &mut TestAppContext) {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
-                .flex()
                 .flex_col()
+                .flex()
                 .child(div().w(px(600.)).child(self.first.clone()))
                 .child(div().w(px(600.)).mt(px(40.)).child(self.second.clone()))
         }

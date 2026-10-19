@@ -236,9 +236,7 @@ impl RenderOnce for ChecklistPanel {
                 window.refresh();
             })
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
+                crate::layout::flexible_cell()
                     .truncate()
                     .text_size(px(ROW_TEXT_SIZE))
                     .font_weight(FontWeight::MEDIUM)

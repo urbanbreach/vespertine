@@ -52,14 +52,14 @@ impl Default for HostState {
 /// One wash of a run: a byte range of the displayed text.
 #[derive(Clone, Debug)]
 pub struct Wash {
-    /// Byte range in the run's displayed text.
-    pub range: Range<usize>,
-    /// Fill color.
-    pub color: Hsla,
-    /// Corner radius in logical px.
-    pub radius: f32,
     /// Whether this is the active match.
     pub active: bool,
+    /// Corner radius in logical px.
+    pub radius: f32,
+    /// Fill color.
+    pub color: Hsla,
+    /// Byte range in the run's displayed text.
+    pub range: Range<usize>,
 }
 
 /// The declaration in force for a subtree during one frame.
@@ -302,12 +302,12 @@ impl Element for Highlight {
 
     fn request_layout(
         &mut self,
-        id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let state = match id {
+        let state = match global_id {
             Some(id) => window.with_element_state::<Rc<RefCell<HostState>>, _>(id, |state, _| {
                 let state = state.unwrap_or_default();
                 (state.clone(), state)

@@ -3,24 +3,24 @@
 /// A supported language family (TXT-007 R2: sixteen identities).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Language {
-    Rust,
-    JavaScript,
-    Jsx,
-    TypeScript,
-    Tsx,
-    Python,
-    Go,
-    Json,
+    Rust = 0,
+    JavaScript = 1,
+    Jsx = 2,
+    TypeScript = 3,
+    Tsx = 4,
+    Python = 5,
+    Go = 6,
+    Json = 7,
     /// JSON with comments.
-    Jsonc,
+    Jsonc = 8,
     /// Shell scripts (bash, sh, zsh, console).
-    Shell,
-    Toml,
-    Markdown,
-    Html,
-    Css,
-    Yaml,
-    C,
+    Shell = 9,
+    Toml = 10,
+    Markdown = 11,
+    Html = 12,
+    Css = 13,
+    Yaml = 14,
+    C = 15,
 }
 
 impl Language {

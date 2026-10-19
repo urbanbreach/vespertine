@@ -79,8 +79,8 @@ struct Pair {
 impl vespertine::Render for Pair {
     fn render(
         &mut self,
-        _window: &mut vespertine::Window,
-        _cx: &mut vespertine::Context<Self>,
+        _: &mut vespertine::Window,
+        _: &mut vespertine::Context<Self>,
     ) -> impl vespertine::IntoElement {
         use vespertine::{ParentElement, Styled, div};
         div().size_full().flex().children(

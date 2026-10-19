@@ -119,8 +119,8 @@ impl Render for VariableFeed {
         let rows = self.rows.clone();
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .bg(hex(WHITE))
             .font_family(SANS)
             .text_size(px(14.0))

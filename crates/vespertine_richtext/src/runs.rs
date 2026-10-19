@@ -135,12 +135,12 @@ pub fn floor_char_boundary(text: &str, index: usize) -> usize {
 /// A plain-style run of `len` bytes with the given font and color and no decorations.
 pub fn plain_run(len: usize, font: &Font, color: Hsla) -> TextRun {
     TextRun {
-        len,
-        font: font.clone(),
         color,
-        background_color: None,
-        underline: None,
+        font: font.clone(),
+        len,
         strikethrough: None,
+        underline: None,
+        background_color: None,
     }
 }
 

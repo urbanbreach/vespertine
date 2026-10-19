@@ -51,8 +51,8 @@ impl Render for Viewer {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .gap_2()
             .p_2()
             .bg(rgb(0x181A1F))
@@ -60,8 +60,8 @@ impl Render for Viewer {
             .child("Control + wheel or pinch zooms, the wheel or a left drag pans")
             .child(
                 div()
-                    .flex()
                     .flex_1()
+                    .flex()
                     .min_h_0()
                     .map_width(self.pane_width)
                     .child(self.view.render(

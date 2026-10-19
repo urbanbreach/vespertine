@@ -182,8 +182,8 @@ impl Render for Page {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .gap_2()
             .p_2()
             .bg(rgb(0x181A1F))

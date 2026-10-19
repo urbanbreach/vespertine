@@ -353,8 +353,8 @@ impl Render for Showcase {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .bg(rgb(0xffffff))
             .text_color(rgb(0x1f2328))
             .text_size(px(13.0))

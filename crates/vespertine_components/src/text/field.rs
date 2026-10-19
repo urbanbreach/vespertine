@@ -791,12 +791,12 @@ fn single_line(text: SharedString) -> SharedString {
 
 fn text_runs(text: &str, font: &Font, color: Hsla, marked: Option<&Range<usize>>) -> Vec<TextRun> {
     let base = TextRun {
-        len: text.len(),
-        font: font.clone(),
         color,
+        font: font.clone(),
+        len: text.len(),
         background_color: None,
-        underline: None,
         strikethrough: None,
+        underline: None,
     };
     let runs: Vec<TextRun> = match marked {
         Some(marked) if marked.end <= text.len() => vec![

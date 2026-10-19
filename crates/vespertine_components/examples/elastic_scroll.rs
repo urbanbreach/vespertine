@@ -98,8 +98,8 @@ impl Render for Example {
             )
             .child(
                 div()
-                    .flex()
                     .flex_col()
+                    .flex()
                     .gap_1()
                     .text_color(rgb(0xf0f1f3))
                     .children(self.lines.iter().map(|line| div().child(line.clone()))),

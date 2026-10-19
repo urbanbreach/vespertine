@@ -244,14 +244,53 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        count: None,
         ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
             min_binding_size: None,
+            ty: wgpu::BufferBindingType::Uniform,
         },
-        count: None,
+        visibility: wgpu::ShaderStages::FRAGMENT,
     }
+}
+
+/// A full-screen pipeline drawing `vertex` and the entry point of `fragment` into one unblended
+/// color target of `format`.
+fn fullscreen_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    vertex: &wgpu::ShaderModule,
+    fragment: (&wgpu::ShaderModule, &str),
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let (fragment_module, fragment_entry) = fragment;
+    let targets = [Some(wgpu::ColorTargetState {
+        format,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        cache: None,
+        multiview_mask: None,
+        multisample: wgpu::MultisampleState::default(),
+        depth_stencil: None,
+        primitive: wgpu::PrimitiveState::default(),
+        vertex: wgpu::VertexState {
+            module: vertex,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: fragment_module,
+            entry_point: Some(fragment_entry),
+            targets: &targets,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+    })
 }
 
 impl Gpu {
@@ -330,31 +369,14 @@ impl Gpu {
                 bind_group_layouts: &[Some(layout)],
                 immediate_size: 0,
             });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &post,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &post,
-                    entry_point: Some(entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            fullscreen_pipeline(
+                &device,
+                label,
+                &pipeline_layout,
+                &post,
+                (&post, entry),
+                format,
+            )
         };
         let bright = make("shader_surface_bright", &single, "fs_bright", PASS_FORMAT);
         let blur = make("shader_surface_blur", &single, "fs_blur", PASS_FORMAT);
@@ -417,33 +439,14 @@ impl Gpu {
                 label: Some("shader_surface_program"),
                 source: wgpu::ShaderSource::Naga(Cow::Owned(module)),
             });
-        let pipeline = self
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("shader_surface_program"),
-                layout: Some(&self.pass_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &self.vertex,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &fragment,
-                    entry_point: Some("main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: PASS_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let pipeline = fullscreen_pipeline(
+            &self.device,
+            "shader_surface_program",
+            &self.pass_pipeline_layout,
+            &self.vertex,
+            (&fragment, "main"),
+            PASS_FORMAT,
+        );
         match vespertine::block_on(scope.pop()) {
             Some(error) => Err(error.to_string()),
             None => Ok(pipeline),
@@ -471,10 +474,10 @@ impl Target {
                 height: size.1,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
-            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
+            mip_level_count: 1,
+            sample_count: 1,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | extra,
@@ -1225,17 +1228,17 @@ fn run_pass(
         label: Some("shader_surface_pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: target,
-            depth_slice: None,
             resolve_target: None,
+            depth_slice: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 store: wgpu::StoreOp::Store,
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             },
         })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
         multiview_mask: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        depth_stencil_attachment: None,
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);

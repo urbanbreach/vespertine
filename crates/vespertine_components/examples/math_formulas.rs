@@ -147,8 +147,8 @@ impl Render for Showcase {
         let chip = |id: &'static str, label: String| {
             div()
                 .id(id)
-                .px_3()
                 .py_1()
+                .px_3()
                 .rounded_md()
                 .bg(rgb(0x30343D))
                 .cursor_pointer()

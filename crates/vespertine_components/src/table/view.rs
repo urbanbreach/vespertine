@@ -847,16 +847,14 @@ impl RenderOnce for Table {
             .children(header)
             .child(
                 div()
-                    .flex()
                     .flex_row()
+                    .flex()
                     .flex_1()
                     .min_h_0()
                     .children(gutter)
                     .child(
-                        div()
+                        crate::layout::flexible_cell()
                             .relative()
-                            .flex_1()
-                            .min_w_0()
                             .h_full()
                             .child(list(list_state, render_item).size_full()),
                     ),

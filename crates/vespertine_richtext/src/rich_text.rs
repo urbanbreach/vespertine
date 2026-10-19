@@ -256,7 +256,7 @@ impl Element for RichText {
 
     fn request_layout(
         &mut self,
-        id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -265,10 +265,10 @@ impl Element for RichText {
         if let Some(runs) = self.runs.take() {
             styled = styled.with_runs(runs);
         }
-        let (layout_id, ()) = styled.request_layout(id, inspector_id, window, cx);
+        let (layout_id, ()) = styled.request_layout(global_id, inspector_id, window, cx);
         self.styled = Some(styled);
         let links = (!self.links.is_empty())
-            .then(|| id.map(|id| LinkLayer::attach(id, window, cx)))
+            .then(|| global_id.map(|id| LinkLayer::attach(id, window, cx)))
             .flatten();
         (layout_id, links)
     }

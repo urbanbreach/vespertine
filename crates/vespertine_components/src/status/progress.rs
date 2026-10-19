@@ -291,8 +291,8 @@ impl RenderOnce for ProgressRing {
         if let (true, Some(percent)) = (style.labeled, self.percent) {
             slot = slot.child(
                 div()
-                    .absolute()
                     .size_full()
+                    .absolute()
                     .flex()
                     .items_center()
                     .justify_center()

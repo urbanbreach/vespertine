@@ -889,10 +889,7 @@ impl RenderOnce for Slider {
                     ),
                 );
             }
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
+            crate::layout::centered_row()
                 .justify_between()
                 .h(FURNITURE_HEIGHT)
                 .w(width)
@@ -903,10 +900,7 @@ impl RenderOnce for Slider {
                 .into_any_element()
         });
         let footer: Option<AnyElement> = self.range_labels.clone().map(|(minimum, maximum)| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
+            crate::layout::centered_row()
                 .justify_between()
                 .h(FURNITURE_HEIGHT)
                 .w(width)

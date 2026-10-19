@@ -607,19 +607,17 @@ fn disclosure_view(
     cx: &mut App,
 ) -> AnyView {
     let (presented, _) = crate::display_map::with_break_opportunities(destination);
+    let run = crate::runs::plain_run(
+        destination.len(),
+        &window.text_style().font(),
+        rgb(0xffffff).into(),
+    );
     let natural = window
         .text_system()
         .shape_line(
             SharedString::from(destination.to_string()),
             px(DISCLOSURE_TEXT_SIZE),
-            &[vespertine::TextRun {
-                len: destination.len(),
-                font: window.text_style().font(),
-                color: rgb(0xffffff).into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
+            &[run],
             None,
         )
         .width;

@@ -222,9 +222,7 @@ fn file_header(
         .cursor_pointer()
         .font_family(mono)
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
+            crate::layout::flexible_cell()
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_size(px(12.))

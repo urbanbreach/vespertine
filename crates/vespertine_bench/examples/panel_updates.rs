@@ -52,7 +52,7 @@ impl Render for Panel {
 }
 
 struct Dashboard {
-    panels: Vec<Entity<Panel>>,
+    tiles: Vec<Entity<Panel>>,
 }
 
 impl Render for Dashboard {
@@ -66,7 +66,7 @@ impl Render for Dashboard {
             .bg(rgb(0xffffff))
             .text_color(rgb(0x1f2328))
             .text_size(px(13.0))
-            .children(self.panels.iter().cloned())
+            .children(self.tiles.iter().cloned())
     }
 }
 
@@ -93,7 +93,7 @@ fn setup(host: &mut dyn Host) -> anyhow::Result<Box<dyn Driver>> {
             .map(|index| cx.new(|_| Panel { index, reading: 0 }))
             .collect();
         AnyView::from(cx.new(|_| Dashboard {
-            panels: panels.clone(),
+            tiles: panels.clone(),
         }))
     })?;
     Ok(Box::new(Updates { panels }))

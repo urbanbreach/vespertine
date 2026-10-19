@@ -31,32 +31,32 @@ actions!(
         SelectEnd,
         /// Move to the previous word start.
         WordLeft,
-        /// Move to the next word end.
-        WordRight,
         /// Select to the previous word start.
         SelectWordLeft,
-        /// Select to the next word end.
-        SelectWordRight,
         /// Delete to the previous word start.
         DeleteWordLeft,
+        /// Move to the next word end.
+        WordRight,
+        /// Select to the next word end.
+        SelectWordRight,
         /// Delete to the next word end.
         DeleteWordRight,
-        /// Delete to the start of the logical line.
-        DeleteToLineStart,
         /// Delete to the end of the logical line.
         DeleteToLineEnd,
+        /// Delete to the start of the logical line.
+        DeleteToLineStart,
         /// Select the whole value.
         SelectAll,
-        /// Copy the selection.
-        Copy,
-        /// Cut the selection.
-        Cut,
-        /// Paste the clipboard.
-        Paste,
         /// Undo.
         Undo,
         /// Redo.
         Redo,
+        /// Cut the selection.
+        Cut,
+        /// Copy the selection.
+        Copy,
+        /// Paste the clipboard.
+        Paste,
         /// Enter: submit (single line) or newline/submit per the submit mode (multiline).
         Submit,
         /// Escape.

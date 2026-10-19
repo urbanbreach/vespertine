@@ -132,8 +132,8 @@ impl Switch {
     }
 
     /// The accessible description.
-    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
-        self.description = Some(description.into());
+    pub fn description(mut self, text: impl Into<SharedString>) -> Self {
+        self.description = Some(text.into());
         self
     }
 

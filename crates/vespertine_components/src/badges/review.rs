@@ -246,9 +246,7 @@ impl RenderOnce for ReviewCard {
                     .text_color(tokens.faint),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
+                crate::layout::flexible_cell()
                     .truncate()
                     .font_family(tokens.mono_family.clone())
                     .text_size(px(11.))
@@ -395,10 +393,7 @@ impl RenderOnce for ReviewDraft {
                     .child(self.input),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
+                crate::layout::centered_row()
                     .justify_end()
                     .flex_none()
                     .h(px(28.))

@@ -9,7 +9,7 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 use vespertine::{
-    App, AppContext as _, Bounds, Context, Hsla, InteractiveElement as _, IntoElement,
+    App, AppContext as _, Bounds, Context, Div, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
     WindowBounds, WindowId, WindowOptions, div, px, size,
 };
@@ -46,8 +46,8 @@ fn button(
     let theme = theme_of(cx);
     div()
         .id(id)
-        .px_2()
         .py_1()
+        .px_2()
         .rounded_md()
         .bg(Hsla::from(theme.colors.raised))
         .border_1()
@@ -56,6 +56,11 @@ fn button(
         .hover(|style| style.bg(Hsla::from(theme.colors.hover)))
         .child(label)
         .on_click(move |_, _, cx| on_click(cx))
+}
+
+/// A wrapping row of buttons.
+fn button_row() -> Div {
+    div().flex_wrap().flex().gap_2()
 }
 
 impl Render for ThemedSurface {
@@ -102,10 +107,7 @@ impl Render for ThemedSurface {
                     .child(swatch(theme.accent.glyph[2])),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
+                button_row()
                     .child(button(
                         "system",
                         "System",
@@ -126,10 +128,7 @@ impl Render for ThemedSurface {
                     )),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
+                button_row()
                     .child(button(
                         "midnight",
                         "Midnight (dark)",
@@ -156,10 +155,7 @@ impl Render for ThemedSurface {
                     )),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
+                button_row()
                     .child(button(
                         "accent-default",
                         "Accent: theme",
@@ -190,10 +186,7 @@ impl Render for ThemedSurface {
                     )),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
+                button_row()
                     .child(button(
                         "surface-default",
                         "Surface: theme",

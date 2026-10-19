@@ -246,8 +246,8 @@ impl Render for Selector {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .overflow_hidden()
             .bg(hex(WHITE))
             .font_family(SANS)

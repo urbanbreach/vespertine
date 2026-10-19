@@ -760,10 +760,7 @@ impl BrowserSurface {
             .items_center()
             .justify_center()
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
+                crate::layout::centered_column()
                     .max_w(px(300.))
                     .gap(px(12.))
                     .p(px(24.))

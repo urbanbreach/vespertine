@@ -2,8 +2,8 @@
 
 use vespertine::{
     Bounds, Corners, ElementId, Font, FontFeatures, FontStyle, FontWeight, InteractiveElement,
-    IntoElement, PaintQuad, ParentElement, Pixels, RenderOnce, SharedString, Styled, TextAlign,
-    TextRun, Window, canvas, div, fill, point, px, size,
+    IntoElement, PaintQuad, ParentElement, Pixels, RenderOnce, SharedString, Styled, TextRun,
+    Window, canvas, div, fill, point, px, size,
 };
 
 use super::tokens::BadgeTokens;
@@ -208,11 +208,10 @@ impl RenderOnce for ActivityPill {
                             ..fill(dot_bounds, busy.opacity(dot_alpha))
                         });
                         let text_x = bounds.left() + px(PILL_PADDING + DOT_SIZE + PILL_GAP);
-                        let _ = line.paint(
+                        crate::layout::paint_left_aligned(
+                            &line,
                             point(text_x, origin_y),
                             line_height,
-                            TextAlign::Left,
-                            None,
                             window,
                             cx,
                         );
@@ -287,11 +286,10 @@ impl RenderOnce for CornerCountBadge {
                         let middle = bounds.top() + bounds.size.height / 2.0;
                         let baseline = snap(middle + digit_height / 2.0, scale);
                         let origin_y = baseline - baseline_offset;
-                        let _ = line.paint(
+                        crate::layout::paint_left_aligned(
+                            &line,
                             point(bounds.left() + px(left), origin_y),
                             height,
-                            TextAlign::Left,
-                            None,
                             window,
                             cx,
                         );

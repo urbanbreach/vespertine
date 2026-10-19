@@ -33,6 +33,7 @@ pub mod dialog;
 pub mod diff;
 pub mod elastic;
 pub mod floating;
+mod layout;
 pub mod markdown;
 pub mod math;
 pub mod media;

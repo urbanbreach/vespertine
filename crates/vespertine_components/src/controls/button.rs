@@ -243,9 +243,9 @@ impl Button {
     /// [`ClickEvent::Keyboard`].
     pub fn on_click(
         mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        callback: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_click = Some(Rc::new(handler));
+        self.on_click = Some(Rc::new(callback));
         self
     }
 
@@ -472,10 +472,10 @@ impl RenderOnce for Button {
         if let Some(frame) = indicator {
             button = button.child(
                 div()
+                    .size_full()
                     .absolute()
                     .top_0()
                     .left_0()
-                    .size_full()
                     .flex()
                     .items_center()
                     .justify_center()

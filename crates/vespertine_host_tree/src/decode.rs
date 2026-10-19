@@ -31,13 +31,13 @@ pub(crate) enum Op<'a> {
     },
     Destroy(u64),
     Append {
-        parent: u64,
         child: u64,
+        parent: u64,
     },
     InsertBefore {
+        before: u64,
         parent: u64,
         child: u64,
-        before: u64,
     },
     SetStyle {
         id: u64,

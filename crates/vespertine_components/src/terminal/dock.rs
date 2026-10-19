@@ -103,8 +103,8 @@ impl Render for BottomDock {
         let content = (self.content)(window, cx);
         div()
             .size_full()
-            .flex()
             .flex_col()
+            .flex()
             .child(
                 div()
                     .w_full()

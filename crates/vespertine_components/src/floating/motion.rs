@@ -26,13 +26,13 @@ pub const SIDE_TRAVEL: Pixels = px(4.);
 pub enum Side {
     /// Above the trigger.
     Top,
-    /// Right of the trigger.
-    Right,
     /// Below the trigger (default).
     #[default]
     Bottom,
     /// Left of the trigger.
     Left,
+    /// Right of the trigger.
+    Right,
 }
 
 impl Side {

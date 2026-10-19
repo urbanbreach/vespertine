@@ -117,8 +117,8 @@ impl Render for Kit {
             )
             .child(
                 div()
-                    .flex()
                     .flex_row()
+                    .flex()
                     .items_center()
                     .gap(px(16.0))
                     .child(ProgressRing::compact(
