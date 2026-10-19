@@ -379,7 +379,10 @@ mod tests {
         let source = "0123456789";
         let projection = Projection::new(
             source,
-            vec![replacement(1..3, "ab", false), replacement(5..9, "c", false)],
+            vec![
+                replacement(1..3, "ab", false),
+                replacement(5..9, "c", false),
+            ],
         );
         assert_eq!(projection.display_range(0), 1..3);
         assert_eq!(projection.display_range(1), 5..6);
@@ -445,5 +448,4 @@ mod tests {
         assert_eq!(projection.normalize_caret(4), 4);
         assert_eq!(projection.normalize_selection(3..5), 3..5);
     }
-
 }

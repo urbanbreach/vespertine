@@ -284,7 +284,10 @@ mod tests {
         assert_eq!(core.text(), TEXT);
         assert_eq!(core.undo_len(), 0);
 
-        assert_eq!(external.apply_provisional(&mut core, "你好"), ExternalOutcome::Applied);
+        assert_eq!(
+            external.apply_provisional(&mut core, "你好"),
+            ExternalOutcome::Applied
+        );
         assert_eq!(external.phase(), ExternalPhase::Listening);
         assert_eq!(core.text(), "👩🏽‍💻 你好 café");
         assert_eq!(core.undo_len(), 1);
@@ -297,9 +300,15 @@ mod tests {
         );
         assert_eq!(core.text(), "👩🏽‍💻 bonjour 🌍 café");
         assert_eq!(core.undo_len(), 1);
-        assert_eq!(external.target(), Some(selection.start..selection.start + "bonjour 🌍".len()));
+        assert_eq!(
+            external.target(),
+            Some(selection.start..selection.start + "bonjour 🌍".len())
+        );
 
-        assert_eq!(external.finalize(&mut core, "salut 🌍"), ExternalOutcome::Applied);
+        assert_eq!(
+            external.finalize(&mut core, "salut 🌍"),
+            ExternalOutcome::Applied
+        );
         assert_eq!(core.text(), "👩🏽‍💻 salut 🌍 café");
         assert_eq!(core.undo_len(), 1);
         assert_eq!(external.phase(), ExternalPhase::Idle);
@@ -360,7 +369,10 @@ mod tests {
         let (edit, movement) = (core.edit_epoch(), core.movement_epoch());
         let mut external = ExternalReplacement::new();
         external.begin(&mut core, selection.clone());
-        assert_eq!(external.finalize(&mut core, " \n\t"), ExternalOutcome::Ignored);
+        assert_eq!(
+            external.finalize(&mut core, " \n\t"),
+            ExternalOutcome::Ignored
+        );
         assert_eq!(core.text(), TEXT);
         assert_eq!(core.selection(), selection);
         assert_eq!(core.undo_len(), 0);
@@ -373,12 +385,21 @@ mod tests {
         let (mut core, selection) = setup();
         let mut external = ExternalReplacement::new();
         external.begin(&mut core, selection);
-        assert_eq!(external.apply_provisional(&mut core, ""), ExternalOutcome::Ignored);
-        assert_eq!(external.apply_provisional(&mut core, "  "), ExternalOutcome::Ignored);
+        assert_eq!(
+            external.apply_provisional(&mut core, ""),
+            ExternalOutcome::Ignored
+        );
+        assert_eq!(
+            external.apply_provisional(&mut core, "  "),
+            ExternalOutcome::Ignored
+        );
         assert_eq!(core.text(), TEXT);
         assert_eq!(external.phase(), ExternalPhase::Starting);
         external.apply_provisional(&mut core, "hello");
-        assert_eq!(external.apply_provisional(&mut core, "\n "), ExternalOutcome::Ignored);
+        assert_eq!(
+            external.apply_provisional(&mut core, "\n "),
+            ExternalOutcome::Ignored
+        );
         assert_eq!(core.text(), "👩🏽‍💻 hello café");
         assert_eq!(external.phase(), ExternalPhase::Listening);
         assert!(external.is_active());
@@ -410,7 +431,10 @@ mod tests {
             external.apply_provisional_for_generation(generation, &mut core, "salut"),
             ExternalOutcome::Stale
         );
-        assert_eq!(external.finalize(&mut core, "salut"), ExternalOutcome::Inactive);
+        assert_eq!(
+            external.finalize(&mut core, "salut"),
+            ExternalOutcome::Inactive
+        );
         assert_eq!(core.text(), "👩🏽‍💻 bonjour café!");
 
         // Undo order: manual edit, provisional text, original.
@@ -477,7 +501,7 @@ mod tests {
         external.begin(&mut core, selection.clone());
         external.apply_provisional(&mut core, "bonjour");
         // The editor cancels the transaction before the composition's own snapshot.
-        assert!(external.sync(&core) == false);
+        assert!(!external.sync(&core));
         external.cancel();
         let caret = core.selection().end;
         assert!(core.replace_and_mark(None, "に", None));
@@ -582,7 +606,10 @@ mod tests {
         let (mut core, selection) = setup();
         let mut external = ExternalReplacement::new();
         external.begin(&mut core, selection.clone());
-        assert_eq!(external.finalize(&mut core, "salut 🌍"), ExternalOutcome::Applied);
+        assert_eq!(
+            external.finalize(&mut core, "salut 🌍"),
+            ExternalOutcome::Applied
+        );
         assert_eq!(core.text(), "👩🏽‍💻 salut 🌍 café");
         assert_eq!(core.undo_len(), 1);
         assert!(core.undo());
@@ -620,7 +647,10 @@ mod tests {
         let (mut core, _) = setup();
         let mut external = ExternalReplacement::new();
         let generation = external.generation();
-        assert_eq!(external.apply_provisional(&mut core, "x"), ExternalOutcome::Inactive);
+        assert_eq!(
+            external.apply_provisional(&mut core, "x"),
+            ExternalOutcome::Inactive
+        );
         assert_eq!(external.finalize(&mut core, "x"), ExternalOutcome::Inactive);
         assert_eq!(
             external.apply_provisional_for_generation(generation, &mut core, "x"),
