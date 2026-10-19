@@ -9,15 +9,21 @@
 //!   (shortened labels, reserved inline-object slots, break opportunities) carries an
 //!   [`OriginalText`]/[`DisplayMap`] so that hit testing, selection and copy resolve to the source.
 //! - [`text_root`] is the root of a document: it resets the per-frame registry and installs the
-//!   window-level press, move, release and copy listeners. [`surface`], [`user_select`] and
-//!   [`selection_color`] scope state to a subtree; [`text_layer`] re-enters the service inside a
-//!   deferred layer (popover, hover card), which paints after the root has finished.
+//!   window-level press, move, release and copy listeners. [`surface`] scopes run keys to a
+//!   subtree; [`user_select`] and [`selection_color`] set the inherited `TextStyle` properties
+//!   `user_select` and `selection_color`, the very ones `Styled::user_select` and
+//!   `Styled::selection_color` set, which [`RichText`] reads when it paints; [`text_layer`]
+//!   re-enters the service inside a deferred layer (popover, hover card), which paints after the
+//!   root has finished.
 //! - [`highlight`] declares search washes (a literal query and/or explicit UTF-16 ranges) for a
 //!   subtree; [`search`] holds the framework-independent matcher, numbering and find helper.
 //! - [`RichLayout`] answers the geometry questions of carets, link hitboxes, washes and overlays;
 //!   [`range_rects`] gives one rectangle per wrapped row for any byte range.
 //! - [`links`] holds the link rules (activation, menu, disclosure, file-destination anchors) and
-//!   [`link_layer`] wires them to focusable hit regions.
+//!   [`link_layer`] wires them to focusable hit regions; navigation is allowed by the framework's
+//!   `LinkPolicy` (explicit `http`/`https` destinations) unless [`LinkOptions`] says otherwise.
+//! - [`theme`] adapts the washes' accent and the syntax palettes to `vespertine_theme`: the active
+//!   theme when one is installed, the built-in neutral dark variant otherwise.
 //!
 //! A selection requires the app to focus-route key events as usual: the copy chord is handled by
 //! a root-level listener, which runs when the focused element (or no element) lets the key bubble
