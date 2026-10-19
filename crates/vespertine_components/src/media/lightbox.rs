@@ -5,12 +5,18 @@
 //! beneath, tracks focus, closes on Escape and on a plain click (never on a drag, zoom or
 //! pinch) and consumes wheel events so the page beneath never scrolls.
 //!
-//! The layer is built on the deferred/anchored layers of the framework (priority 3, occluding,
-//! focus-tracking); the window-scoped dismissal stack of CMP-002 is not on this tree yet, so the
-//! lightbox registers its own capture-phase Escape handler.
+//! The layer is a CMP-002 floating layer: [`open_lightbox`] registers it on the window's
+//! dismissal stack (`floating::open_layer`), so Escape reaches it only while it is the top layer
+//! and a click closes it only while nothing was opened above it. Opening captures the focus owner
+//! and moves focus into the overlay; closing restores it (CMP-002 R9-R11).
 
 use super::viewer::ImageView;
+use crate::floating::{
+    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerId, LayerOptions, is_top_layer,
+    open_layer, set_layer_bounds,
+};
 use crate::tokens::ComponentTokens;
+use std::cell::OnceCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use vespertine::{
@@ -68,32 +74,97 @@ impl PreviewTarget {
 #[derive(IntoElement)]
 pub struct Lightbox {
     target: PreviewTarget,
+    layer: LightboxLayer,
+}
+
+/// An open full-view layer on the window's dismissal stack (CMP-002 R6-R11): Escape reaches it
+/// only while it is the top layer, a plain click closes it, and closing returns focus to the
+/// element that held it when the layer opened (or to the trigger when that is gone).
+#[derive(Clone)]
+pub struct LightboxLayer {
+    layer: LayerHandle,
     focus: FocusHandle,
     on_close: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
-/// The full-view overlay for `target` in `window`. `focus` is the layer's focus handle (taken
-/// when the layer is shown); `on_close` runs for Escape and for a plain click.
-pub fn lightbox(
-    _window: &Window,
-    target: PreviewTarget,
+/// Opens the full-view layer: joins the dismissal stack above everything already open and takes
+/// focus into `focus` once the overlay is attached. `trigger` is the owning control, the focus
+/// fallback when the captured focus owner is gone. `on_close` runs once for Escape and for a
+/// plain click; render [`lightbox`] with the returned handle for as long as the view is open.
+pub fn open_lightbox(
+    window: &mut Window,
+    cx: &mut App,
     focus: &FocusHandle,
+    trigger: Option<FocusHandle>,
     on_close: impl Fn(&mut Window, &mut App) + 'static,
-) -> Lightbox {
+) -> LightboxLayer {
+    let on_close: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_close);
+    let slot: Rc<OnceCell<LayerHandle>> = Rc::new(OnceCell::new());
+    let escape: EscapeHandler = {
+        let slot = slot.clone();
+        let on_close = on_close.clone();
+        Rc::new(move |window, cx| {
+            if let Some(layer) = slot.get()
+                && layer.close(window, cx)
+            {
+                on_close(window, cx);
+            }
+            EscapeOutcome::Dismissed
+        })
+    };
+    let layer = open_layer(
+        window,
+        cx,
+        LayerOptions {
+            escape,
+            layer_focus: focus.clone(),
+            trigger,
+            initial_focus: FocusTarget::Default,
+            final_focus: FocusTarget::Default,
+            trigger_first: false,
+        },
+    );
+    let _ = slot.set(layer.clone());
+    LightboxLayer {
+        layer,
+        focus: focus.clone(),
+        on_close,
+    }
+}
+
+impl LightboxLayer {
+    /// Closes the layer without running the close callback (the host decided to close it):
+    /// Escape stops reaching it at once and focus is restored after the current event. Returns
+    /// false when it was already closed.
+    pub fn close(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.layer.close(window, cx)
+    }
+
+    /// The layer's identity on the window's dismissal stack.
+    pub fn id(&self) -> LayerId {
+        self.layer.id()
+    }
+
+    /// A plain click on the overlay: closes when this is still the top layer (a layer opened
+    /// above it owns the press) and the press did not become a drag.
+    fn click(&self, window: &mut Window, cx: &mut App) {
+        if is_top_layer(window, cx, self.layer.id()) && self.layer.close(window, cx) {
+            (self.on_close)(window, cx);
+        }
+    }
+}
+
+/// The full-view overlay for `target`, shown while `layer` (from [`open_lightbox`]) is open.
+pub fn lightbox(target: PreviewTarget, layer: &LightboxLayer) -> Lightbox {
     Lightbox {
         target,
-        focus: focus.clone(),
-        on_close: Rc::new(on_close),
+        layer: layer.clone(),
     }
 }
 
 impl RenderOnce for Lightbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Lightbox {
-            target,
-            focus,
-            on_close,
-        } = self;
+        let Lightbox { target, layer } = self;
         let viewport = window.viewport_size();
         let tokens = ComponentTokens::current(cx);
         let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
@@ -112,11 +183,11 @@ impl RenderOnce for Lightbox {
                 .into_any_element(),
         };
 
-        let click_view = target.view.clone();
         let press_view = target.view.clone();
-        let click_close = on_close.clone();
-        let key_close = on_close;
-        let focus_for_layer = focus.clone();
+        let click_view = target.view.clone();
+        let click_layer = layer.clone();
+        let layer_id = layer.id();
+        let focus = layer.focus;
 
         deferred(
             anchored()
@@ -144,33 +215,23 @@ impl RenderOnce for Lightbox {
                                 press_view.begin_click();
                             }
                         })
-                        .on_key_down(move |event, window, cx| {
-                            if event.keystroke.key == "escape"
-                                && !event.keystroke.modifiers.modified()
-                            {
-                                key_close(window, cx);
-                                cx.stop_propagation();
-                            }
-                        })
                         .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                         .on_click(move |_, window, cx| {
                             if !click_view.dragged() {
-                                click_close(window, cx);
+                                click_layer.click(window, cx);
                             }
                         })
                         .child(
                             canvas(
-                                |_, _, _| {},
-                                move |_, (), window, cx| {
-                                    if !focus_for_layer.is_focused(window) {
-                                        window.defer(cx, move |window, cx| {
-                                            window.focus(&focus_for_layer, cx);
-                                        });
-                                    }
+                                move |bounds, window, cx| {
+                                    set_layer_bounds(window, cx, layer_id, bounds);
                                 },
+                                |_, (), _, _| {},
                             )
                             .absolute()
-                            .size_0(),
+                            .top_0()
+                            .left_0()
+                            .size_full(),
                         )
                         .child(body)
                         .child(

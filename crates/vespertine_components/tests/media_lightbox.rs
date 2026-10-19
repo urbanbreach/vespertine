@@ -11,7 +11,10 @@ use vespertine::{
     StatefulInteractiveElement, StyleRefinement, Styled, TestAppContext, TouchPhase,
     VisualTestContext, Window, div, point, px, size,
 };
-use vespertine_components::media::{ImageView, PreviewTarget, lightbox};
+use vespertine_components::floating::{EscapeOutcome, layers, register_layer, unregister_layer};
+use vespertine_components::media::{
+    ImageView, LightboxLayer, PreviewTarget, lightbox, open_lightbox,
+};
 
 struct Sibling {
     renders: Rc<Cell<usize>>,
@@ -26,8 +29,10 @@ impl Render for Sibling {
 
 struct Root {
     open: bool,
+    layer: Option<LightboxLayer>,
     view: ImageView,
     focus: FocusHandle,
+    trigger: FocusHandle,
     sibling: Entity<Sibling>,
     loaded: bool,
     closes: Rc<Cell<usize>>,
@@ -35,14 +40,38 @@ struct Root {
     beneath_scrolls: Rc<Cell<usize>>,
 }
 
-impl Render for Root {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Root {
+    /// Opens the full view; the host resets the viewer on every open (R9).
+    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entity = cx.entity();
         let closes = self.closes.clone();
+        self.view.reset();
+        self.open = true;
+        self.layer = Some(open_lightbox(
+            window,
+            cx,
+            &self.focus,
+            Some(self.trigger.clone()),
+            move |_, cx| {
+                closes.set(closes.get() + 1);
+                entity.update(cx, |root, cx| {
+                    root.open = false;
+                    root.layer = None;
+                    cx.notify();
+                });
+            },
+        ));
+        cx.notify();
+    }
+}
+
+impl Render for Root {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let beneath = self.beneath_clicks.clone();
         let scrolls = self.beneath_scrolls.clone();
         let mut root = div()
             .size_full()
+            .child(div().id("trigger").size_4().track_focus(&self.trigger))
             .on_scroll_wheel(move |_, _, _| scrolls.set(scrolls.get() + 1))
             .child(
                 div()
@@ -52,7 +81,7 @@ impl Render for Root {
                     .on_click(move |_, _, _| beneath.set(beneath.get() + 1)),
             )
             .child(AnyView::from(self.sibling.clone()).cached(StyleRefinement::default()));
-        if self.open {
+        if let Some(layer) = self.layer.as_ref().filter(|_| self.open) {
             let target = PreviewTarget {
                 name: "diagram.png".into(),
                 image: self.loaded.then(|| solid_image(40, 20)),
@@ -60,13 +89,7 @@ impl Render for Root {
                 view: self.view.clone(),
                 plate: None,
             };
-            root = root.child(lightbox(window, target, &self.focus, move |_, cx| {
-                closes.set(closes.get() + 1);
-                entity.update(cx, |root, cx| {
-                    root.open = false;
-                    cx.notify();
-                });
-            }));
+            root = root.child(lightbox(target, layer));
         }
         root
     }
@@ -94,9 +117,11 @@ fn setup(cx: &mut TestAppContext, loaded: bool) -> (Fixture, &mut VisualTestCont
         let beneath_clicks = beneath_clicks.clone();
         let beneath_scrolls = beneath_scrolls.clone();
         move |_, cx| Root {
-            open: true,
+            open: false,
+            layer: None,
             view,
             focus: cx.focus_handle(),
+            trigger: cx.focus_handle(),
             sibling: cx.new(|_| Sibling {
                 renders: sibling_renders,
             }),
@@ -108,6 +133,18 @@ fn setup(cx: &mut TestAppContext, loaded: bool) -> (Fixture, &mut VisualTestCont
     });
     vcx.run_until_parked();
     vcx.update(|window, _| window.refresh());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        let trigger = root.read(cx).trigger.clone();
+        trigger.focus(window, cx);
+    });
+    root.update_in(vcx, |root, window, cx| root.open(window, cx));
+    // The opening focus lands two frames after the layer registered.
+    for _ in 0..3 {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.simulate_next_frame(cx));
+        vcx.update(|window, _| window.refresh());
+    }
     vcx.run_until_parked();
     (
         Fixture {
@@ -291,4 +328,76 @@ fn a7_reopening_resets_the_viewer_to_fit(cx: &mut TestAppContext) {
     assert!(fixture.view.is_fitted());
     assert!(!fixture.view.dragged());
     assert_eq!(fixture.view.pan(), point(px(0.), px(0.)));
+}
+
+fn stack_depth(cx: &mut VisualTestContext) -> usize {
+    cx.update(|window, cx| layers(window, cx).len())
+}
+
+#[vespertine::test]
+fn a7_the_overlay_is_a_layer_on_the_dismissal_stack_and_takes_and_returns_focus(
+    cx: &mut TestAppContext,
+) {
+    let (fixture, vcx) = setup(cx, true);
+    assert_eq!(stack_depth(vcx), 1, "open registers one layer");
+    let (focus, trigger) = fixture
+        .root
+        .read_with(vcx, |root, _| (root.focus.clone(), root.trigger.clone()));
+    assert!(
+        vcx.update(|window, _| focus.is_focused(window)),
+        "focus moves into the overlay"
+    );
+    vcx.simulate_keystrokes("escape");
+    assert!(!is_open(&fixture, vcx));
+    assert_eq!(stack_depth(vcx), 0, "closing leaves the stack");
+    vcx.run_until_parked();
+    assert!(
+        vcx.update(|window, _| trigger.is_focused(window)),
+        "focus returns to the element that held it when the view opened"
+    );
+}
+
+#[vespertine::test]
+fn a7_a_layer_above_owns_escape_and_the_backdrop_click(cx: &mut TestAppContext) {
+    let (fixture, vcx) = setup(cx, true);
+    let escapes = Rc::new(Cell::new(0));
+    let above = vcx.update(|window, cx| {
+        let escapes = escapes.clone();
+        register_layer(
+            window,
+            cx,
+            Rc::new(move |_, _| {
+                escapes.set(escapes.get() + 1);
+                EscapeOutcome::Consumed
+            }),
+        )
+    });
+    vcx.simulate_keystrokes("escape");
+    assert_eq!(escapes.get(), 1, "Escape reaches only the top layer");
+    assert!(is_open(&fixture, vcx));
+    vcx.simulate_click(point(px(3.), px(3.)), Modifiers::none());
+    assert!(
+        is_open(&fixture, vcx),
+        "a click does not close a lightbox with a layer above it"
+    );
+
+    vcx.update(|window, cx| unregister_layer(window, cx, above));
+    vcx.simulate_keystrokes("escape");
+    assert!(!is_open(&fixture, vcx));
+    assert_eq!(fixture.closes.get(), 1);
+    assert_eq!(escapes.get(), 1);
+}
+
+#[vespertine::test]
+fn a7_reopening_through_the_host_resets_the_viewer(cx: &mut TestAppContext) {
+    let (fixture, vcx) = setup(cx, true);
+    fixture.view.zoom(3.0, centre(vcx));
+    assert!(!fixture.view.is_fitted());
+    vcx.simulate_keystrokes("escape");
+    fixture
+        .root
+        .update_in(vcx, |root, window, cx| root.open(window, cx));
+    vcx.run_until_parked();
+    assert!(fixture.view.is_fitted());
+    assert_eq!(stack_depth(vcx), 1);
 }
