@@ -20,3 +20,21 @@ export { collectGarbageWhenIdle } from "./gc.js";
 export { createNativeRenderer, isNonInteractive } from "./renderer.js";
 export { loadNative } from "./native.js";
 export { checkUpdate } from "./updater.js";
+export {
+  BUILTIN_TYPES,
+  HostTree,
+  NATIVE_ELEMENT_TYPES,
+  RESERVED_PROPS,
+  UNIVERSAL_PROPS,
+  createHostNode,
+  createHostTree,
+  createTextNode,
+  insertNode,
+  removeNode,
+  setNodeHidden,
+  setNodeProps,
+  setNodeText,
+  eventTypeOf,
+  isEventProp,
+  isHostNode,
+} from "./host-tree.js";

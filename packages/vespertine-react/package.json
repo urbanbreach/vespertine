@@ -1,0 +1,29 @@
+{
+  "name": "@vespertine/react",
+  "version": "0.1.0",
+  "description": "React adapter for the Vespertine native retained renderer",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./testing": "./src/testing.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vespertine/host": "*",
+    "react-reconciler": "0.32.0"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0"
+  },
+  "devDependencies": {
+    "react": "19.2.0",
+    "react-refresh": "0.18.0"
+  }
+}
