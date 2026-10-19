@@ -185,10 +185,9 @@ pub fn select_paint_path(has_texture: bool, rounded_clip: bool) -> PaintPath {
 }
 
 /// Whether a rounded clip scope encloses the element being painted. The texture-surface path
-/// does not support rounded clipping, so the image path must be used then (PLT-015 R18). The
-/// window exposes no rounded clip scopes yet, so none can enclose the page.
-fn rounded_clip_encloses(_window: &Window) -> bool {
-    false
+/// does not support rounded clipping, so the image path must be used then (PLT-015 R18).
+fn rounded_clip_encloses(window: &Window) -> bool {
+    window.rounded_clip_active()
 }
 
 /// The UI-thread state of one embedded page. It is an entity so that the page element can be its

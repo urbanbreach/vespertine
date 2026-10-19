@@ -6,9 +6,9 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::time::Duration;
 use vespertine::{
-    AtlasKey, Bounds, ContentMask, Corners, DevicePixels, PaintSurface, PlatformAtlas,
-    PlatformHeadlessRenderer, PolychromeSprite, RenderImage, RenderImageParams, ScaledPixels,
-    Scene, Size, point, size,
+    AtlasKey, Bounds, ContentMask, Corners, DevicePixels, ImageEffects, PaintSurface,
+    PlatformAtlas, PlatformHeadlessRenderer, PolychromeSprite, RenderImage, RenderImageParams,
+    ScaledPixels, Scene, ScopeParams, Size, point, size,
 };
 use vespertine_webview::frames::{Frame, Pool, write_memfd};
 use vespertine_webview::gpu;
@@ -86,6 +86,7 @@ fn texture_scene(texture: Arc<wgpu::Texture>, width: u32, height: u32) -> Scene 
         bounds,
         content_mask: ContentMask { bounds },
         opacity: 1.0,
+        curved_clip: 0,
         texture,
     });
     scene.finish();
@@ -123,6 +124,8 @@ fn image_scene(atlas: &Arc<dyn PlatformAtlas>, frame: &Frame, id: usize) -> Scen
         corner_radii: Corners::default(),
         tile,
         opacity: 1.0,
+        scope: ScopeParams::default(),
+        effects: ImageEffects::default(),
     });
     scene.finish();
     scene
