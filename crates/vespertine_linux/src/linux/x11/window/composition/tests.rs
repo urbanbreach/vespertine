@@ -1025,6 +1025,9 @@ async fn shape_fallback(cx: &AsyncApp) {
 
 #[test]
 fn x11_composition_end_to_end() {
+    // The platform of this test uses the process-wide clipboard connection that the clipboard
+    // tests serialize on.
+    let _serial = crate::linux::x11::clipboard::tests::SERIAL.lock();
     Application::with_platform(crate::linux_platform(WindowingModes::X11)).run(|cx: &mut App| {
         cx.spawn(async move |cx: &mut AsyncApp| {
             composited(cx).await;

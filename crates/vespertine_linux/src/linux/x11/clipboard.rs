@@ -1245,7 +1245,7 @@ impl Error {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration;
 
     use vespertine::{ClipboardEntry, ClipboardReadError, ClipboardString, Image, ImageFormat};
@@ -1256,7 +1256,7 @@ mod tests {
     };
 
     /// Serializes the tests, which share the process-wide clipboard connection.
-    static SERIAL: Mutex<()> = parking_lot::const_mutex(());
+    pub(crate) static SERIAL: Mutex<()> = parking_lot::const_mutex(());
 
     /// A clipboard connected to the real X server named by `DISPLAY`, with the serving thread
     /// of this process owning the private SECONDARY selection (nothing else uses it). The

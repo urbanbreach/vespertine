@@ -157,6 +157,8 @@ fn natives_above_the_overlay_punch_holes_instead_of_joining_the_window_layers() 
 /// A top-level override-redirect parent window on the test server, with a second, independent
 /// connection that inspects what the code under test did.
 struct Server {
+    /// The tests that talk to the shared X server run one at a time, like the clipboard tests.
+    _serial: parking_lot::MutexGuard<'static, ()>,
     connection: RustConnection,
     inspector: RustConnection,
     screen: usize,
@@ -166,6 +168,7 @@ struct Server {
 
 impl Server {
     fn new() -> Self {
+        let serial = crate::linux::x11::clipboard::tests::SERIAL.lock();
         let (connection, screen) = x11rb::connect(None)
             .expect("these tests need a reachable X server (DISPLAY, e.g. XWayland)");
         let (inspector, _) = x11rb::connect(None).expect("a second connection to the X server");
@@ -191,6 +194,7 @@ impl Server {
         let atoms = XcbAtoms::new(&connection).unwrap().reply().unwrap();
         connection.sync().unwrap();
         Server {
+            _serial: serial,
             connection,
             inspector,
             screen,
@@ -609,6 +613,8 @@ impl Drop for ServerWithoutShape {
 #[test]
 fn enabling_composition_fails_on_a_server_without_the_shape_extension() {
     use smol::process::{Command, Stdio};
+
+    let _serial = crate::linux::x11::clipboard::tests::SERIAL.lock();
 
     // A private display number far from the session's own, never chosen by the server: starting
     // an X server must not touch the sockets of the display the other tests use.

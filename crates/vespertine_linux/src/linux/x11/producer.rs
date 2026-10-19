@@ -342,31 +342,73 @@ mod server_tests {
         Some([image.data[2], image.data[1], image.data[0]])
     }
 
-    /// The server composes the window's pixels asynchronously on some setups (XWayland): wait
-    /// for the expected pixel instead of reading it once.
-    fn assert_pixel(
+    /// The window's size now: XWayland may resize a window behind a test's back.
+    fn window_size(connection: &RustConnection, window: Window) -> (u16, u16) {
+        let geometry = connection.get_geometry(window).unwrap().reply().unwrap();
+        (geometry.width, geometry.height)
+    }
+
+    /// Waits until the left quarter of the window shows `left` and its right quarter `right`.
+    /// The server composes pixels asynchronously on some setups (XWayland), which may also drop
+    /// a new window's pixels when it realizes the window and exposes it: a producer repaints on
+    /// that Expose, so the producer is pumped while waiting.
+    fn assert_halves(
         connection: &RustConnection,
+        producer: &mut X11SolidProducer,
         window: Window,
-        x: i16,
-        y: i16,
-        expected: [u8; 3],
+        left: [u8; 3],
+        right: [u8; 3],
     ) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let actual = pixel(connection, window, x, y);
-            if actual == Some(expected) {
+            producer.pump().unwrap();
+            let (width, height) = window_size(connection, window);
+            let (y, left_x, right_x) = (
+                (height / 2) as i16,
+                (width / 4) as i16,
+                (width * 3 / 4) as i16,
+            );
+            let actual = (
+                pixel(connection, window, left_x, y),
+                pixel(connection, window, right_x, y),
+            );
+            if actual == (Some(left), Some(right)) {
                 return;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "pixel ({x}, {y}) is {actual:?}, expected {expected:?}"
+                "left/right of a {width}x{height} window show {actual:?}, expected {left:?}/{right:?}"
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 
+    fn scribble_over(connection: &RustConnection, window: Window, color: u32) {
+        let (width, height) = window_size(connection, window);
+        let gc = connection.generate_id().unwrap();
+        connection
+            .create_gc(gc, window, &CreateGCAux::new().foreground(color))
+            .unwrap();
+        connection
+            .poly_fill_rectangle(
+                window,
+                gc,
+                &[Rectangle {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                }],
+            )
+            .unwrap();
+        connection.free_gc(gc).unwrap();
+        connection.sync().unwrap();
+    }
+
     #[test]
     fn paints_two_solid_halves_into_a_real_window_and_follows_its_size() {
+        // One test at a time on the shared X server, like the clipboard tests.
+        let _serial = crate::linux::x11::clipboard::tests::SERIAL.lock();
         let (connection, screen) = x11rb::connect(None)
             .expect("this test needs a reachable X server (DISPLAY, e.g. XWayland)");
         let window = mapped_window(&connection, screen, (64, 32));
@@ -385,34 +427,18 @@ mod server_tests {
             height: DevicePixels(32),
         };
         producer.present(size, left, right).unwrap();
-        producer.connection.sync().unwrap();
-        assert_pixel(&connection, window, 5, 5, left);
-        assert_pixel(&connection, window, 31, 31, left);
-        assert_pixel(&connection, window, 32, 0, right);
-        assert_pixel(&connection, window, 63, 31, right);
+        assert_halves(&connection, &mut producer, window, left, right);
 
         // Nothing changed: no request at all is sent, so the window keeps its pixels even if
         // another client scribbles over them before the next call.
-        let scribble = connection.generate_id().unwrap();
-        connection
-            .create_gc(scribble, window, &CreateGCAux::new().foreground(0x00FF00))
-            .unwrap();
-        connection
-            .poly_fill_rectangle(
-                window,
-                scribble,
-                &[Rectangle {
-                    x: 0,
-                    y: 0,
-                    width: 64,
-                    height: 32,
-                }],
-            )
-            .unwrap();
-        connection.sync().unwrap();
+        scribble_over(&connection, window, 0x00FF00);
         producer.present(size, left, right).unwrap();
         producer.connection.sync().unwrap();
-        assert_pixel(&connection, window, 5, 5, [0, 0xFF, 0]);
+        let (width, height) = window_size(&connection, window);
+        assert_eq!(
+            pixel(&connection, window, (width / 4) as i16, (height / 2) as i16),
+            Some([0, 0xFF, 0])
+        );
 
         // The window is resized behind the caller's back: the producer paints the size the
         // server reports, not the stale one it is told.
@@ -428,35 +454,17 @@ mod server_tests {
             .unwrap();
         connection.sync().unwrap();
         producer.present(size, right, left).unwrap();
-        producer.connection.sync().unwrap();
-        assert_pixel(&connection, window, 49, 39, right);
-        assert_pixel(&connection, window, 50, 39, left);
-        assert_pixel(&connection, window, 99, 0, left);
+        assert_halves(&connection, &mut producer, window, right, left);
 
         // An expose repaints the last request without a new call to present.
-        connection
-            .poly_fill_rectangle(
-                window,
-                scribble,
-                &[Rectangle {
-                    x: 0,
-                    y: 0,
-                    width: 100,
-                    height: 40,
-                }],
-            )
-            .unwrap();
+        scribble_over(&connection, window, 0x00FF00);
         connection
             .clear_area(true, window, 0, 0, 0, 0)
             .unwrap()
             .check()
             .unwrap();
         connection.sync().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        producer.pump().unwrap();
-        producer.connection.sync().unwrap();
-        assert_pixel(&connection, window, 10, 10, right);
-        assert_pixel(&connection, window, 90, 10, left);
+        assert_halves(&connection, &mut producer, window, right, left);
 
         drop(producer);
         connection.destroy_window(window).unwrap().check().unwrap();
