@@ -1698,7 +1698,7 @@ impl ToTaffy<taffy::style::Style> for Style {
         taffy::style::Style {
             display: self.display.into(),
             overflow: self.overflow.into(),
-            scrollbar_width: self.scrollbar_width.to_taffy(rem_size, scale_factor),
+            scrollbar_width: 0.0,
             position: self.position.into(),
             inset: self.inset.to_taffy(rem_size, scale_factor),
             size: self.size.to_taffy(rem_size, scale_factor),

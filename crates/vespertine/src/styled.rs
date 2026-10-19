@@ -61,12 +61,17 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Set the space to be reserved for rendering the scrollbar.
-    ///
-    /// This will only affect the layout of the element when overflow for this element is set to
-    /// `Overflow::Scroll`.
+    /// Set the thickness of the classic scrollbar thumbs (CMP-031 R6), 6 logical pixels by
+    /// default. The thumbs are paint-only and never reserve layout space.
     fn scrollbar_width(mut self, width: impl Into<AbsoluteLength>) -> Self {
         self.style().scrollbar_width = Some(width.into());
+        self
+    }
+
+    /// Enable classic scrollbar thumbs of this color on the scrollable axes of this element
+    /// (CMP-031 R3). Without a color, or with a color that is not valid, nothing is painted.
+    fn scrollbar_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.style().scrollbar_color = Some(color.into());
         self
     }
 

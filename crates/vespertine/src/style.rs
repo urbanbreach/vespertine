@@ -189,8 +189,13 @@ pub struct Style {
     /// How children overflowing their container should affect layout
     #[refineable]
     pub overflow: Point<Overflow>,
-    /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
-    pub scrollbar_width: AbsoluteLength,
+    /// Thickness of the classic scrollbar thumbs (CMP-031 R6); `None` means the default of 6
+    /// logical pixels. Thumbs never reserve layout space.
+    pub scrollbar_width: Option<AbsoluteLength>,
+    /// The color of the classic scrollbar thumbs of a scrollable host or virtual list
+    /// (CMP-031 R3). With no color, or a color that is not valid (see
+    /// [`crate::is_valid_scrollbar_color`]), no scrollbar is painted.
+    pub scrollbar_color: Option<Hsla>,
     /// Whether both x and y axis should be scrollable at the same time.
     pub allow_concurrent_scroll: bool,
     /// Clip the element's descendants to its own curved padding edge (RND-002 R11).
@@ -1014,7 +1019,8 @@ impl Default for Style {
             allow_concurrent_scroll: false,
             curved_overflow_clip: false,
             restrict_scroll_to_axis: false,
-            scrollbar_width: AbsoluteLength::default(),
+            scrollbar_width: None,
+            scrollbar_color: None,
             position: Position::Relative,
             inset: Edges::auto(),
             margin: Edges::<Length>::zero(),
@@ -1435,10 +1441,9 @@ pub enum FlexDirection {
 /// the main ones being:
 ///
 ///   - The automatic minimum size Flexbox/CSS Grid items with non-`Visible` overflow is `0` rather than being content based
-///   - `Overflow::Scroll` nodes have space in the layout reserved for a scrollbar (width controlled by the `scrollbar_width` property)
 ///
-/// In Taffy, we only implement the layout related secondary effects as we are not concerned with drawing/painting. The amount of space reserved for
-/// a scrollbar is controlled by the `scrollbar_width` property. If this is `0` then `Scroll` behaves identically to `Hidden`.
+/// In Taffy, we only implement the layout related secondary effects as we are not concerned with drawing/painting. No space is ever
+/// reserved for a scrollbar (CMP-031 R3).
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/overflow>
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -1454,8 +1459,7 @@ pub enum Overflow {
     /// The automatic minimum size of this node as a flexbox/grid item should be `0`.
     /// Content that overflows this node should *not* contribute to the scroll region of its parent.
     Hidden,
-    /// The automatic minimum size of this node as a flexbox/grid item should be `0`. Additionally, space should be reserved
-    /// for a scrollbar. The amount of space reserved is controlled by the `scrollbar_width` property.
+    /// The automatic minimum size of this node as a flexbox/grid item should be `0`. The node scrolls.
     /// Content that overflows this node should *not* contribute to the scroll region of its parent.
     Scroll,
 }

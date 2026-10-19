@@ -249,6 +249,11 @@ pub struct ListScrollEvent {
 
     /// Whether the list is currently in follow-tail mode (auto-scrolling to end).
     pub is_following_tail: bool,
+
+    /// Whether the event comes from wheel or touch input (CMP-029 R2). Layout-triggered
+    /// visible-range notifications and programmatic scrolling (`scroll_by`, `scroll_to`,
+    /// follow motion) are never user input.
+    pub user_initiated: bool,
 }
 
 /// The sizing behavior to apply during layout.
@@ -1058,6 +1063,24 @@ impl ListState {
         Some((max, current.min(max)))
     }
 
+    /// The scroll extents a scrollbar reports for this list (CMP-031 R2): the maximum scroll
+    /// distance and the current scroll distance, both nonnegative.
+    ///
+    /// Unseen rows are valued at the average measured row height; before any row is measured
+    /// the list's own totals stand. While a scrollbar drag is in progress
+    /// ([`Self::scrollbar_drag_started`]) the content height stays constant, so the thumb does
+    /// not run away as new rows get measured.
+    pub fn scrollbar_extents(&self) -> (Pixels, Pixels) {
+        if !self.is_scrollbar_dragging()
+            && let Some(extents) = self.measured_average_scroll_extents()
+        {
+            return extents;
+        }
+        let max = self.max_offset_for_scrollbar().y.max(px(0.));
+        let position = (-self.scroll_px_offset_for_scrollbar().y).clamp(px(0.), max);
+        (max, position)
+    }
+
     /// Return the bounds of the viewport in pixels.
     pub fn viewport_bounds(&self) -> Bounds<Pixels> {
         self.0.borrow().last_layout_bounds.unwrap_or_default()
@@ -1804,6 +1827,7 @@ impl StateInner {
                 count: self.logical_count(),
                 is_scrolled: self.logical_scroll_top.is_some(),
                 is_following_tail: self.follow_state.is_following(),
+                user_initiated: false,
             },
         ))
     }
@@ -1860,6 +1884,7 @@ impl StateInner {
                 count: self.logical_count(),
                 is_scrolled: self.logical_scroll_top.is_some(),
                 is_following_tail: self.follow_state.is_following(),
+                user_initiated: true,
             },
         ))
     }
@@ -2660,6 +2685,37 @@ impl Element for List {
                 item.element.paint(window, cx);
             }
         });
+
+        self.paint_classic_scrollbar(bounds, window);
+    }
+}
+
+impl List {
+    /// The classic vertical thumb of CMP-031, painted after the rows from the extents of this
+    /// frame's layout.
+    fn paint_classic_scrollbar(&self, bounds: Bounds<Pixels>, window: &mut Window) {
+        let Some(color) = self.style.scrollbar_color else {
+            return;
+        };
+        if !crate::is_valid_scrollbar_color(color) {
+            return;
+        }
+        let thickness = self
+            .style
+            .scrollbar_width
+            .map_or(crate::CLASSIC_SCROLLBAR_THICKNESS, |width| {
+                f32::from(width.to_pixels(window.rem_size()))
+            });
+        let (max, position) = self.state.scrollbar_extents();
+        let thumbs = crate::classic_thumb_rects(
+            bounds,
+            point(px(0.), max),
+            point(px(0.), -position),
+            thickness,
+            false,
+            true,
+        );
+        crate::paint_classic_thumbs(&thumbs, thickness, color, window);
     }
 }
 

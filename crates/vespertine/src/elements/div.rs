@@ -2186,6 +2186,8 @@ impl Element for Div {
             .as_mut()
             .map(|provider| provider.provide(window, cx));
 
+        let scroll_offset = self.interactivity.scroll_offset.clone();
+        let scroll_max = self.interactivity.scroll_max;
         window.with_image_cache(image_cache, |window| {
             self.interactivity.paint(
                 global_id,
@@ -2203,10 +2205,63 @@ impl Element for Div {
                     for child in &mut self.children {
                         child.paint(window, cx);
                     }
+
+                    if let Some(scroll_offset) = scroll_offset.as_ref() {
+                        paint_classic_scrollbars(
+                            style,
+                            bounds,
+                            scroll_max,
+                            *scroll_offset.borrow(),
+                            window,
+                        );
+                    }
                 },
             )
         });
     }
+}
+
+/// Paints the classic scrollbar thumbs of a scroll container after its children (CMP-031 R3-R7):
+/// only when the style names a valid scrollbar color, only on scrollable axes, anchored to the
+/// padding box of the viewport and derived from the offset clamped in this frame's prepaint.
+fn paint_classic_scrollbars(
+    style: &Style,
+    bounds: Bounds<Pixels>,
+    scroll_max: Point<Pixels>,
+    offset: Point<Pixels>,
+    window: &mut Window,
+) {
+    let Some(color) = style.scrollbar_color else {
+        return;
+    };
+    if !crate::is_valid_scrollbar_color(color) {
+        return;
+    }
+    let rem_size = window.rem_size();
+    let mut viewport = bounds;
+    if style
+        .border_color
+        .is_some_and(|border| !border.is_transparent())
+    {
+        let widths = style.border_widths.to_pixels(rem_size);
+        viewport.origin += point(widths.left, widths.top);
+        viewport.size.width = (viewport.size.width - widths.left - widths.right).max(px(0.));
+        viewport.size.height = (viewport.size.height - widths.top - widths.bottom).max(px(0.));
+    }
+    let thickness = style
+        .scrollbar_width
+        .map_or(crate::CLASSIC_SCROLLBAR_THICKNESS, |width| {
+            f32::from(width.to_pixels(rem_size))
+        });
+    let thumbs = crate::classic_thumb_rects(
+        viewport,
+        scroll_max,
+        offset,
+        thickness,
+        style.overflow.x == Overflow::Scroll,
+        style.overflow.y == Overflow::Scroll,
+    );
+    crate::paint_classic_thumbs(&thumbs, thickness, color, window);
 }
 
 impl IntoElement for Div {
@@ -2307,6 +2362,9 @@ pub struct Interactivity {
     pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
     pub(crate) scroll_anchor: Option<Box<ScrollAnchor>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
+    /// The maximum scroll distance of the last prepaint, read by the classic scrollbar
+    /// indicators at paint time (CMP-031 R7).
+    pub(crate) scroll_max: Point<Pixels>,
     pub(crate) ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
     pub(crate) group: Option<SharedString>,
     /// The base style of the element, before any modifications are applied
@@ -2625,7 +2683,7 @@ impl Interactivity {
     }
 
     fn clamp_scroll_position(
-        &self,
+        &mut self,
         bounds: Bounds<Pixels>,
         style: &Style,
         window: &mut Window,
@@ -2682,6 +2740,7 @@ impl Interactivity {
                 scroll_handle_state.max_offset = scroll_max;
                 scroll_handle_state.bounds = bounds;
             }
+            self.scroll_max = scroll_max;
 
             *scroll_offset
         } else {

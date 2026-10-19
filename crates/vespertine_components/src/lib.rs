@@ -15,4 +15,7 @@ pub mod floating;
 pub mod media;
 pub mod status;
 pub mod terminal;
+pub mod elastic;
+pub mod scroll;
+pub mod streaming;
 pub mod tokens;

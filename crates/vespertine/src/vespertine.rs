@@ -95,6 +95,7 @@ mod rounded_clip_tests;
 mod scene;
 mod scene_order;
 mod scene_sort;
+mod scrollbar;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
 mod shared_uri;
@@ -266,6 +267,7 @@ pub use profiler::*;
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use scene::*;
 pub use scene_order::SceneOrderStats;
+pub use scrollbar::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
