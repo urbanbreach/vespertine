@@ -1,0 +1,28 @@
+[package]
+name = "vespertine_js"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Native JavaScript host for Vespertine: renderer object, dedicated UI thread, queued commands with response timeouts, window options and path prompts"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+vespertine = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
+vespertine_host_tree.workspace = true
+anyhow.workspace = true
+async-channel = { workspace = true, features = ["std"] }
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }

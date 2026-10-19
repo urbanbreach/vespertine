@@ -2,7 +2,7 @@
 
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 export function addonCandidates() {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [];
-  if (process.env.VESPERTINE_NATIVE_ADDON) candidates.push(process.env.VESPERTINE_NATIVE_ADDON);
+  if (process.env.VESPERTINE_NATIVE_ADDON) candidates.push(resolve(process.env.VESPERTINE_NATIVE_ADDON));
   candidates.push(join(here, "..", "native", "vespertine_js.node"));
   return candidates;
 }

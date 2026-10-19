@@ -39,7 +39,7 @@ export function createNativeRenderer({ onEvent, onError, native, serveAutomation
     const init = renderer.init.bind(renderer);
     renderer.init = (options) => {
       const result = init(options);
-      (serveAutomation ?? ((target) => target.serveAutomation()))(renderer);
+      (serveAutomation ?? ((target) => target.serveAutomation?.()))(renderer);
       return result;
     };
   }

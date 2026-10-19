@@ -9,6 +9,8 @@ members = [
     "crates/vespertine_host_tree",
     "crates/vespertine_http_client",
     "crates/vespertine_http_client_tls",
+    "crates/vespertine_js",
+    "crates/vespertine_js_node",
     "crates/vespertine_linux",
     "crates/vespertine_macos",
     "crates/vespertine_macros",
@@ -551,6 +553,9 @@ path = "crates/vespertine_http_client"
 
 [workspace.dependencies.vespertine_http_client_tls]
 path = "crates/vespertine_http_client_tls"
+
+[workspace.dependencies.vespertine_js]
+path = "crates/vespertine_js"
 
 [workspace.dependencies.vespertine_linux]
 path = "crates/vespertine_linux"

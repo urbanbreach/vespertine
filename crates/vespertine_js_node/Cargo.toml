@@ -1,0 +1,28 @@
+[package]
+name = "vespertine_js_node"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Node-API addon exposing the Vespertine JavaScript host to Bun and Node"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+# The addon links against symbols supplied by the JavaScript runtime that loads it, so it has
+# no test harness; its behavior is verified through the JavaScript package tests.
+test = false
+doctest = false
+
+[dependencies]
+vespertine_js.workspace = true
+napi = { version = "3", features = ["napi9", "serde-json", "async"] }
+napi-derive = "3"
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+napi-build = "2"
