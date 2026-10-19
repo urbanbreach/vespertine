@@ -381,7 +381,13 @@ mod tests {
             loading_more: true,
             error: None,
         };
-        let results = Results::build(&[spec.clone()], &View::Summary, &loading, "", "");
+        let results = Results::build(
+            std::slice::from_ref(&spec),
+            &View::Summary,
+            &loading,
+            "",
+            "",
+        );
         assert_eq!(results.footer, Footer::LoadingMore);
         let failed = Paging {
             loading_more: false,

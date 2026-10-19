@@ -92,3 +92,7 @@ path = "examples/controls_activation.rs"
 [[example]]
 name = "controls_keyboard"
 path = "examples/controls_keyboard.rs"
+
+[[example]]
+name = "select_keyboard"
+path = "examples/select_keyboard.rs"

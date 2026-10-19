@@ -396,7 +396,7 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
             );
         // Window-level pointer tracking while the card is shown: the interactive corridor and
         // the cold dismissal by a wheel scroll.
-        let tracker_host = host.clone();
+        let tracker_host = host;
         card = card.child(
             canvas(
                 |_, _, _| {},
@@ -407,7 +407,7 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
                             this.pointer_moved(event.position, window, cx)
                         });
                     });
-                    let scrolled = tracker_host.clone();
+                    let scrolled = tracker_host;
                     window.on_mouse_event(move |_: &ScrollWheelEvent, _, window, cx| {
                         scrolled.update(cx, |this, cx| this.dismiss_cold(window, cx));
                     });

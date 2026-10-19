@@ -47,7 +47,7 @@ pub fn destination_card(
     let run = |len: usize| TextRun {
         len,
         font: font.clone(),
-        color: tokens.text.into(),
+        color: tokens.text,
         background_color: None,
         underline: None,
         strikethrough: None,
