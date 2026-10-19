@@ -19,3 +19,4 @@ export { startFrameLoop } from "./frame-loop.js";
 export { collectGarbageWhenIdle } from "./gc.js";
 export { createNativeRenderer, isNonInteractive } from "./renderer.js";
 export { loadNative } from "./native.js";
+export { checkUpdate } from "./updater.js";

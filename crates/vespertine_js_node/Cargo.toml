@@ -19,6 +19,9 @@ doctest = false
 
 [dependencies]
 vespertine_js.workspace = true
+vespertine_http_client.workspace = true
+vespertine_reqwest_client.workspace = true
+vespertine_updater.workspace = true
 napi = { version = "3", features = ["napi9", "serde-json", "async"] }
 napi-derive = "3"
 serde.workspace = true

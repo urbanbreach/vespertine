@@ -44,11 +44,20 @@ Extras beyond the specified renderer API: `closeWindow()`, `requestRepaint()`, `
 | Geometry and selection (R7) | `readWindowSize`, `readWindowInsets`, `observeWindowSize`, `observeWindowInsets`, `observeSelectedText` |
 | Renderer and frame loop (R8) | `createNativeRenderer`, `startFrameLoop` |
 | Idle GC (APP-008) | `collectGarbageWhenIdle` |
+| Signed updates (APP-004) | `checkUpdate` |
 
 Event objects delivered by the native side: `{ type, id, ... }`; key events carry `key` (lowercase
 token), `ctrl`/`alt`/`cmd`/`shift` and a `keystroke` identity; window-level events use the types
 `windowKeyDown`, `windowKeyUp` and `windowSelectionChange` with `id` equal to the generation of the
 mounted root (announced to the renderer through `setWindowGeneration`).
+
+## Updates
+
+`checkUpdate(currentVersion, { endpoints, pubkey, headers, timeoutMs, installerArgs, installMode })`
+resolves with `null` or an update (`currentVersion`, `version`, `notes`, `date`, `downloadUrl`,
+`format`, `downloadAndInstall()`); failures reject. `downloadAndInstall()` verifies the Minisign
+signature of the complete package before touching the installed AppImage (the path in `APPIMAGE`,
+else the running executable) and never relaunches or quits; the caller owns prompts and restarts.
 
 ## Tests and tools
 

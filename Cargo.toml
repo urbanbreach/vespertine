@@ -28,6 +28,7 @@ members = [
     "crates/vespertine_sum_tree",
     "crates/vespertine_test_host",
     "crates/vespertine_theme",
+    "crates/vespertine_updater",
     "crates/vespertine_tokio",
     "crates/vespertine_util",
     "crates/vespertine_util_core",
@@ -52,6 +53,7 @@ anyhow = "1.0.86"
 async-fs = "2.1"
 async-task = "4.7"
 async-tungstenite = "0.33"
+base64 = "0.22"
 backtrace = "0.3"
 bitflags = "2.6.0"
 block2 = "0.6"
@@ -106,6 +108,7 @@ stacksafe = "1.0"
 swash = "0.2.6"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-onig"] }
 tempfile = "3.20.0"
+minisign-verify = "0.2.5"
 tendril = "0.5"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
 thiserror = "2.0.12"
@@ -619,6 +622,9 @@ path = "crates/vespertine_sum_tree"
 
 [workspace.dependencies.vespertine_theme]
 path = "crates/vespertine_theme"
+
+[workspace.dependencies.vespertine_updater]
+path = "crates/vespertine_updater"
 
 [workspace.dependencies.vespertine_util]
 path = "crates/vespertine_util"

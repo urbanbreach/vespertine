@@ -1,0 +1,34 @@
+[package]
+name = "vespertine_updater"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Signed packaged-application updates: feed checking, Minisign verification and AppImage replacement (APP-004)"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+futures.workspace = true
+log.workspace = true
+minisign-verify.workspace = true
+percent-encoding.workspace = true
+semver.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+url.workspace = true
+vespertine_http_client.workspace = true
+
+[dev-dependencies]
+blake2 = "0.10"
+ed25519-dalek = "2"
+vespertine_reqwest_client.workspace = true
