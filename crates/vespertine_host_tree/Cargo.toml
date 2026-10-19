@@ -21,3 +21,10 @@ serde_json.workspace = true
 [[example]]
 name = "host_tree_mount"
 path = "examples/host_tree_mount.rs"
+
+[[example]]
+name = "mutation_import_bench"
+path = "examples/mutation_import_bench.rs"
+
+[dev-dependencies]
+rmp-serde = "1"

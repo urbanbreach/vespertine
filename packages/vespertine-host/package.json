@@ -10,9 +10,14 @@
     "./native": "./src/native.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "record-fixture": "node scripts/record-fixture.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "react": "19.2.0",
+    "react-reconciler": "0.32.0"
   }
 }
