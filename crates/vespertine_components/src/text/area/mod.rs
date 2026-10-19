@@ -413,6 +413,12 @@ impl TextArea {
         self
     }
 
+    /// Turns on source-preserving Markdown editing (CMP-009): styling, display decorations,
+    /// fenced-code coloring, list continuation on Enter and list indent on Tab.
+    pub fn with_markdown(self, options: crate::markdown::MarkdownOptions) -> Self {
+        self.with_layer(Rc::new(crate::markdown::MarkdownLayer::new(options)))
+    }
+
     /// Attaches a layer (Markdown, chips): its replacements, style spans and editing hooks join
     /// the editor.
     pub fn with_layer(mut self, layer: Rc<dyn AreaLayer>) -> Self {

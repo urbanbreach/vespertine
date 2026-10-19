@@ -21,6 +21,7 @@ mod code;
 mod decorations;
 mod highlight;
 mod indent;
+mod layer;
 mod list;
 mod newline;
 mod parse;
@@ -28,6 +29,7 @@ mod text;
 
 pub use code::in_code;
 pub use indent::{IndentEdit, indent_edit};
+pub use layer::MarkdownLayer;
 pub use list::{ListPrefix, TaskBox, list_prefix, list_prefix_display_len};
 pub use newline::{ListLine, list_lines, newline_edit};
 pub use vespertine_richtext::syntax::TokenKind;
