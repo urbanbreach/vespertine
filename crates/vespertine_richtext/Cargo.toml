@@ -18,6 +18,9 @@ vespertine.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 unicode-segmentation.workspace = true
+syntect.workspace = true
+two-face.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 vespertine = { workspace = true, features = ["test-support"] }
