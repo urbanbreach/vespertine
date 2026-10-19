@@ -79,3 +79,7 @@ path = "examples/diff_viewer.rs"
 [[example]]
 name = "math_formulas"
 path = "examples/math_formulas.rs"
+
+[[example]]
+name = "floating_menus"
+path = "examples/floating_menus.rs"

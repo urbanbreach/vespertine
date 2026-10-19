@@ -660,6 +660,16 @@ impl FocusHandle {
         self.id.is_focused(window)
     }
 
+    /// Obtains whether the element associated with this handle is part of the most recently
+    /// rendered frame, so that focusing it can take effect.
+    pub fn is_mounted(&self, window: &Window) -> bool {
+        window
+            .rendered_frame
+            .dispatch_tree
+            .focusable_node_id(self.id)
+            .is_some()
+    }
+
     /// Obtains whether the element associated with this handle contains the focused
     /// element or is itself focused.
     pub fn contains_focused(&self, window: &Window, cx: &App) -> bool {
@@ -2542,10 +2552,11 @@ impl Window {
         }
     }
 
-    /// Whether the window has been invalidated since its last draw, so that the next frame
-    /// request would produce a new frame.
+    /// Whether the next frame request has work to do: the window has been invalidated since its
+    /// last draw, or callbacks scheduled with [`Window::on_next_frame`] are waiting for a frame
+    /// (a platform keeps requesting frames while either holds).
     pub fn needs_draw(&self) -> bool {
-        self.invalidator.is_dirty()
+        self.invalidator.is_dirty() || !self.next_frame_callbacks.borrow().is_empty()
     }
 
     /// Close this window.
@@ -3728,6 +3739,19 @@ impl Window {
             && self.focus.is_some()
             && self.last_input_was_keyboard()
             && self.focused_text_input != self.focus
+    }
+
+    /// Marks the last input modality as pointer, so that focus indicators (see
+    /// [`Window::last_input_was_keyboard`]) disappear until the next key press.
+    ///
+    /// An Escape that only steps back inside a surface (a submenu closing, a search clearing)
+    /// calls this so the controls it returns to do not suddenly show focus rings; the next
+    /// navigation key restores keyboard modality as usual.
+    pub fn use_pointer_modality(&mut self) {
+        if self.last_input_modality != InputModality::Mouse {
+            self.last_input_modality = InputModality::Mouse;
+            self.refresh();
+        }
     }
 
     /// The current state of the keyboard's capslock

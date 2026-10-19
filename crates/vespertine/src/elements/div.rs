@@ -4663,8 +4663,11 @@ impl ScrollHandle {
             return;
         };
 
+        // Until the container has been painted once its bounds and overflow are unknown: keep the
+        // request for the frame that knows them instead of dropping it unfulfilled.
+        let measured = state.bounds.size != Size::default();
         let active_item = match state.child_bounds.get(active_item.index) {
-            Some(bounds) => {
+            Some(bounds) if measured => {
                 let mut scroll_offset = state.offset.borrow_mut();
 
                 match active_item.strategy {
@@ -4699,7 +4702,7 @@ impl ScrollHandle {
                 }
                 None
             }
-            None => Some(active_item),
+            _ => Some(active_item),
         };
         state.active_item = active_item;
     }
