@@ -16,7 +16,7 @@ pub mod viewer;
 pub use cache::{MediaCache, MediaClass, MediaKey, MediaStatus, ValidationPolicy, release};
 pub use decode::{
     DecodedMedia, MediaError, decode_generated_image, decode_icon, decode_image,
-    decode_image_with_cap, raster_retained_bytes,
+    decode_image_with_cap, decode_thumbnail, raster_retained_bytes,
 };
 pub use lightbox::{Lightbox, PreviewTarget, lightbox};
 pub use preview::{PreviewMedia, preview_element};

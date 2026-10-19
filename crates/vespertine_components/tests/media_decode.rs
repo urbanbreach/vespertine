@@ -12,11 +12,11 @@ use vespertine::{
 };
 use vespertine_components::media::cache::{
     COLLAPSED_GRACE, MediaCache, MediaClass, MediaKey, MediaStatus, ValidationPolicy, retry_delay,
-    thumbnail_bound,
+    start_load, thumbnail_bound,
 };
 use vespertine_components::media::decode::{
     ATTACHMENT_BYTE_CAP, DecodedMedia, MediaError, WORKSPACE_PREVIEW_BYTE_CAP,
-    decode_generated_image, decode_icon, decode_image, decode_image_with_cap,
+    decode_generated_image, decode_icon, decode_image, decode_image_with_cap, decode_thumbnail,
     raster_retained_bytes,
 };
 use vespertine_components::media::svg::{enlarged_raster, estimated_bytes, raster_size};
@@ -457,6 +457,75 @@ fn offscreen_previews_are_dropped_only_over_budget_after_grace_and_staleness() {
         MediaStatus::Ready,
         "painted 1 s ago"
     );
+}
+
+#[test]
+fn decoded_list_thumbnails_fit_within_twice_the_display_frame() {
+    let frame = size(px(560.), px(220.));
+    let media =
+        decode_thumbnail("image/png", &png(3000, 1000), ATTACHMENT_BYTE_CAP, frame).unwrap();
+    let natural = media.natural_size();
+    assert!(
+        f32::from(natural.width) <= 1120.0 && f32::from(natural.height) <= 440.0,
+        "{natural:?}"
+    );
+    assert_eq!(
+        f32::from(natural.width),
+        1120.0,
+        "the width is the limiting side"
+    );
+    let small = decode_thumbnail("image/png", &png(300, 100), ATTACHMENT_BYTE_CAP, frame).unwrap();
+    assert_eq!(
+        small.natural_size(),
+        size(px(300.), px(100.)),
+        "never enlarged"
+    );
+    assert_eq!(
+        decode_thumbnail("image/jpeg", &png(30, 10), ATTACHMENT_BYTE_CAP, frame).unwrap_err(),
+        MediaError::FormatMismatch
+    );
+}
+
+#[vespertine::test]
+fn loads_decode_off_the_calling_path_and_land_in_the_cache(cx: &mut TestAppContext) {
+    let cache = cx.update(|cx| cx.new(|_| MediaCache::new()));
+    let key = MediaKey::new("async", ValidationPolicy::Attachment);
+    let bytes = png(40, 30);
+    let started = cx.update(|cx| {
+        let bytes = bytes.clone();
+        start_load(&cache, key.clone(), cx, move || {
+            decode_generated_image("image/png", &bytes, ATTACHMENT_BYTE_CAP)
+        })
+    });
+    assert!(started);
+    // The load is in flight: nothing is resident yet and a second start is refused.
+    cx.read(|cx| {
+        assert_eq!(
+            cache.read(cx).status(&key, Instant::now()),
+            MediaStatus::Loading
+        )
+    });
+    assert!(!cx.update(|cx| start_load(&cache, key.clone(), cx, || Err(MediaError::Unsupported))));
+    cx.run_until_parked();
+    cx.read(|cx| {
+        assert_eq!(
+            cache.read(cx).status(&key, Instant::now()),
+            MediaStatus::Ready
+        )
+    });
+    // A failing decode becomes an error entry with the retry delay.
+    let bad = MediaKey::new("bad", ValidationPolicy::Attachment);
+    cx.update(|cx| start_load(&cache, bad.clone(), cx, || Err(MediaError::Unsupported)));
+    cx.run_until_parked();
+    cx.read(|cx| {
+        assert!(matches!(
+            cache.read(cx).status(&bad, Instant::now()),
+            MediaStatus::Failed {
+                error: MediaError::Unsupported,
+                ..
+            }
+        ))
+    });
 }
 
 #[test]

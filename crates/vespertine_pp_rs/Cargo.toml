@@ -1,0 +1,15 @@
+# The package is named `pp-rs` (not `vespertine_pp_rs`) on purpose: naga's GLSL front end depends
+# on the crates.io crate `pp-rs`, which is not available offline, and the workspace's
+# `[patch.crates-io.pp-rs]` entry can only replace a package of that exact name. The directory
+# follows the workspace naming; the package name follows the patched crate.
+[package]
+name = "pp-rs"
+version = "0.2.1"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "A GLSL preprocessor with the interface naga's GLSL front end expects (Vespertine's local implementation, patched in for the crates.io crate of the same name)"
+
+[lib]
+path = "src/lib.rs"
+doctest = false

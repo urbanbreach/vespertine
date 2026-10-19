@@ -251,6 +251,8 @@ struct RasterPolicy {
     cap: usize,
     /// Reduce so neither side exceeds `min(max_side, larger source side)`.
     reduce_to: Option<u32>,
+    /// Reduce to fit inside this box (list thumbnails: twice the display frame).
+    fit_within: Option<(u32, u32)>,
 }
 
 fn mime_format(mime: &str) -> Option<ImageFormat> {
@@ -326,6 +328,11 @@ fn decode_raster(
             decoded = decoded.thumbnail(bound, bound);
         }
     }
+    if let Some((bound_w, bound_h)) = policy.fit_within
+        && (decoded.width() > bound_w || decoded.height() > bound_h)
+    {
+        decoded = decoded.thumbnail(bound_w, bound_h);
+    }
     let rgba = decoded.into_rgba8();
     let (width, height) = rgba.dimensions();
     let mut png = Vec::new();
@@ -374,6 +381,7 @@ pub fn decode_image_with_cap(
         RasterPolicy {
             cap,
             reduce_to: None,
+            fit_within: None,
         },
         None,
     )
@@ -394,6 +402,7 @@ pub fn decode_generated_image(
         RasterPolicy {
             cap,
             reduce_to: Some(PREVIEW_MAX_SIDE),
+            fit_within: None,
         },
         Some(expected),
     )
@@ -416,6 +425,29 @@ pub fn decode_icon(
         RasterPolicy {
             cap,
             reduce_to: Some(ICON_MAX_SIDE),
+            fit_within: None,
+        },
+        Some(expected),
+    )
+}
+
+/// Decodes a list thumbnail: like [`decode_generated_image`], further reduced to fit within
+/// twice the pixel size of its display `frame` (a 560 x 220 frame gives at most 1120 x 440).
+pub fn decode_thumbnail(
+    mime: &str,
+    bytes: &[u8],
+    cap: usize,
+    frame: Size<Pixels>,
+) -> Result<DecodedMedia, MediaError> {
+    let expected = mime_format(mime).ok_or(MediaError::Unsupported)?;
+    let bound = super::cache::thumbnail_bound(frame);
+    let axis = |v: Pixels| (f32::from(v).round().max(1.0)) as u32;
+    decode_raster(
+        bytes,
+        RasterPolicy {
+            cap,
+            reduce_to: Some(PREVIEW_MAX_SIDE),
+            fit_within: Some((axis(bound.width), axis(bound.height))),
         },
         Some(expected),
     )

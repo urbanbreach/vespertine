@@ -14,6 +14,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+bytemuck.workspace = true
 accesskit.workspace = true
 vespertine.workspace = true
 vespertine_richtext.workspace = true
@@ -29,6 +30,12 @@ merman.workspace = true
 url.workspace = true
 usvg.workspace = true
 alacritty_terminal.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+wgpu = { workspace = true, features = ["std", "metal", "gles", "vulkan", "wgsl", "glsl", "naga-ir"] }
+
+[target.'cfg(not(any(target_os = "linux", target_os = "freebsd")))'.dependencies]
+wgpu = { workspace = true, features = ["std", "dx12", "metal", "gles", "vulkan", "wgsl", "glsl", "naga-ir"] }
 
 [dev-dependencies]
 image.workspace = true
@@ -96,3 +103,11 @@ path = "examples/controls_keyboard.rs"
 [[example]]
 name = "select_keyboard"
 path = "examples/select_keyboard.rs"
+
+[[example]]
+name = "scene3d_cube"
+path = "examples/scene3d_cube.rs"
+
+[[example]]
+name = "shader_playground"
+path = "examples/shader_playground.rs"

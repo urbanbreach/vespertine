@@ -1237,6 +1237,8 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba7a06c0b31fff5ff2e1e7d37dbf940864e2a974b336e1a2938d10af6e8fb283"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -3971,6 +3973,7 @@ dependencies = [
  "naga-types",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.17",
@@ -5113,6 +5116,10 @@ dependencies = [
  "serde",
  "zerovec",
 ]
+
+[[package]]
+name = "pp-rs"
+version = "0.2.1"
 
 [[package]]
 name = "pprof"
@@ -6896,6 +6903,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "termcolor"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+dependencies = [
+ "winapi-util",
+]
+
+[[package]]
 name = "thin-vec"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7746,6 +7762,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "alacritty_terminal",
+ "bytemuck",
  "futures",
  "image",
  "merman",
@@ -7765,6 +7782,7 @@ dependencies = [
  "vespertine_test_host",
  "vespertine_theme",
  "vespertine_webview",
+ "wgpu",
 ]
 
 [[package]]
@@ -8694,6 +8712,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "profiling",
  "raw-window-handle",
  "smallvec",
