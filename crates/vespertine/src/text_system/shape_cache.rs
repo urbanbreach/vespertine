@@ -433,6 +433,7 @@ impl Default for ShapeCaches {
 
 impl ShapeCaches {
     /// Enables or disables timing of shaped lines (off by default).
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_timing_enabled(&self, enabled: bool) {
         self.timing_enabled.store(enabled, Ordering::Relaxed);
     }

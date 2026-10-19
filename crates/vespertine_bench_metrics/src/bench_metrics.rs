@@ -230,6 +230,14 @@ impl HardwareCounter {
         self.scope
     }
 
+    /// The count accumulated since the counter was opened, as a plain read that allocates
+    /// nothing (Linux only). Differences of two reads are the counts between them; a counter
+    /// that was not scheduled in between contributes nothing.
+    #[cfg(target_os = "linux")]
+    pub fn cumulative(&self) -> u64 {
+        self.backend.cumulative()
+    }
+
     /// Confirms the counter advances for work on this thread. A virtual machine
     /// can accept the open yet never schedule the event, and Intel Macs report
     /// zero; failing here is clearer than measuring zeros.
@@ -465,6 +473,31 @@ pub mod perf {
                 .iter()
                 .zip(&after.0)
                 .any(|(before, after)| after.time_running > before.time_running)
+        }
+
+        /// The count accumulated since the counter was opened, summed over the PMUs and scaled
+        /// like [`Self::delta`]. A plain read of each counter: it allocates nothing.
+        pub(super) fn cumulative(&self) -> u64 {
+            let mut total = 0.0;
+            for counter in self.counters.borrow_mut().iter_mut() {
+                let Ok(data) = counter.counter.read_full() else {
+                    continue;
+                };
+                let (Some(enabled), Some(running)) = (data.time_enabled(), data.time_running())
+                else {
+                    continue;
+                };
+                if running.is_zero() {
+                    continue;
+                }
+                let count = data.count() as f64;
+                total += if counter.scale_for_multiplexing && running < enabled {
+                    count * enabled.as_secs_f64() / running.as_secs_f64()
+                } else {
+                    count
+                };
+            }
+            total as u64
         }
 
         pub(super) fn delta(&self, start: &Snapshot, end: &Snapshot) -> f64 {

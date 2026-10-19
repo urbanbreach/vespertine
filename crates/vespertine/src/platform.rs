@@ -1961,7 +1961,7 @@ pub fn get_gamma_correction_ratios(gamma: f32) -> [f32; 4] {
     ]
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 #[expect(missing_docs)]
 pub enum AtlasKey {
     Glyph(RenderGlyphParams),
@@ -2034,6 +2034,14 @@ pub trait PlatformAtlas {
     fn contains(&self, _key: &AtlasKey) -> bool {
         false
     }
+
+    /// The key a tile was inserted for, when this atlas can tell. Lets comparable painted output
+    /// name what a sprite shows (glyph, SVG, image) without its packing-dependent tile identity
+    /// (DEV-003).
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    fn key_for_tile(&self, _tile: &AtlasTile) -> Option<AtlasKey> {
+        None
+    }
 }
 
 #[doc(hidden)]
@@ -2075,6 +2083,13 @@ impl<Backend> AtlasState<Backend> {
 
     pub fn contains(&self, key: &AtlasKey) -> bool {
         self.tiles_by_key.contains_key(key)
+    }
+
+    /// The key `tile` was inserted for.
+    pub fn key_for_tile(&self, tile: &AtlasTile) -> Option<AtlasKey> {
+        self.tiles_by_key
+            .iter()
+            .find_map(|(key, candidate)| (candidate == tile).then(|| key.clone()))
     }
 
     pub fn clear(&mut self, reset_backend: impl FnOnce(&mut Backend)) {
@@ -2218,6 +2233,11 @@ impl PlatformAtlas for HeadlessAtlas {
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
     fn contains(&self, key: &AtlasKey) -> bool {
         self.0.lock().contains(key)
+    }
+
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    fn key_for_tile(&self, tile: &AtlasTile) -> Option<AtlasKey> {
+        self.0.lock().key_for_tile(tile)
     }
 }
 

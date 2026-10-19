@@ -7628,6 +7628,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vespertine_bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "libc",
+ "serde_json",
+ "vespertine",
+ "vespertine_bench_metrics",
+ "vespertine_platform",
+ "vespertine_wgpu",
+]
+
+[[package]]
 name = "vespertine_bench_metrics"
 version = "0.1.0"
 dependencies = [

@@ -80,7 +80,7 @@ fn select_emoji_font(
 /// When rendering SVGs, we render them at twice the size to get a higher-quality result.
 pub const SMOOTH_SVG_SCALE_FACTOR: f32 = 2.;
 
-#[derive(Clone, PartialEq, Hash, Eq)]
+#[derive(Clone, PartialEq, Hash, Eq, Debug)]
 #[expect(missing_docs)]
 pub struct RenderSvgParams {
     pub path: SharedString,

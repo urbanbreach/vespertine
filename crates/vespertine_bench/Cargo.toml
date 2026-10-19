@@ -1,0 +1,42 @@
+[package]
+name = "vespertine_bench"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Reproducible frame-cost benchmarks and retained-output lockstep verification (DEV-003)"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "vsp-bench"
+path = "src/bin/vsp-bench.rs"
+
+[[example]]
+name = "retention_showcase"
+path = "examples/retention_showcase.rs"
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+vespertine = { workspace = true, features = ["test-support", "font-kit", "wayland", "x11"] }
+vespertine_bench_metrics.workspace = true
+vespertine_platform = { workspace = true, features = ["wayland", "x11", "test-support"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vespertine_wgpu = { workspace = true, features = ["test-support"] }
+
+[[example]]
+name = "lockstep_verification"
+path = "examples/lockstep_verification.rs"
+
+[[example]]
+name = "panel_updates"
+path = "examples/panel_updates.rs"

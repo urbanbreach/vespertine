@@ -1026,11 +1026,25 @@ impl Window {
 
     /// The expanded primitives painted by the last frame, in paint order, as
     /// comparable text. Atlas texture and tile identities are omitted (they
-    /// depend on packing history, not on what was drawn); order, clipping,
-    /// geometry, color and text layout are included.
+    /// depend on packing history, not on what was drawn) and replaced by what the
+    /// sprite shows (glyph, SVG or image key) when the atlas can tell; order,
+    /// clipping, geometry, color and text layout are included.
     #[cfg(any(test, feature = "test-support"))]
     pub fn painted_primitives(&self) -> Vec<String> {
         use crate::scene::{PaintOperation, Primitive};
+        let mut meanings: std::collections::HashMap<(u32, u32), String> = Default::default();
+        let mut meaning = |tile: &crate::AtlasTile| -> String {
+            meanings
+                .entry((tile.texture_id.index, tile.tile_id.0))
+                .or_insert_with(|| match self.sprite_atlas.key_for_tile(tile) {
+                    Some(key) => format!(" shows={key:?}"),
+                    None => format!(
+                        " shows={:?} {:?} padding {}",
+                        tile.texture_id.kind, tile.bounds.size, tile.padding
+                    ),
+                })
+                .clone()
+        };
         fn strip_atlas(mut text: String) -> String {
             while let Some(start) = text.find("tile: AtlasTile {") {
                 let mut depth = 0usize;
@@ -1071,12 +1085,32 @@ impl Window {
                     Primitive::Quad(p) => format!("{p:?}"),
                     Primitive::Path(p) => format!("{p:?}"),
                     Primitive::Underline(p) => format!("{p:?}"),
-                    Primitive::MonochromeSprite(p) => format!("{p:?}"),
-                    Primitive::SubpixelSprite(p) => format!("{p:?}"),
-                    Primitive::PolychromeSprite(p) => format!("{p:?}"),
+                    Primitive::MonochromeSprite(p) => format!("{p:?}{}", meaning(&p.tile)),
+                    Primitive::SubpixelSprite(p) => format!("{p:?}{}", meaning(&p.tile)),
+                    Primitive::PolychromeSprite(p) => format!("{p:?}{}", meaning(&p.tile)),
                     Primitive::Surface(p) => format!("{p:?}"),
                 }),
             })
+            .collect()
+    }
+
+    /// The atlas identity (texture index, tile id) of every sprite painted by the last frame, in
+    /// paint order. [`Self::painted_primitives`] leaves these out because they depend on packing
+    /// history; this makes that dependence observable (DEV-003).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn painted_tile_ids(&self) -> Vec<(u32, u32)> {
+        use crate::scene::{PaintOperation, Primitive};
+        self.rendered_frame
+            .scene
+            .paint_operations
+            .iter()
+            .filter_map(|operation| match operation {
+                PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) => Some(sprite.tile),
+                PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)) => Some(sprite.tile),
+                PaintOperation::Primitive(Primitive::PolychromeSprite(sprite)) => Some(sprite.tile),
+                _ => None,
+            })
+            .map(|tile| (tile.texture_id.index, tile.tile_id.0))
             .collect()
     }
 

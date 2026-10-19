@@ -316,6 +316,7 @@ impl TextSystem {
     }
 
     /// Enables or disables timing of shaped lines; shared by every window of this text system.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_shaping_timing(&self, enabled: bool) {
         self.shape_caches.set_timing_enabled(enabled);
     }

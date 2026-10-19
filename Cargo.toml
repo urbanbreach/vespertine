@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/vespertine",
     "crates/vespertine_apple",
+    "crates/vespertine_bench",
     "crates/vespertine_bench_metrics",
     "crates/vespertine_collections",
     "crates/vespertine_components",
