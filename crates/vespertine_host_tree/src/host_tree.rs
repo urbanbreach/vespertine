@@ -22,5 +22,5 @@ pub use style::{
 };
 pub use tree::{
     BatchError, BatchErrorKind, BatchResult, Children, DocumentOrder, HostTree, NodeId, NodeRef,
-    TreeOptions, TreeStats,
+    PreparedBatch, TreeOptions, TreeStats,
 };

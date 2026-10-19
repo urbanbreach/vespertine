@@ -1,6 +1,15 @@
 //! Shared by the tests and examples of this crate: builds the addon and runs JavaScript
 //! with Node and Bun against it.
 
+#![allow(
+    dead_code,
+    reason = "each test and example uses a subset of this shared harness"
+)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the harness runs cargo, Node and Bun as child processes"
+)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 

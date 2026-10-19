@@ -84,6 +84,24 @@ pub struct BatchResult {
     pub searchable_changed: bool,
 }
 
+/// A batch that decoded and resolved its styles completely (phases 1 and 2); committing it
+/// cannot fail. Borrows the serialized batch it was decoded from.
+pub struct PreparedBatch<'a> {
+    ops: Vec<Op<'a>>,
+    creates: usize,
+}
+
+impl PreparedBatch<'_> {
+    /// Number of operations in the batch.
+    pub fn len(&self) -> usize {
+        self.ops.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops.is_empty()
+    }
+}
+
 /// Construction options.
 #[derive(Clone, Copy)]
 pub struct TreeOptions {
@@ -520,6 +538,14 @@ impl HostTree {
 
     /// Applies one serialized batch atomically. Returns the destroyed identities.
     pub fn apply_batch(&mut self, batch: &str) -> Result<BatchResult, BatchError> {
+        let prepared = self.prepare_batch(batch)?;
+        Ok(self.commit_batch(prepared))
+    }
+
+    /// Phases 1 and 2 of a batch: decodes every operation and resolves every `setStyle`
+    /// payload into a shared style. The only fallible phases; on failure nothing has changed.
+    /// Pass the result to [`commit_batch`](Self::commit_batch).
+    pub fn prepare_batch<'a>(&mut self, batch: &'a str) -> Result<PreparedBatch<'a>, BatchError> {
         let mut ops = match decode_batch(batch) {
             Ok(ops) => ops,
             Err((failure, error)) => {
@@ -579,7 +605,12 @@ impl HostTree {
             return Err(error);
         }
 
-        // Phase 3: apply. It cannot fail.
+        Ok(PreparedBatch { ops, creates })
+    }
+
+    /// Phase 3 of a batch: applies a prepared batch. It cannot fail.
+    pub fn commit_batch(&mut self, prepared: PreparedBatch<'_>) -> BatchResult {
+        let PreparedBatch { ops, creates } = prepared;
         self.nodes.reserve(creates);
         let mut destroyed = Vec::new();
         for op in ops {
@@ -600,11 +631,11 @@ impl HostTree {
         if std::mem::take(&mut self.styles_touched) && self.styles.sweep_due(self.nodes.len()) {
             self.styles.sweep();
         }
-        Ok(BatchResult {
+        BatchResult {
             destroyed,
             redraw,
             searchable_changed,
-        })
+        }
     }
 
     /// As [`apply_batch`](Self::apply_batch) for transport bytes; the bytes must be UTF-8.

@@ -7,6 +7,11 @@
 //! cargo run --release -p vespertine_js_node --example layer_shell
 //! ```
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the example drives Node child processes"
+)]
+
 #[path = "../harness/mod.rs"]
 mod harness;
 
