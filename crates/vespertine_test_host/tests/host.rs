@@ -703,18 +703,25 @@ impl Render for Reentrant {
 }
 
 #[test]
-#[should_panic(expected = "while it is already being updated")]
 fn dev_006_a9_reentering_the_root_view_during_dispatch_fails_as_in_a_live_window() {
-    if !vespertine_test_host::is_available() {
-        // Without a backend nothing can run; fail in the way the test expects rather than pass
-        // silently, and the suite's availability test (A4) records the skip reason.
-        panic!("backend unavailable: while it is already being updated");
-    }
-    let mut host = TestHost::with_view(HostOptions::with_size(100.0, 100.0), |_, cx| {
-        cx.new(|_| Reentrant)
-    })
-    .unwrap();
-    host.click(10.0, 10.0, 0, "").unwrap();
+    require_backend!();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut host = TestHost::with_view(HostOptions::with_size(100.0, 100.0), |_, cx| {
+            cx.new(|_| Reentrant)
+        })
+        .unwrap();
+        host.click(10.0, 10.0, 0, "").unwrap();
+    }));
+    let payload = outcome.expect_err("re-entering the leased root view must fail");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.contains("while it is already being updated"),
+        "unexpected failure: {message}"
+    );
 }
 
 #[test]
