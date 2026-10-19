@@ -1,3 +1,4 @@
+use super::glyph_store::GlyphRunStyle;
 use crate::{
     App, Bounds, DevicePixels, Half, Hsla, LineLayout, Pixels, Point, RenderGlyphParams, Result,
     SharedString, StrikethroughStyle, TextAlign, UnderlineStyle, Window, WrapBoundary,
@@ -531,7 +532,7 @@ fn paint_line(
     decoration_runs: &[DecorationRun],
     wrap_boundaries: &[WrapBoundary],
     window: &mut Window,
-    cx: &mut App,
+    _cx: &mut App,
     paint_underline: &mut dyn FnMut(
         Range<usize>,
         Point<Pixels>,
@@ -558,7 +559,8 @@ fn paint_line(
         let mut color = black();
         let mut current_underline: Option<(Point<Pixels>, UnderlineStyle, Range<usize>)> = None;
         let mut current_strikethrough: Option<(Point<Pixels>, StrikethroughStyle)> = None;
-        let text_system = cx.text_system().clone();
+        let mut glyph_line = window.begin_glyph_line();
+        let mut run_style: Option<GlyphRunStyle> = None;
         let mut glyph_origin = point(
             aligned_origin_x(
                 origin,
@@ -574,7 +576,8 @@ fn paint_line(
         let mut max_glyph_size = size(px(0.), px(0.));
         let mut first_glyph_x = origin.x;
         for (run_ix, run) in layout.runs.iter().enumerate() {
-            max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
+            max_glyph_size = window.glyph_font_bounds(run.font_id, layout.font_size).size;
+            let reach = window.glyph_reach(&mut glyph_line, max_glyph_size);
 
             for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
                 glyph_origin.x += glyph.position.x - prev_glyph_position.x;
@@ -727,28 +730,32 @@ fn paint_line(
                     );
                 }
 
-                let max_glyph_bounds = Bounds {
-                    origin: glyph_origin,
-                    size: max_glyph_size,
-                };
-
-                let content_mask = window.content_mask();
-                if max_glyph_bounds.intersects(&content_mask.bounds) {
-                    let vertical_offset = point(px(0.0), glyph.position.y);
+                let vertical_offset = point(px(0.0), glyph.position.y);
+                let glyph_position = glyph_origin + baseline_offset + vertical_offset;
+                if reach.contains(glyph_position.x, glyph_position.y) {
                     if glyph.is_emoji {
-                        window.paint_emoji(
-                            glyph_origin + baseline_offset + vertical_offset,
+                        window.paint_line_emoji(
+                            &glyph_line,
                             run.font_id,
+                            glyph_position,
                             glyph.id,
                             layout.font_size,
                         )?;
                     } else {
-                        window.paint_glyph(
-                            glyph_origin + baseline_offset + vertical_offset,
-                            run.font_id,
+                        if !run_style
+                            .as_ref()
+                            .is_some_and(|style| style.matches(run.font_id, color))
+                        {
+                            run_style =
+                                Some(window.glyph_run_style(run.font_id, layout.font_size, color));
+                        }
+                        let style = run_style.as_ref().expect("run style was just computed");
+                        window.paint_line_glyph(
+                            &glyph_line,
+                            style,
+                            glyph_position,
                             glyph.id,
                             layout.font_size,
-                            color,
                         )?;
                     }
                 }
@@ -801,8 +808,14 @@ fn paint_line_background(
     decoration_runs: &[DecorationRun],
     wrap_boundaries: &[WrapBoundary],
     window: &mut Window,
-    cx: &mut App,
+    _cx: &mut App,
 ) -> Result<()> {
+    if !decoration_runs
+        .iter()
+        .any(|run| run.background_color.is_some())
+    {
+        return Ok(());
+    }
     let line_bounds = line_paint_bounds(
         origin,
         layout,
@@ -816,7 +829,6 @@ fn paint_line_background(
         let mut wraps = wrap_boundaries.iter().peekable();
         let mut run_end = 0;
         let mut current_background: Option<(Point<Pixels>, Hsla)> = None;
-        let text_system = cx.text_system().clone();
         let mut glyph_origin = point(
             aligned_origin_x(
                 origin,
@@ -831,7 +843,7 @@ fn paint_line_background(
         let mut prev_glyph_position = Point::default();
         let mut max_glyph_size = size(px(0.), px(0.));
         for (run_ix, run) in layout.runs.iter().enumerate() {
-            max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
+            max_glyph_size = window.glyph_font_bounds(run.font_id, layout.font_size).size;
 
             for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
                 glyph_origin.x += glyph.position.x - prev_glyph_position.x;

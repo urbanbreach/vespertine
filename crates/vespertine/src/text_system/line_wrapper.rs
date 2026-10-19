@@ -61,7 +61,7 @@ impl LineWrapper {
         let mut last_candidate_ix = 0;
         let mut last_candidate_width = px(0.);
         let mut last_wrap_ix = 0;
-        let mut prev_c = '\0';
+        let mut prev_c: Option<char> = None;
         let mut index = 0;
         let mut candidates = fragments
             .iter()
@@ -71,31 +71,24 @@ impl LineWrapper {
             for candidate in candidates.by_ref() {
                 let ix = index;
                 index += candidate.len_utf8();
-                let mut new_prev_c = prev_c;
+                let new_prev_c;
                 let item_width = match candidate {
                     WrapBoundaryCandidate::Char { character: c } => {
                         if c == '\n' {
+                            prev_c = None;
                             continue;
                         }
 
-                        if Self::is_word_char(c) {
-                            if prev_c == ' ' && c != ' ' && first_non_whitespace_ix.is_some() {
-                                last_candidate_ix = ix;
-                                last_candidate_width = width;
-                            }
-                        } else {
-                            // CJK may not be space separated, e.g.: `Hello world你好世界`
-                            if c != ' ' && first_non_whitespace_ix.is_some() {
-                                last_candidate_ix = ix;
-                                last_candidate_width = width;
-                            }
+                        if Self::is_break_candidate(prev_c, c, first_non_whitespace_ix.is_some()) {
+                            last_candidate_ix = ix;
+                            last_candidate_width = width;
                         }
 
                         if c != ' ' && first_non_whitespace_ix.is_none() {
                             first_non_whitespace_ix = Some(ix);
                         }
 
-                        new_prev_c = c;
+                        new_prev_c = Some(c);
 
                         self.width_for_char(c)
                     }
@@ -103,7 +96,10 @@ impl LineWrapper {
                         width: element_width,
                         ..
                     } => {
-                        if prev_c == ' ' && first_non_whitespace_ix.is_some() {
+                        if Self::is_break_candidate_before_element(
+                            prev_c,
+                            first_non_whitespace_ix.is_some(),
+                        ) {
                             last_candidate_ix = ix;
                             last_candidate_width = width;
                         }
@@ -112,6 +108,8 @@ impl LineWrapper {
                             first_non_whitespace_ix = Some(ix);
                         }
 
+                        // An inline element clears the previous-character context.
+                        new_prev_c = None;
                         element_width
                     }
                 };
@@ -176,6 +174,9 @@ impl LineWrapper {
 
                     width += self.width_for_char(' ') * next_indent as f32;
 
+                    // The previous-character context is the physically preceding character, as in
+                    // the shaped-line walk, so both walks produce the same boundaries (TXT-001 R1).
+                    prev_c = new_prev_c;
                     return Some(Boundary::new(last_wrap_ix, next_indent));
                 }
 
@@ -391,7 +392,7 @@ impl LineWrapper {
         let mut last_candidate_ix = 0usize;
         let mut last_candidate_width = px(0.);
         let mut last_wrap_ix = 0usize;
-        let mut prev_c = '\0';
+        let mut prev_c: Option<char> = None;
         let mut indent: Option<u32> = None;
         let mut truncate_ix = 0usize;
 
@@ -420,7 +421,7 @@ impl LineWrapper {
                 last_candidate_ix = 0;
                 last_candidate_width = px(0.);
                 last_wrap_ix = ix + 1;
-                prev_c = '\0';
+                prev_c = None;
                 indent = None;
                 truncate_ix = ix + 1;
                 continue;
@@ -428,12 +429,7 @@ impl LineWrapper {
 
             let char_width = self.width_for_char(c);
 
-            if Self::is_word_char(c) {
-                if prev_c == ' ' && first_non_whitespace_ix.is_some() {
-                    last_candidate_ix = ix;
-                    last_candidate_width = width;
-                }
-            } else if c != ' ' && first_non_whitespace_ix.is_some() {
+            if Self::is_break_candidate(prev_c, c, first_non_whitespace_ix.is_some()) {
                 last_candidate_ix = ix;
                 last_candidate_width = width;
             }
@@ -489,7 +485,7 @@ impl LineWrapper {
                 }
             }
 
-            prev_c = c;
+            prev_c = Some(c);
         }
 
         // Text fits within max_lines without truncation.
@@ -538,6 +534,113 @@ impl LineWrapper {
 
         // Non-breaking glue characters
         matches!(c, '\u{202F}' | '\u{00A0}' | '\u{2011}')
+    }
+
+    /// The shared break-candidate rule (R3), used by `wrap_line`, `truncate_wrapped_line` and
+    /// the shaped-line wrap-boundary computation.
+    ///
+    /// Returns whether a line may break immediately before the character `c`. `prev` is the
+    /// character placed immediately before `c` on the line (`None` at the start of a line,
+    /// after a newline and after an inline element), and `content_exists` tells whether a
+    /// non-space character has already been placed on the line.
+    pub(crate) fn is_break_candidate(prev: Option<char>, c: char, content_exists: bool) -> bool {
+        if !content_exists || c == ' ' {
+            return false;
+        }
+        if Self::is_word_char(c) {
+            prev == Some(' ')
+        } else {
+            Self::is_break_permitted(prev, c)
+        }
+    }
+
+    /// Whether an inline element is a break candidate: it follows an ASCII space and content
+    /// already exists on the line. The element clears the previous-character context for the
+    /// character that follows it.
+    pub(crate) fn is_break_candidate_before_element(
+        prev: Option<char>,
+        content_exists: bool,
+    ) -> bool {
+        content_exists && prev == Some(' ')
+    }
+
+    /// Whether a break between `prev` and the non-word character `c` is permitted (R4).
+    fn is_break_permitted(prev: Option<char>, c: char) -> bool {
+        if Self::is_prohibited_line_start(c) {
+            return false;
+        }
+        let Some(prev) = prev else {
+            return true;
+        };
+        if Self::is_prohibited_line_end(prev) {
+            return false;
+        }
+        if prev == '\u{2014}' && c == '\u{2014}' {
+            return false;
+        }
+        !(Self::is_cjk_for_wrapping(prev)
+            && matches!(c, ',' | '.' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '%'))
+    }
+
+    /// Characters that never begin a wrapped line.
+    fn is_prohibited_line_start(c: char) -> bool {
+        matches!(
+            c,
+            // Ideographic and full-width stops, commas, colons, semicolons, question and
+            // exclamation marks, and half-width ideographic stops.
+            '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}' | '\u{FF1A}' | '\u{FF1B}'
+                | '\u{FF1F}' | '\u{FF01}' | '\u{FF61}' | '\u{FF64}'
+                // Closing brackets and quotation marks.
+                | '\u{FF09}' | '\u{FF3D}' | '\u{FF5D}' | '\u{300D}' | '\u{300F}' | '\u{3011}'
+                | '\u{3009}' | '\u{300B}' | '\u{3015}' | '\u{3017}' | '\u{3019}' | '\u{301B}'
+                | '\u{301E}' | '\u{301F}' | '\u{FF60}' | '\u{FF63}' | '\u{2019}' | '\u{201D}'
+                // Ellipses, middle dots, wave dash, doubled marks and iteration marks.
+                | '\u{2026}' | '\u{2025}' | '\u{30FB}' | '\u{FF65}' | '\u{301C}' | '\u{203C}'
+                | '\u{2047}' | '\u{2048}' | '\u{2049}' | '\u{3005}' | '\u{303B}' | '\u{309D}'
+                | '\u{309E}' | '\u{30FD}' | '\u{30FE}'
+                // Full-width percent sign.
+                | '\u{FF05}'
+        )
+    }
+
+    /// Characters that never end a wrapped line.
+    fn is_prohibited_line_end(c: char) -> bool {
+        matches!(
+            c,
+            '(' | '['
+                | '{'
+                | '\u{FF08}'
+                | '\u{FF3B}'
+                | '\u{FF5B}'
+                | '\u{300C}'
+                | '\u{300E}'
+                | '\u{3010}'
+                | '\u{3008}'
+                | '\u{300A}'
+                | '\u{3014}'
+                | '\u{3016}'
+                | '\u{3018}'
+                | '\u{301A}'
+                | '\u{301D}'
+                | '\u{FF5F}'
+                | '\u{FF62}'
+                | '\u{2018}'
+                | '\u{201C}'
+        )
+    }
+
+    /// CJK characters for the ASCII-after-CJK rule (R4d).
+    fn is_cjk_for_wrapping(c: char) -> bool {
+        matches!(
+            c,
+            '\u{3000}'..='\u{30FF}'
+                | '\u{3400}'..='\u{4DBF}'
+                | '\u{4E00}'..='\u{9FFF}'
+                | '\u{AC00}'..='\u{D7AF}'
+                | '\u{F900}'..='\u{FAFF}'
+                | '\u{FF00}'..='\u{FFEF}'
+                | '\u{20000}'..='\u{3FFFF}'
+        )
     }
 
     #[inline(always)]
@@ -1693,13 +1796,18 @@ mod tests {
         );
 
         // When base_indent + extra fits within wrap width (6 + 2 + 2 <= 10),
-        // the extra indent is applied and not clamped.
+        // the extra indent is applied and not clamped. Each continuation row holds the indent
+        // plus two columns, so the space after a full row starts its own row and the word that
+        // follows it, now a break candidate because its preceding space is the preceding
+        // character, starts the next one.
         //
         // Expected wrapped lines (10 columns):
         //   |      ab  |  (row 0: 6 spaces + "ab ", len 9)
         //   |        cd|  (row 1: 8 spaces + "cd", len 10)
-        //   |        ef|  (row 2: 8 spaces + "ef", len 10)
-        //   |        gh|  (row 3: 8 spaces + "gh", len 10)
+        //   |         |  (row 2: 8 spaces + " ")
+        //   |        ef|  (row 3: 8 spaces + "ef", len 10)
+        //   |         |  (row 4: 8 spaces + " ")
+        //   |        gh|  (row 5: 8 spaces + "gh", len 10)
         assert_eq!(
             wrapper
                 .wrap_line(
@@ -1711,7 +1819,8 @@ mod tests {
             &[
                 Boundary::new(9, 8),
                 Boundary::new(11, 8),
-                Boundary::new(13, 8),
+                Boundary::new(12, 8),
+                Boundary::new(14, 8),
                 Boundary::new(15, 8),
             ]
         );

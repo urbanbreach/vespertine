@@ -59,6 +59,8 @@ struct CosmicTextSystemState {
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
     system_font_fallback: String,
     missing_glyph_sink: Option<Arc<dyn MissingGlyphSink>>,
+    #[cfg(any(test, feature = "test-support"))]
+    retention: RetentionCounters,
 }
 
 struct LoadedFont {
@@ -129,19 +131,7 @@ impl CosmicTextSystem {
     }
 
     pub fn new(system_font_fallback: &str) -> Self {
-        let font_system = FontSystem::new();
-
-        Self(RwLock::new(CosmicTextSystemState {
-            font_system,
-            scratch: ShapeBuffer::default(),
-            swash_scale_context: ScaleContext::new(),
-            pending_glyph_images: HashMap::default(),
-            loaded_fonts: Vec::new(),
-            loaded_font_ids_by_key: HashMap::default(),
-            font_ids_by_family_cache: HashMap::default(),
-            system_font_fallback: system_font_fallback.to_string(),
-            missing_glyph_sink: None,
-        }))
+        Self::with_font_system(FontSystem::new(), system_font_fallback)
     }
 
     pub fn new_without_system_fonts(system_font_fallback: &str) -> Self {
@@ -149,7 +139,13 @@ impl CosmicTextSystem {
             "en-US".to_string(),
             cosmic_text::fontdb::Database::new(),
         );
+        Self::with_font_system(font_system, system_font_fallback)
+    }
 
+    /// Builds the backend around `font_system`. This is the only place that creates the
+    /// persistent shaping scratch buffer and the persistent outline-scaling context; both live
+    /// as long as the backend.
+    fn with_font_system(font_system: FontSystem, system_font_fallback: &str) -> Self {
         Self(RwLock::new(CosmicTextSystemState {
             font_system,
             scratch: ShapeBuffer::default(),
@@ -160,7 +156,95 @@ impl CosmicTextSystem {
             font_ids_by_family_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
             missing_glyph_sink: None,
+            #[cfg(any(test, feature = "test-support"))]
+            retention: RetentionCounters {
+                font_system_constructions: 1,
+                shape_buffer_constructions: 1,
+                scale_context_constructions: 1,
+                ..RetentionCounters::default()
+            },
         }))
+    }
+}
+
+/// Test-support view of the native resources the Linux backend retains (PRF-014).
+///
+/// Shaping on Linux is size-independent (harfrust works in font units and the line layout
+/// scales by the font size afterwards), so there is no size-specific shaping object and no
+/// size-keyed cache; the counters below prove that the objects that do exist are built once.
+///
+/// Shape-plan constructions are deliberately not counted: harfrust shape plans live in the
+/// cosmic-text `FontSystem`'s own `ShapeBuffer`, a private first-in-first-out cache of six plans
+/// keyed by (face, script, direction, feature set, language), and cosmic-text offers no hook
+/// that reports a plan construction. What this backend controls, and what the counters
+/// capture, is that the `FontSystem` that owns that buffer is never replaced
+/// (`font_system_constructions`), so the bounded plan cache is never thrown away between lines.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionCounters {
+    /// Loaded faces wrapped into the append-only, `FontId`-indexed face table. Each face is
+    /// wrapped exactly once, on first resolution or when a fallback face first shapes a line.
+    pub face_constructions: usize,
+    /// `swash::scale::ScaleContext` constructions (one per backend).
+    pub scale_context_constructions: usize,
+    /// Per-glyph scalers built from the retained scale context (a light view, not a cache miss).
+    pub scaler_builds: usize,
+    /// Persistent layout scratch `ShapeBuffer` constructions (one per backend).
+    pub shape_buffer_constructions: usize,
+    /// `cosmic_text::FontSystem` constructions (one per backend); it owns the shape-plan cache.
+    pub font_system_constructions: usize,
+}
+
+/// Sizes of the backend structures that hold shaping and rasterization state. None of them is
+/// keyed by font size, so none may grow when sizes vary.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionStructureSizes {
+    /// Entries of the append-only face table.
+    pub loaded_faces: usize,
+    /// Entries mapping (database face, font key) to a `FontId`.
+    pub loaded_font_keys: usize,
+    /// Entries of the per-family `FontId` cache.
+    pub family_cache_entries: usize,
+    /// Rendered glyph images waiting for `rasterize_glyph` after `glyph_raster_bounds`.
+    pub pending_glyph_images: usize,
+}
+
+/// Identity of the face behind a `FontId`: the font database id and the address of the shared
+/// face object. Equal values mean the same retained face object.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FaceIdentity {
+    pub database_id: cosmic_text::fontdb::ID,
+    pub face_address: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl CosmicTextSystem {
+    /// Construction counters of the retained native resources.
+    pub fn retention_counters(&self) -> RetentionCounters {
+        self.0.read().retention
+    }
+
+    /// Current sizes of the shaping and rasterization structures.
+    pub fn retention_structure_sizes(&self) -> RetentionStructureSizes {
+        let state = self.0.read();
+        RetentionStructureSizes {
+            loaded_faces: state.loaded_fonts.len(),
+            loaded_font_keys: state.loaded_font_ids_by_key.len(),
+            family_cache_entries: state.font_ids_by_family_cache.len(),
+            pending_glyph_images: state.pending_glyph_images.len(),
+        }
+    }
+
+    /// Identity of the retained face behind `font_id`, if the id is in the face table.
+    pub fn face_identity(&self, font_id: FontId) -> Option<FaceIdentity> {
+        let state = self.0.read();
+        let loaded_font = state.loaded_fonts.get(font_id.0)?;
+        Some(FaceIdentity {
+            database_id: loaded_font.font.id(),
+            face_address: Arc::as_ptr(&loaded_font.font) as usize,
+        })
     }
 }
 
@@ -206,6 +290,17 @@ impl PlatformTextSystem for CosmicTextSystem {
         let ix = find_best_match(font, candidates, &state)?;
 
         Ok(candidates[ix])
+    }
+
+    fn family_font_ids(&self, family: &str) -> Vec<FontId> {
+        // Same key as `font_id` with default features and no fallbacks, so the
+        // loaded faces are shared with ordinary lookups. Faces without a glyph
+        // for 'm' are skipped by `load_family`, matching what can be a primary font.
+        self.0
+            .write()
+            .load_family(family, &FontFeatures::default(), None)
+            .map(|ids| ids.to_vec())
+            .unwrap_or_default()
     }
 
     fn prewarm_fonts(&self, font_ids: &[FontId]) {
@@ -434,6 +529,10 @@ impl CosmicTextSystemState {
 
             let font_id = FontId(self.loaded_fonts.len());
             loaded_font_ids.push(font_id);
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.retention.face_constructions += 1;
+            }
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: cosmic_features.clone(),
@@ -523,6 +622,10 @@ impl CosmicTextSystemState {
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
         );
 
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.retention.scaler_builds += 1;
+        }
         let mut scaler = self
             .swash_scale_context
             .builder(font_ref)
@@ -583,6 +686,10 @@ impl CosmicTextSystemState {
                 .context("fallback font face not found in cosmic-text database")?;
 
             let font_id = FontId(self.loaded_fonts.len());
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.retention.face_constructions += 1;
+            }
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: CosmicFontFeatures::new(),

@@ -7695,6 +7695,7 @@ dependencies = [
  "vespertine_bench_metrics",
  "vespertine_collections",
  "vespertine_util",
+ "vespertine_wgpu",
  "wgpu",
  "zed-font-kit",
 ]

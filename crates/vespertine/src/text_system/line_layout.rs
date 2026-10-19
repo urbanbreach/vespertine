@@ -12,10 +12,13 @@ use std::{
 };
 use vespertine_collections::FxHashMap;
 
-use super::LineWrapper;
+use super::{
+    LineWrapper,
+    shape_cache::{NumericOutcome, ShapeCaches},
+};
 
 /// A laid out and styled line of text
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct LineLayout {
     /// The font size for this line
     pub font_size: Pixels,
@@ -205,7 +208,7 @@ impl LineLayout {
             glyph_ix: 0,
         };
         let mut last_boundary_x = px(0.);
-        let mut prev_ch = '\0';
+        let mut prev_ch: Option<char> = None;
         let mut glyphs = self
             .runs
             .iter()
@@ -224,21 +227,15 @@ impl LineLayout {
 
         while let Some((boundary, ch, x)) = glyphs.next() {
             if ch == '\n' {
+                prev_ch = None;
                 continue;
             }
 
-            // Here is very similar to `LineWrapper::wrap_line` to determine text wrapping,
-            // but there are some differences, so we have to duplicate the code here.
-            if LineWrapper::is_word_char(ch) {
-                if prev_ch == ' ' && ch != ' ' && first_non_whitespace_ix.is_some() {
-                    last_candidate_ix = Some(boundary);
-                    last_candidate_x = x;
-                }
-            } else {
-                if ch != ' ' && first_non_whitespace_ix.is_some() {
-                    last_candidate_ix = Some(boundary);
-                    last_candidate_x = x;
-                }
+            // This applies the same candidate rule as `LineWrapper::wrap_line`; the two walks
+            // differ only in how widths are measured.
+            if LineWrapper::is_break_candidate(prev_ch, ch, first_non_whitespace_ix.is_some()) {
+                last_candidate_ix = Some(boundary);
+                last_candidate_x = x;
             }
 
             if ch != ' ' && first_non_whitespace_ix.is_none() {
@@ -265,7 +262,7 @@ impl LineLayout {
                 }
                 boundaries.push(last_boundary);
             }
-            prev_ch = ch;
+            prev_ch = Some(ch);
         }
 
         boundaries
@@ -463,6 +460,8 @@ pub(crate) struct LineLayoutCache {
     font_generation: Arc<AtomicUsize>,
     /// Records the generation represented by both frame caches.
     cached_font_generation: AtomicUsize,
+    /// Recent shapes and numeric shaping, shared with every window text system of the text system.
+    shape_caches: Arc<ShapeCaches>,
 }
 
 #[derive(Default)]
@@ -493,10 +492,48 @@ pub(crate) struct LineLayoutIndex {
     wrapped_lines_by_hash_index: usize,
 }
 
+impl LineLayoutIndex {
+    /// Position in the used string-keyed line list.
+    #[cfg(test)]
+    pub(crate) fn lines_position(&self) -> usize {
+        self.lines_index
+    }
+
+    fn of(font_generation: usize, frame: &FrameCache) -> Self {
+        Self {
+            font_generation,
+            lines_index: frame.used_lines.len(),
+            wrapped_lines_index: frame.used_wrapped_lines.len(),
+            lines_by_hash_index: frame.used_lines_by_hash.len(),
+            wrapped_lines_by_hash_index: frame.used_wrapped_lines_by_hash.len(),
+        }
+    }
+}
+
+/// Moves every entry of `other` into `kept`, keeping the larger map to minimize movement.
+/// Entries already in `kept` (the finished frame) win over `other` (older survivors).
+fn merge_into_larger<K, V>(kept: &mut FxHashMap<K, V>, other: &mut FxHashMap<K, V>)
+where
+    K: Eq + Hash,
+{
+    if other.len() > kept.len() {
+        std::mem::swap(kept, other);
+        // `other` now holds the finished frame's entries, which must win.
+        for (key, value) in other.drain() {
+            kept.insert(key, value);
+        }
+    } else {
+        for (key, value) in other.drain() {
+            kept.entry(key).or_insert(value);
+        }
+    }
+}
+
 impl LineLayoutCache {
-    pub fn new(
+    pub(crate) fn new(
         platform_text_system: Arc<dyn PlatformTextSystem>,
         font_generation: Arc<AtomicUsize>,
+        shape_caches: Arc<ShapeCaches>,
     ) -> Self {
         let cached_font_generation = font_generation.load(Ordering::Acquire);
         Self {
@@ -505,30 +542,59 @@ impl LineLayoutCache {
             platform_text_system,
             font_generation,
             cached_font_generation: AtomicUsize::new(cached_font_generation),
+            shape_caches,
         }
+    }
+
+    /// Shapes a line that missed the frame cache: recent shapes first, then numeric assembly,
+    /// then the platform. No cache lock is held while the platform shapes.
+    fn shape_line(
+        &self,
+        font_generation: usize,
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+    ) -> LineLayout {
+        let caches = &self.shape_caches;
+        if let Some(layout) = caches.recent_lookup(font_generation, text, font_size, runs) {
+            return layout;
+        }
+        let layout = match caches.numeric_layout(
+            self.platform_text_system.as_ref(),
+            font_generation,
+            text,
+            font_size,
+            runs,
+        ) {
+            NumericOutcome::Layout(layout) => layout,
+            NumericOutcome::Platform => {
+                caches.platform_shape(self.platform_text_system.as_ref(), text, font_size, runs)
+            }
+        };
+        caches.recent_insert(font_generation, text, font_size, runs, &layout);
+        layout
     }
 
     pub fn layout_index(&self) -> LineLayoutIndex {
         let font_generation = self.clear_if_font_generation_changed();
         let frame = self.current_frame.read();
-        LineLayoutIndex {
-            font_generation,
-            lines_index: frame.used_lines.len(),
-            wrapped_lines_index: frame.used_wrapped_lines.len(),
-            lines_by_hash_index: frame.used_lines_by_hash.len(),
-            wrapped_lines_by_hash_index: frame.used_wrapped_lines_by_hash.len(),
-        }
+        LineLayoutIndex::of(font_generation, &frame)
     }
 
-    pub fn reuse_layouts(&self, range: Range<LineLayoutIndex>) {
+    /// Replays the used-entry range of the previous frame into the current frame and returns the
+    /// range the replayed entries occupy in the current frame (the range rebased to its
+    /// destination coordinates, stamped with the current font generation). Replaying a range
+    /// recorded under an earlier font generation reuses nothing and returns an empty range.
+    pub fn reuse_layouts(&self, range: Range<LineLayoutIndex>) -> Range<LineLayoutIndex> {
         let font_generation = self.clear_if_font_generation_changed();
+        let current_frame = &mut *self.current_frame.write();
+        let previous_frame = &mut *self.previous_frame.lock();
+        let start = LineLayoutIndex::of(font_generation, current_frame);
         if range.start.font_generation != font_generation
             || range.end.font_generation != font_generation
         {
-            return;
+            return start.clone()..start;
         }
-        let mut current_frame = &mut *self.current_frame.write();
-        let mut previous_frame = &mut *self.previous_frame.lock();
 
         for key in &previous_frame.used_lines[range.start.lines_index..range.end.lines_index] {
             if let Some((key, line)) = previous_frame.lines.remove_entry(key) {
@@ -563,6 +629,9 @@ impl LineLayoutCache {
             }
             current_frame.used_wrapped_lines_by_hash.push(key.clone());
         }
+
+        let end = LineLayoutIndex::of(font_generation, current_frame);
+        start..end
     }
 
     pub fn truncate_layouts(&self, index: LineLayoutIndex) {
@@ -583,20 +652,43 @@ impl LineLayoutCache {
             .truncate(index.wrapped_lines_by_hash_index);
     }
 
+    /// Rolls the frame caches over. Layouts of the previous frame that the finishing frame did
+    /// not look up but that something else still holds (a measurement, a retained element) stay
+    /// cached; everything else leaves.
     pub fn finish_frame(&self) {
         let _font_generation = self.clear_if_font_generation_changed();
         let mut curr_frame = self.current_frame.write();
         let mut prev_frame = self.previous_frame.lock();
+        // The finished frame becomes the previous one; `curr_frame` now holds the entries the
+        // finished frame did not look up.
         std::mem::swap(&mut *prev_frame, &mut *curr_frame);
-        curr_frame.lines.clear();
-        curr_frame.wrapped_lines.clear();
         curr_frame.used_lines.clear();
         curr_frame.used_wrapped_lines.clear();
-
-        curr_frame.lines_by_hash.clear();
-        curr_frame.wrapped_lines_by_hash.clear();
         curr_frame.used_lines_by_hash.clear();
         curr_frame.used_wrapped_lines_by_hash.clear();
+
+        // A wrapped layout holds the unwrapped line it was wrapped from, so wrappers go first:
+        // releasing one can leave its line unreferenced.
+        curr_frame
+            .wrapped_lines
+            .retain(|_, layout| Arc::strong_count(layout) > 1);
+        curr_frame
+            .wrapped_lines_by_hash
+            .retain(|_, layout| Arc::strong_count(layout) > 1);
+        curr_frame
+            .lines
+            .retain(|_, layout| Arc::strong_count(layout) > 1);
+        curr_frame
+            .lines_by_hash
+            .retain(|_, layout| Arc::strong_count(layout) > 1);
+
+        merge_into_larger(&mut prev_frame.lines, &mut curr_frame.lines);
+        merge_into_larger(&mut prev_frame.wrapped_lines, &mut curr_frame.wrapped_lines);
+        merge_into_larger(&mut prev_frame.lines_by_hash, &mut curr_frame.lines_by_hash);
+        merge_into_larger(
+            &mut prev_frame.wrapped_lines_by_hash,
+            &mut curr_frame.wrapped_lines_by_hash,
+        );
     }
 
     pub fn layout_wrapped_line<Text>(
@@ -676,7 +768,7 @@ impl LineLayoutCache {
         Text: AsRef<str>,
         SharedString: From<Text>,
     {
-        let _font_generation = self.clear_if_font_generation_changed();
+        let font_generation = self.clear_if_font_generation_changed();
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
@@ -697,9 +789,7 @@ impl LineLayoutCache {
             layout
         } else {
             let text = SharedString::from(text);
-            let mut layout = self
-                .platform_text_system
-                .layout_line(&text, font_size, runs);
+            let mut layout = self.shape_line(font_generation, &text, font_size, runs);
 
             if let Some(force_width) = force_width {
                 apply_force_width_to_layout(&mut layout, force_width);
@@ -793,7 +883,7 @@ impl LineLayoutCache {
         force_width: Option<Pixels>,
         materialize_text: impl FnOnce() -> SharedString,
     ) -> Arc<LineLayout> {
-        let _font_generation = self.clear_if_font_generation_changed();
+        let font_generation = self.clear_if_font_generation_changed();
         let key_ref = HashedCacheKeyRef {
             text_hash,
             text_len,
@@ -848,9 +938,7 @@ impl LineLayoutCache {
         }
 
         let text = materialize_text();
-        let mut layout = self
-            .platform_text_system
-            .layout_line(&text, font_size, runs);
+        let mut layout = self.shape_line(font_generation, &text, font_size, runs);
 
         if let Some(force_width) = force_width {
             apply_force_width_to_layout(&mut layout, force_width);
@@ -870,6 +958,32 @@ impl LineLayoutCache {
             .insert(key.clone(), layout.clone());
         current_frame.used_lines_by_hash.push(key);
         layout
+    }
+
+    /// Entry counts of the frame caches: `[current lines, current wrapped lines, previous lines,
+    /// previous wrapped lines]` (string-keyed and hash-keyed entries together).
+    #[cfg(test)]
+    pub(crate) fn cached_entry_counts(&self) -> [usize; 4] {
+        let current = self.current_frame.read();
+        let previous = self.previous_frame.lock();
+        [
+            current.lines.len() + current.lines_by_hash.len(),
+            current.wrapped_lines.len() + current.wrapped_lines_by_hash.len(),
+            previous.lines.len() + previous.lines_by_hash.len(),
+            previous.wrapped_lines.len() + previous.wrapped_lines_by_hash.len(),
+        ]
+    }
+
+    /// Used-entry list lengths of the current frame.
+    #[cfg(test)]
+    pub(crate) fn used_entry_counts(&self) -> [usize; 4] {
+        let current = self.current_frame.read();
+        [
+            current.used_lines.len(),
+            current.used_wrapped_lines.len(),
+            current.used_lines_by_hash.len(),
+            current.used_wrapped_lines_by_hash.len(),
+        ]
     }
 
     fn clear_if_font_generation_changed(&self) -> usize {
@@ -1186,5 +1300,417 @@ mod tests {
 
         let positions = glyph_x_positions(&layout);
         assert_eq!(positions, vec![0.5, 0.5]);
+    }
+}
+
+#[cfg(test)]
+mod wrap_candidate_tests {
+    use super::*;
+    use crate::{
+        Bounds, DevicePixels, Font, FontMetrics, IndentAdjustment, LineFragment, RenderGlyphParams,
+        Result, TextRenderingMode, TextSystem, TruncateFrom, size,
+    };
+    use std::borrow::Cow;
+
+    /// A platform text system in which every character advances by the same width, regardless
+    /// of the character and of the font size (the "fixed-advance shaper").
+    struct FixedAdvanceTextSystem {
+        advance: Pixels,
+    }
+
+    impl PlatformTextSystem for FixedAdvanceTextSystem {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, _descriptor: &Font) -> Result<FontId> {
+            Ok(FontId(0))
+        }
+
+        fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
+            FontMetrics {
+                units_per_em: 1000,
+                ascent: 1000.0,
+                descent: -250.0,
+                line_gap: 0.0,
+                underline_position: -100.0,
+                underline_thickness: 50.0,
+                cap_height: 700.0,
+                x_height: 500.0,
+                bounding_box: Bounds {
+                    origin: point(0.0, -250.0),
+                    size: size(1000.0, 1250.0),
+                },
+            }
+        }
+
+        fn typographic_bounds(&self, _font_id: FontId, _glyph_id: GlyphId) -> Result<Bounds<f32>> {
+            Ok(Bounds {
+                origin: point(0.0, 0.0),
+                size: size(1000.0, 1000.0),
+            })
+        }
+
+        fn advance(&self, _font_id: FontId, _glyph_id: GlyphId) -> Result<Size<f32>> {
+            Ok(size(self.advance.0, 0.0))
+        }
+
+        fn glyph_for_char(&self, _font_id: FontId, _ch: char) -> Option<GlyphId> {
+            Some(GlyphId(0))
+        }
+
+        fn glyph_raster_bounds(&self, _params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+            Ok(Default::default())
+        }
+
+        fn rasterize_glyph(
+            &self,
+            _params: &RenderGlyphParams,
+            raster_bounds: Bounds<DevicePixels>,
+        ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+            Ok((raster_bounds.size, Vec::new()))
+        }
+
+        fn layout_line(&self, text: &str, font_size: Pixels, _runs: &[FontRun]) -> LineLayout {
+            let glyphs: Vec<ShapedGlyph> = text
+                .char_indices()
+                .enumerate()
+                .map(|(column, (index, _))| ShapedGlyph {
+                    id: GlyphId(0),
+                    position: point(self.advance * column as f32, px(0.)),
+                    index,
+                    is_emoji: false,
+                })
+                .collect();
+            let width = self.advance * glyphs.len() as f32;
+            let runs = if glyphs.is_empty() {
+                Vec::new()
+            } else {
+                vec![ShapedRun {
+                    font_id: FontId(0),
+                    glyphs,
+                }]
+            };
+            LineLayout {
+                font_size,
+                width,
+                ascent: font_size,
+                descent: font_size * 0.25,
+                runs,
+                len: text.len(),
+            }
+        }
+
+        fn recommended_rendering_mode(
+            &self,
+            _font_id: FontId,
+            _font_size: Pixels,
+        ) -> TextRenderingMode {
+            TextRenderingMode::Grayscale
+        }
+    }
+
+    const CELL: f32 = 8.;
+
+    fn fixed_text_system(cell: f32) -> Arc<TextSystem> {
+        Arc::new(TextSystem::new(Arc::new(FixedAdvanceTextSystem {
+            advance: px(cell),
+        })))
+    }
+
+    fn char_index(text: &str, byte_ix: usize) -> usize {
+        text[..byte_ix].chars().count()
+    }
+
+    /// Boundaries (as character indices) chosen by the fragment wrapper.
+    fn fragment_boundaries(text: &str, width: f32, cell: f32) -> Vec<usize> {
+        let mut wrapper = LineWrapper::new(FontId(0), px(16.), fixed_text_system(cell));
+        let fragments = [LineFragment::text(text)];
+        let boundaries: Vec<usize> = wrapper
+            .wrap_line(&fragments, px(width), IndentAdjustment::NoIndent)
+            .map(|boundary| char_index(text, boundary.ix))
+            .collect();
+        boundaries
+    }
+
+    /// Boundaries (as character indices) chosen by the shaped-line wrap computation.
+    fn shaped_boundaries(text: &str, width: f32, cell: f32) -> Vec<usize> {
+        let layout = FixedAdvanceTextSystem { advance: px(cell) }.layout_line(text, px(16.), &[]);
+        layout
+            .compute_wrap_boundaries(text, px(width), None)
+            .iter()
+            .map(|boundary| {
+                char_index(
+                    text,
+                    layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index,
+                )
+            })
+            .collect()
+    }
+
+    /// Asserts that both wrapping paths break `text` exactly at `expected` (character indices).
+    fn assert_wraps_at(text: &str, width: f32, expected: &[usize]) {
+        assert_eq!(
+            fragment_boundaries(text, width, CELL),
+            expected,
+            "fragment wrapper, {text:?} at width {width}"
+        );
+        assert_eq!(
+            shaped_boundaries(text, width, CELL),
+            expected,
+            "shaped-line wrap boundaries, {text:?} at width {width}"
+        );
+    }
+
+    /// Wraps with both paths (asserting they agree) and returns the resulting lines.
+    fn wrapped_lines(text: &str, width: f32, cell: f32) -> Vec<String> {
+        let from_fragments = fragment_boundaries(text, width, cell);
+        let from_shaped = shaped_boundaries(text, width, cell);
+        assert_eq!(
+            from_fragments, from_shaped,
+            "the two paths disagree for {text:?} at width {width}"
+        );
+        let chars: Vec<char> = text.chars().collect();
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for boundary in from_fragments {
+            lines.push(chars[start..boundary].iter().collect());
+            start = boundary;
+        }
+        lines.push(chars[start..].iter().collect());
+        lines
+    }
+
+    #[test]
+    fn a1_closing_quote_stays_with_its_word() {
+        assert_wraps_at("aaa aaaa.\"", 72., &[4]);
+    }
+
+    #[test]
+    fn a2_latin_openers_and_adjacent_cjk() {
+        assert_wraps_at("aaa aaaaa!", 72., &[4]);
+        assert_wraps_at("aaa (aaaa)", 72., &[4]);
+        assert_wraps_at("aaaa \"bbbb", 72., &[5]);
+        assert_wraps_at("今天的天气非常好我们去公", 72., &[9]);
+    }
+
+    #[test]
+    fn a3_comma_and_question_mark_never_start_a_line() {
+        assert_wraps_at("今天的天气非常好，我们", 68., &[7]);
+        assert_wraps_at("今天的天气非常好,我们", 68., &[7]);
+        assert_wraps_at("今天的天气非常好?我们", 68., &[7]);
+        assert_wraps_at("aaa aaaaa,", 72., &[4]);
+    }
+
+    #[test]
+    fn a4_prohibited_line_start_characters() {
+        let prohibited_line_start = [
+            '\u{3001}', '\u{3002}', '\u{FF0C}', '\u{FF0E}', '\u{FF1A}', '\u{FF1B}', '\u{FF1F}',
+            '\u{FF01}', '\u{FF61}', '\u{FF64}', '\u{FF09}', '\u{FF3D}', '\u{FF5D}', '\u{300D}',
+            '\u{300F}', '\u{3011}', '\u{3009}', '\u{300B}', '\u{3015}', '\u{3017}', '\u{3019}',
+            '\u{301B}', '\u{301E}', '\u{301F}', '\u{FF60}', '\u{FF63}', '\u{2019}', '\u{201D}',
+            '\u{2026}', '\u{2025}', '\u{30FB}', '\u{FF65}', '\u{301C}', '\u{203C}', '\u{2047}',
+            '\u{2048}', '\u{2049}', '\u{3005}', '\u{303B}', '\u{309D}', '\u{309E}', '\u{30FD}',
+            '\u{30FE}', '\u{FF05}',
+        ];
+        // Control: an ordinary ninth character begins the second line.
+        assert_wraps_at("一二三四五六七八九", 64., &[8]);
+        for s in prohibited_line_start {
+            // Eight cells fit; `s` would begin the second line, so the break moves one earlier.
+            let text = format!("一二三四五六七八{s}");
+            assert_wraps_at(&text, 64., &[7]);
+        }
+    }
+
+    #[test]
+    fn a4_prohibited_line_end_characters() {
+        let prohibited_line_end = [
+            '(', '[', '{', '\u{FF08}', '\u{FF3B}', '\u{FF5B}', '\u{300C}', '\u{300E}', '\u{3010}',
+            '\u{3008}', '\u{300A}', '\u{3014}', '\u{3016}', '\u{3018}', '\u{301A}', '\u{301D}',
+            '\u{FF5F}', '\u{FF62}', '\u{2018}', '\u{201C}',
+        ];
+        // Control: a character that may end a line stays on the first line.
+        assert_wraps_at("一二三四五六七八一", 64., &[8]);
+        for e in prohibited_line_end {
+            // `e` is the eighth (last fitting) cell and may not end the line.
+            let text = format!("一二三四五六七{e}一");
+            // U+2018 is a word character, so no candidate precedes it directly after CJK text
+            // and the break falls before the preceding character instead.
+            let expected: &[usize] = if e == '\u{2018}' { &[6] } else { &[7] };
+            assert_wraps_at(&text, 64., expected);
+        }
+    }
+
+    #[test]
+    fn a4_runs_of_prohibited_characters_still_progress() {
+        assert_wraps_at("((((((((((", 36., &[4, 8]);
+        assert_wraps_at("、、、、、、、、、、", 36., &[4, 8]);
+    }
+
+    #[test]
+    fn a5_paths_wrap_before_slashes() {
+        assert_wraps_at("aa/bb/cc/dd", 36., &[2, 5, 8]);
+    }
+
+    #[test]
+    fn a6_em_dash_pair_is_never_split() {
+        let pair = "一二三四五六七\u{2014}\u{2014}八";
+        assert_wraps_at(pair, 68., &[7]);
+        let single = "一二三四五六七\u{2014}八九";
+        assert_wraps_at(single, 68., &[8]);
+    }
+
+    #[test]
+    fn a7_inline_element_clears_previous_character() {
+        // The rule itself: an opening bracket holds on to the next character, unless an inline
+        // element separates them (the element clears the previous-character context).
+        assert!(!LineWrapper::is_break_candidate(Some('（'), '我', true));
+        assert!(LineWrapper::is_break_candidate(None, '我', true));
+
+        let fragments = [
+            LineFragment::text("看（"),
+            LineFragment::element(px(8.), 1),
+            LineFragment::text("我们一起散步"),
+        ];
+        let mut wrapper = LineWrapper::new(FontId(0), px(16.), fixed_text_system(CELL));
+        let boundaries: Vec<usize> = wrapper
+            .wrap_line(&fragments, px(28.), IndentAdjustment::NoIndent)
+            .map(|boundary| boundary.ix)
+            .collect();
+        // 看 and （ are three bytes each and the element is one byte, so index 7 is the
+        // character right after the element (without the reset it would be 3, before （).
+        assert_eq!(boundaries, vec![7, 16]);
+    }
+
+    #[test]
+    fn a8_ascii_question_mark_after_cjk_range_boundaries() {
+        let cases = [
+            ('\u{2FFF}', false),
+            ('\u{3000}', true),
+            ('\u{30FF}', true),
+            ('\u{3400}', true),
+            ('\u{4DBF}', true),
+            ('\u{4E00}', true),
+            ('\u{9FFF}', true),
+            ('\u{AC00}', true),
+            ('\u{D7AF}', true),
+            ('\u{F900}', true),
+            ('\u{FAFF}', true),
+            ('\u{FF00}', true),
+            ('\u{FFEF}', true),
+            ('\u{20000}', true),
+        ];
+        for (before, is_cjk) in cases {
+            // The question mark overflows the line; it is kept with a CJK character (the break
+            // moves before that character) but may start a line after any other character.
+            let text = format!("一一一一一一一{before}?");
+            let expected: &[usize] = if is_cjk { &[7] } else { &[8] };
+            assert_wraps_at(&text, 64., expected);
+        }
+        assert_wraps_at("一一一一一一一a?", 64., &[8]);
+    }
+
+    #[test]
+    fn a9_wrapped_truncation_uses_the_same_candidates() {
+        let cases = [
+            (
+                "今天的天气非常好，我们一起去公园散步吧",
+                68.,
+                "今天的天气非常好，我们一起去…",
+            ),
+            (
+                "一二三四五六七（八九十甲乙丙丁戊己",
+                64.,
+                "一二三四五六七（八九十甲乙丙…",
+            ),
+        ];
+        for (text, width, expected) in cases {
+            // Wrapping puts the first break before the comma's/bracket's holder, i.e. at 7...
+            assert_eq!(fragment_boundaries(text, width, CELL)[0], 7);
+            assert_eq!(shaped_boundaries(text, width, CELL)[0], 7);
+
+            // ...so the second (last allowed) line starts there and holds seven cells.
+            let mut wrapper = LineWrapper::new(FontId(0), px(16.), fixed_text_system(CELL));
+            let (truncated, _) = wrapper.truncate_wrapped_line(
+                text.into(),
+                px(width),
+                2,
+                "…",
+                &[],
+                TruncateFrom::End,
+            );
+            assert_eq!(truncated.as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn a10_mixed_latin_and_cjk() {
+        assert_wraps_at("Hello world你好世界", 100., &[12]);
+        assert_wraps_at("Hello world，", 88., &[6]);
+    }
+
+    #[test]
+    fn fid_txt_001_1_latin_expected_lines() {
+        assert_eq!(wrapped_lines("aaa aaaa.\"", 76., 8.), ["aaa ", "aaaa.\""]);
+        assert_eq!(wrapped_lines("aaa aaaa.\"", 140., 8.), ["aaa aaaa.\""]);
+        assert_eq!(wrapped_lines("aaa aaaaa!", 76., 8.), ["aaa ", "aaaaa!"]);
+        assert_eq!(wrapped_lines("aaa (aaaa)", 76., 8.), ["aaa ", "(aaaa)"]);
+        assert_eq!(wrapped_lines("aaaa \"bbbb", 76., 8.), ["aaaa ", "\"bbbb"]);
+    }
+
+    #[test]
+    fn fid_txt_001_2_cjk_expected_lines() {
+        const T1: &str = "今天的天气非常好，我们一起去公园散步吧。";
+        const T2: &str = "我用（新方法）重写了程序：速度提升了８％，超出预期……";
+        const T3: &str = "好吗？我们走吧。「新」方法真好！";
+
+        assert_eq!(
+            wrapped_lines(T1, 170., 20.),
+            ["今天的天气非常", "好，我们一起去公", "园散步吧。"]
+        );
+        assert_eq!(
+            wrapped_lines(T2, 70., 20.),
+            [
+                "我用",
+                "（新方",
+                "法）重",
+                "写了程",
+                "序：速",
+                "度提升",
+                "了",
+                "８％，",
+                "超出预",
+                "期……"
+            ]
+        );
+        assert_eq!(
+            wrapped_lines(T2, 130., 20.),
+            [
+                "我用（新方",
+                "法）重写了程",
+                "序：速度提升",
+                "了８％，超出",
+                "预期……"
+            ]
+        );
+        assert_eq!(
+            wrapped_lines(T2, 110., 20.),
+            [
+                "我用（新方",
+                "法）重写了",
+                "程序：速度",
+                "提升了",
+                "８％，超出",
+                "预期……"
+            ]
+        );
+        assert_eq!(
+            wrapped_lines(T3, 110., 20.),
+            ["好吗？我们", "走吧。", "「新」方法", "真好！"]
+        );
     }
 }

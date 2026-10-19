@@ -1,16 +1,33 @@
 mod font_fallbacks;
 mod font_features;
+mod font_registration;
+pub(crate) mod glyph_store;
 mod line;
 mod line_layout;
 mod line_wrapper;
+mod resolved_fonts;
+mod shape_cache;
+#[cfg(test)]
+mod shape_tests;
+mod style_stack;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_font;
+mod typography;
 
 pub use font_fallbacks::*;
 pub use font_features::*;
+pub use font_registration::*;
+#[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+pub use glyph_store::GlyphPaintCounters;
 pub use line::*;
 pub use line_layout::*;
 pub use line_wrapper::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, feature = "test-support"))]
+pub use shape_cache::ShapeStats;
+pub(crate) use style_stack::TextStyleStack;
+pub use typography::*;
 
 use crate::{
     Bounds, DevicePixels, Hsla, Pixels, PlatformTextSystem, Point, Result, SharedString, Size,
@@ -21,6 +38,7 @@ use core::fmt;
 use derive_more::{Add, Deref, FromStr, Sub};
 use itertools::Itertools;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
+use shape_cache::ShapeCaches;
 use smallvec::{SmallVec, smallvec};
 use std::{
     borrow::Cow,
@@ -236,6 +254,10 @@ pub struct TextSystem {
     font_runs_pool: Mutex<Vec<Vec<FontRun>>>,
     fallback_font_stack: SmallVec<[Font; 2]>,
     font_generation: Arc<AtomicUsize>,
+    /// Successful resolutions of requests whose own family is missing (the fallback stack was
+    /// walked), keyed by the full original request. Cleared when fonts are added.
+    fallback_resolutions: RwLock<FxHashMap<Font, FontId>>,
+    shape_caches: Arc<ShapeCaches>,
     missing_glyph_reporter: Arc<MissingGlyphReporter>,
     missing_glyph_receiver: Mutex<Option<MissingGlyphReceiver>>,
 }
@@ -266,6 +288,8 @@ impl TextSystem {
                 font("Arial"), // macOS, Windows
             ],
             font_generation: Arc::default(),
+            fallback_resolutions: RwLock::default(),
+            shape_caches: Arc::default(),
             missing_glyph_reporter: Arc::new(MissingGlyphReporter {
                 generation: missing_glyph_generation.clone(),
                 sender,
@@ -276,6 +300,24 @@ impl TextSystem {
                 receiver,
             })),
         }
+    }
+
+    /// Counters of the shaping caches of this text system (platform line shapes, recent-shape
+    /// hits, numeric synthesis). Test support only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shape_stats(&self) -> ShapeStats {
+        self.shape_caches.stats()
+    }
+
+    /// Enables or disables numeric shaping (PRF-013). Test support only.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_numeric_shaping_enabled(&self, enabled: bool) {
+        self.shape_caches.set_numeric_enabled(enabled);
+    }
+
+    /// The current font generation; advances once per successful [`Self::add_fonts`].
+    pub fn font_generation(&self) -> usize {
+        self.font_generation.load(Ordering::Acquire)
     }
 
     /// Get sorted, unique font family names available to the platform text system.
@@ -295,6 +337,7 @@ impl TextSystem {
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         self.platform_text_system.add_fonts(fonts)?;
         self.font_ids_by_font.write().clear();
+        self.fallback_resolutions.write().clear();
         self.missing_glyph_reporter.reset();
         self.font_generation.fetch_add(1, Ordering::Release);
         Ok(())
@@ -342,10 +385,15 @@ impl TextSystem {
         if let Some(font_id) = font_id {
             font_id
         } else {
+            let generation = self.font_generation.load(Ordering::Acquire);
             let font_id = self.platform_text_system.font_id(font);
-            self.font_ids_by_font
-                .write()
-                .insert(font.clone(), clone_font_id_result(&font_id));
+            // A font added while the platform was resolving makes this answer stale: it would
+            // otherwise survive the cache clear of `add_fonts`.
+            if self.font_generation.load(Ordering::Acquire) == generation {
+                self.font_ids_by_font
+                    .write()
+                    .insert(font.clone(), clone_font_id_result(&font_id));
+            }
             font_id
         }
     }
@@ -368,12 +416,50 @@ impl TextSystem {
     ///
     /// Panics if the font and none of the fallbacks can be resolved.
     pub fn resolve_font(&self, font: &Font) -> FontId {
+        let generation = self.font_generation.load(Ordering::Acquire);
+        if let Some(font_id) = resolved_fonts::lookup(&self.platform_text_system, generation, font)
+        {
+            return font_id;
+        }
+        let font_id = self.resolve_font_uncached(font);
+        resolved_fonts::remember(&self.platform_text_system, generation, font, font_id);
+        font_id
+    }
+
+    fn resolve_font_uncached(&self, font: &Font) -> FontId {
         if let Ok(font_id) = self.font_id(font) {
             return font_id;
         }
+        if let Some(font_id) = self.fallback_resolutions.read().get(font) {
+            return *font_id;
+        }
+
+        let generation = self.font_generation.load(Ordering::Acquire);
+        let remember = |font_id: FontId| {
+            if self.font_generation.load(Ordering::Acquire) == generation {
+                self.fallback_resolutions
+                    .write()
+                    .insert(font.clone(), font_id);
+            }
+            font_id
+        };
         for fallback in &self.fallback_font_stack {
+            // The fallback family keeps the requested features, per-glyph fallbacks, weight and
+            // style wherever it can honor them; only then is its own plain descriptor tried.
+            let styled = Font {
+                family: fallback.family.clone(),
+                features: font.features.clone(),
+                fallbacks: font.fallbacks.clone(),
+                weight: font.weight,
+                style: font.style,
+            };
+            if styled != *fallback
+                && let Ok(font_id) = self.font_id(&styled)
+            {
+                return remember(font_id);
+            }
             if let Ok(font_id) = self.font_id(fallback) {
-                return font_id;
+                return remember(font_id);
             }
         }
 
@@ -612,6 +698,7 @@ impl WindowTextSystem {
             line_layout_cache: LineLayoutCache::new(
                 text_system.platform_text_system.clone(),
                 text_system.font_generation.clone(),
+                text_system.shape_caches.clone(),
             ),
             text_system,
         }
@@ -621,7 +708,8 @@ impl WindowTextSystem {
         self.line_layout_cache.layout_index()
     }
 
-    pub(crate) fn reuse_layouts(&self, index: Range<LineLayoutIndex>) {
+    /// Replays previous-frame layouts and returns the range they occupy in the current frame.
+    pub(crate) fn reuse_layouts(&self, index: Range<LineLayoutIndex>) -> Range<LineLayoutIndex> {
         self.line_layout_cache.reuse_layouts(index)
     }
 

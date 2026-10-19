@@ -16,10 +16,10 @@ use crate::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
-    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextAlign, TextInputConfiguration, TextInputStateChange,
+    TextRenderingMode, TextStyle, TextStyleRefinement, TextStyleStack, ThermalState,
     TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams,
     WindowTextSystem, WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
@@ -62,7 +62,6 @@ use std::{
 };
 use uuid::Uuid;
 use vespertine_collections::{FxHashMap, FxHashSet};
-use vespertine_refineable::Refineable;
 use vespertine_scheduler::Instant;
 use vespertine_util::post_inc;
 use vespertine_util::{ResultExt, measure};
@@ -76,6 +75,10 @@ pub use a11y::A11ySubtreeBuilder;
 
 use self::a11y::A11y;
 use self::a11y::ROOT_NODE_ID;
+use crate::text_system::glyph_store::{
+    GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
+    quantize_emoji_origin, quantize_glyph_origin,
+};
 use crate::util::{
     atomic_incr_if_not_zero, ceil_to_device_pixel, floor_to_device_pixel, round_half_toward_zero,
     round_half_toward_zero_f64, round_stroke_to_device_pixel, round_to_device_pixel,
@@ -1036,7 +1039,7 @@ pub(crate) struct DeferredDraw {
     priority: usize,
     parent_node: DispatchNodeId,
     element_id_stack: ElementIdStack,
-    text_style_stack: Vec<TextStyleRefinement>,
+    text_style_stack: TextStyleStack,
     content_mask: Option<ContentMask<Pixels>>,
     rem_size: Pixels,
     element: Option<AnyElement>,
@@ -1236,6 +1239,7 @@ pub struct Window {
     sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
+    glyph_store: GlyphStore,
     rem_size: Pixels,
     /// The stack of override values for the window's rem size.
     ///
@@ -1246,7 +1250,7 @@ pub struct Window {
     layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: ElementIdStack,
-    pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    pub(crate) text_style_stack: TextStyleStack,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -2145,13 +2149,14 @@ impl Window {
             sprite_atlas,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
+            glyph_store: GlyphStore::new(),
             rem_size: px(16.),
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
             root: None,
             element_id_stack: ElementIdStack::default(),
-            text_style_stack: Vec::new(),
+            text_style_stack: TextStyleStack::default(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -2489,11 +2494,12 @@ impl Window {
 
     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
     pub fn text_style(&self) -> TextStyle {
-        let mut style = TextStyle::default();
-        for refinement in &self.text_style_stack {
-            style.refine(refinement);
-        }
-        style
+        self.text_style_stack.resolve()
+    }
+
+    /// The text alignment of the current text style, without resolving the whole style.
+    pub(crate) fn text_align(&self) -> TextAlign {
+        self.text_style_stack.text_align()
     }
 
     /// Check if the platform window is maximized.
@@ -3740,6 +3746,7 @@ impl Window {
     }
 
     fn draw_roots(&mut self, cx: &mut App) {
+        self.glyph_store.begin_frame();
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
 
@@ -5074,74 +5081,165 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let element_opacity = self.element_opacity();
-        let scale_factor = self.scale_factor();
-        let glyph_origin = origin.scale(scale_factor);
+        let line = self.begin_glyph_line();
+        let style = self.glyph_run_style(font_id, font_size, color);
+        self.paint_line_glyph(&line, &style, origin, glyph_id, font_size)
+    }
 
-        let quantized_origin = Point::new(
-            round_half_toward_zero(glyph_origin.x.0 * SUBPIXEL_VARIANTS_X as f32)
-                / SUBPIXEL_VARIANTS_X as f32,
-            round_half_toward_zero(glyph_origin.y.0 * SUBPIXEL_VARIANTS_Y as f32)
-                / SUBPIXEL_VARIANTS_Y as f32,
-        );
-        let subpixel_variant = Point::new(
-            (quantized_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
-            (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
-        );
-        let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
-        let dilation = self.text_system().glyph_dilation_for_color(color);
-        let params = RenderGlyphParams {
+    /// Starts painting the glyphs of one shaped line: snaps the content mask once and
+    /// invalidates the per-window glyph store if the font set changed.
+    pub(crate) fn begin_glyph_line(&mut self) -> GlyphLinePaint {
+        let generation = self.text_system.font_generation();
+        self.glyph_store.sync_generation(generation);
+        self.glyph_store.counters.bump(GlyphCounter::MaskSnap);
+        GlyphLinePaint::new(
+            self.snapped_content_mask(),
+            self.content_mask().bounds,
+            self.scale_factor(),
+            self.element_opacity(),
+        )
+    }
+
+    /// The bounding box of a font at a size, served from the window's most recently used pairs.
+    pub(crate) fn glyph_font_bounds(
+        &mut self,
+        font_id: FontId,
+        font_size: Pixels,
+    ) -> Bounds<Pixels> {
+        let text_system = &self.text_system;
+        self.glyph_store
+            .fonts
+            .get_or_insert_with(font_id, font_size, || {
+                text_system.bounding_box(font_id, font_size)
+            })
+    }
+
+    /// Subpixel eligibility and color dilation for a run of glyphs sharing a font and a color.
+    pub(crate) fn glyph_run_style(
+        &self,
+        font_id: FontId,
+        font_size: Pixels,
+        color: Hsla,
+    ) -> GlyphRunStyle {
+        self.glyph_store.counters.bump(GlyphCounter::RenderPolicy);
+        GlyphRunStyle {
             font_id,
+            color,
+            subpixel_rendering: self.should_use_subpixel_rendering(font_id, font_size),
+            dilation: self.text_system().glyph_dilation_for_color(color),
+        }
+    }
+
+    /// The conservative reach of glyphs with the given bounding-box size against the line's content mask.
+    pub(crate) fn glyph_reach(
+        &self,
+        line: &mut GlyphLinePaint,
+        bounding_box: Size<Pixels>,
+    ) -> GlyphReach {
+        line.reach(bounding_box, || {
+            self.glyph_store.counters.bump(GlyphCounter::Reach)
+        })
+    }
+
+    /// Paints a monochrome or subpixel glyph using the decisions made for its line and run.
+    ///
+    /// The y component of the origin is the baseline of the glyph.
+    pub(crate) fn paint_line_glyph(
+        &mut self,
+        line: &GlyphLinePaint,
+        style: &GlyphRunStyle,
+        origin: Point<Pixels>,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+    ) -> Result<()> {
+        let glyph_origin = origin.scale(line.scale_factor);
+        let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
+        let params = RenderGlyphParams {
+            font_id: style.font_id,
             glyph_id,
             font_size,
             subpixel_variant,
-            scale_factor,
+            scale_factor: line.scale_factor,
             is_emoji: false,
-            subpixel_rendering,
-            dilation,
+            subpixel_rendering: style.subpixel_rendering,
+            dilation: style.dilation,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
-            let bounds = Bounds {
-                origin: integer_origin + raster_bounds.origin.map(Into::into),
-                size: tile.bounds.size.map(Into::into),
-            };
-            let content_mask = self.snapped_content_mask();
-
-            if subpixel_rendering {
-                self.next_frame.scene.insert_primitive(SubpixelSprite {
-                    order: 0,
-                    pad: 0,
-                    bounds,
-                    content_mask,
-                    color: color.opacity(element_opacity),
-                    tile,
-                    transformation: TransformationMatrix::unit(),
-                    scope: self.paint_scope,
-                });
-            } else {
-                self.next_frame.scene.insert_primitive(MonochromeSprite {
-                    order: 0,
-                    blur: 0.0,
-                    bounds,
-                    content_mask,
-                    color: color.opacity(element_opacity),
-                    tile,
-                    transformation: TransformationMatrix::unit(),
-                    scope: self.paint_scope,
-                });
-            }
+        let Some(sprite) =
+            self.resolve_glyph_sprite(&params, integer_origin, &line.snapped_mask)?
+        else {
+            return Ok(());
+        };
+        let color = style.color.opacity(line.opacity);
+        if style.subpixel_rendering {
+            self.next_frame.scene.insert_primitive(SubpixelSprite {
+                order: 0,
+                pad: 0,
+                bounds: sprite.bounds,
+                content_mask: line.snapped_mask,
+                color,
+                tile: sprite.tile,
+                transformation: TransformationMatrix::unit(),
+                scope: self.paint_scope,
+            });
+        } else {
+            self.next_frame.scene.insert_primitive(MonochromeSprite {
+                order: 0,
+                blur: 0.0,
+                bounds: sprite.bounds,
+                content_mask: line.snapped_mask,
+                color,
+                tile: sprite.tile,
+                transformation: TransformationMatrix::unit(),
+                scope: self.paint_scope,
+            });
         }
         Ok(())
+    }
+
+    /// Finds a glyph's sprite in the per-window store, asking the text system for raster
+    /// bounds and the atlas for the tile only when the store cannot answer.
+    fn resolve_glyph_sprite(
+        &mut self,
+        params: &RenderGlyphParams,
+        integer_origin: Point<ScaledPixels>,
+        mask: &ContentMask<ScaledPixels>,
+    ) -> Result<Option<GlyphSprite>> {
+        let frame = self.glyph_store.frame();
+        let text_system = &self.text_system;
+        let sprite_atlas = &self.sprite_atlas;
+        let counters = &self.glyph_store.counters;
+        self.glyph_store.raster.resolve(
+            params,
+            integer_origin,
+            mask,
+            frame,
+            |params| {
+                counters.bump(GlyphCounter::RasterBoundsQuery);
+                text_system.raster_bounds(params)
+            },
+            || {
+                counters.bump(GlyphCounter::AtlasAccess);
+                Ok(sprite_atlas
+                    .get_or_insert_with(params.clone().into(), &mut || {
+                        let (size, bytes) = text_system.rasterize_glyph(params)?;
+                        Ok(Some((size, Cow::Owned(bytes))))
+                    })?
+                    .expect("Callback above only errors or returns Some"))
+            },
+        )
+    }
+
+    /// The glyph-painting decisions counted since the last reset.
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    pub fn glyph_paint_counters(&self) -> crate::GlyphPaintCounters {
+        self.glyph_store.counters.snapshot()
+    }
+
+    /// Resets the glyph-painting counters to zero.
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    pub fn reset_glyph_paint_counters(&self) {
+        self.glyph_store.counters.reset();
     }
 
     fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
@@ -5298,50 +5396,51 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let scale_factor = self.scale_factor();
-        let glyph_origin = origin.scale(scale_factor);
-        let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));
+        let line = self.begin_glyph_line();
+        self.paint_line_emoji(&line, font_id, origin, glyph_id, font_size)
+    }
+
+    /// Paints an emoji glyph using the decisions made for its line.
+    ///
+    /// The y component of the origin is the baseline of the glyph.
+    pub(crate) fn paint_line_emoji(
+        &mut self,
+        line: &GlyphLinePaint,
+        font_id: FontId,
+        origin: Point<Pixels>,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+    ) -> Result<()> {
+        let glyph_origin = origin.scale(line.scale_factor);
+        let integer_origin = quantize_emoji_origin(glyph_origin);
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
             font_size,
             subpixel_variant: Default::default(),
-            scale_factor,
+            scale_factor: line.scale_factor,
             is_emoji: true,
             subpixel_rendering: false,
             dilation: 0,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
-
-            let bounds = Bounds {
-                origin: integer_origin + raster_bounds.origin.map(Into::into),
-                size: tile.bounds.size.map(Into::into),
-            };
-            let content_mask = self.snapped_content_mask();
-            let opacity = self.element_opacity();
-
-            self.next_frame.scene.insert_primitive(PolychromeSprite {
-                order: 0,
-                pad: 0,
-                grayscale: false.into(),
-                bounds,
-                corner_radii: Default::default(),
-                content_mask,
-                tile,
-                opacity,
-                scope: self.paint_scope,
-                effects: Default::default(),
-            });
-        }
+        let Some(sprite) =
+            self.resolve_glyph_sprite(&params, integer_origin, &line.snapped_mask)?
+        else {
+            return Ok(());
+        };
+        self.next_frame.scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false.into(),
+            bounds: sprite.bounds,
+            corner_radii: Default::default(),
+            content_mask: line.snapped_mask,
+            tile: sprite.tile,
+            opacity: line.opacity,
+            scope: self.paint_scope,
+            effects: Default::default(),
+        });
         Ok(())
     }
 

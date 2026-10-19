@@ -1526,6 +1526,31 @@ pub trait PlatformTextSystem: Send + Sync {
     fn all_font_names(&self) -> Vec<String>;
     /// Get the font ID for a font descriptor.
     fn font_id(&self, descriptor: &Font) -> Result<FontId>;
+    /// Get the ids of the faces of a family that can serve as primary fonts.
+    ///
+    /// Backends that can enumerate a family's faces (the Linux backend) return
+    /// every face that maps U+006D, in database order, and an empty list when
+    /// the family does not exist. The default implementation, used by backends
+    /// that only resolve a single best match per request, probes the regular,
+    /// italic, bold and bold italic styles and returns the distinct faces those
+    /// requests resolve to, so the font catalog still sees the faces a style
+    /// request can reach.
+    fn family_font_ids(&self, family: &str) -> Vec<FontId> {
+        let mut ids = Vec::new();
+        for weight in [crate::FontWeight::NORMAL, crate::FontWeight::BOLD] {
+            for style in [crate::FontStyle::Normal, crate::FontStyle::Italic] {
+                let mut descriptor = crate::font(family.to_owned());
+                descriptor.weight = weight;
+                descriptor.style = style;
+                if let Ok(id) = self.font_id(&descriptor)
+                    && !ids.contains(&id)
+                {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    }
     /// Prewarm any system font caches needed to shape text.
     fn prewarm_fonts(&self, _font_ids: &[FontId]) {}
     /// Get metrics for a font.
