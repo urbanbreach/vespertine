@@ -56,6 +56,8 @@ pub(crate) struct TestWindowState {
     is_fullscreen: bool,
     scale_factor: f32,
     appearance: WindowAppearance,
+    background_appearance: WindowBackgroundAppearance,
+    background_appearance_sets: usize,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
     subpixel_rendering_supported: bool,
@@ -134,6 +136,8 @@ impl TestWindow {
             // Preserve the test platform's historical 2x default.
             scale_factor: 2.0,
             appearance: WindowAppearance::Light,
+            background_appearance: WindowBackgroundAppearance::Opaque,
+            background_appearance_sets: 0,
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
             subpixel_rendering_supported: false,
@@ -272,6 +276,11 @@ impl TestWindow {
         drop(lock);
         callback();
         self.0.lock().appearance_change_callback = Some(callback);
+    }
+
+    /// Returns how many times the window background appearance was set on this window.
+    pub fn background_appearance_set_count(&self) -> usize {
+        self.0.lock().background_appearance_sets
     }
 
     /// Returns how many times this window's frame waker has been invoked.
@@ -466,7 +475,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
-        WindowBackgroundAppearance::Opaque
+        self.0.lock().background_appearance
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
@@ -479,7 +488,11 @@ impl PlatformWindow for TestWindow {
 
     fn set_app_id(&mut self, _app_id: &str) {}
 
-    fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
+    fn set_background_appearance(&self, background: WindowBackgroundAppearance) {
+        let mut state = self.0.lock();
+        state.background_appearance = background;
+        state.background_appearance_sets += 1;
+    }
 
     fn set_edited(&mut self, edited: bool) {
         self.0.lock().edited = edited;
