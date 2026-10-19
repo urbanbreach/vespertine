@@ -737,13 +737,16 @@ path = "third_party/merman-render"
 [patch.crates-io.taffy]
 path = "third_party/taffy"
 
-# Vendored without their MPL-2.0 / CC0-1.0 dependencies (`option-ext`, `dwrote`, `tiny-keccak`); see
-# THIRD_PARTY.md.
+# Vendored without their MPL-2.0 / CC0-1.0 / CDLA-Permissive-2.0 dependencies (`option-ext`,
+# `dwrote`, `tiny-keccak`, `webpki-root-certs`); see THIRD_PARTY.md.
 [patch.crates-io.dirs-sys]
 path = "third_party/dirs-sys"
 
 [patch.crates-io.const-random-macro]
 path = "third_party/const-random-macro"
+
+[patch.crates-io.rustls-platform-verifier]
+path = "third_party/rustls-platform-verifier"
 
 [patch."https://github.com/zed-industries/font-kit"]
 zed-font-kit = { path = "third_party/zed-font-kit" }

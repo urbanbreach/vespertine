@@ -29,6 +29,8 @@ impl<F> Family<F>
 where
     F: Loader,
 {
+    // Used by the DirectWrite source only, which the vendored copy does not have.
+    #[allow(dead_code)]
     pub(crate) fn from_font_handles<'a, I>(font_handles: I) -> Result<Family<F>, FontLoadingError>
     where
         I: Iterator<Item = &'a Handle>,
@@ -41,6 +43,7 @@ where
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn from_handle(family_handle: &FamilyHandle) -> Result<Family<F>, FontLoadingError> {
         Family::from_font_handles(family_handle.fonts.iter())
     }

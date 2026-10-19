@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""Audits the licenses of every third-party dependency and writes THIRD_PARTY.md.
+
+    scripts/third-party            rewrite THIRD_PARTY.md and fail on a policy violation
+    scripts/third-party --check    policy check only (what `cargo test` runs); never writes
+    scripts/third-party --stale    also fail when THIRD_PARTY.md differs from what would be written
+
+Policy: every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause,
+ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016 or OFL-1.1 (fonts). An SPDX `OR` expression is satisfied
+when one alternative is allowed (that alternative is the elected license); an `AND` expression
+needs every part allowed. Anything else, in particular any copyleft license (MPL, GPL, LGPL, ...),
+fails the audit and has to be replaced, not excepted.
+
+Sources of the list:
+  * Rust: `cargo tree --workspace --target all -e normal,build,dev` (every crate that any build,
+    test or example of any target compiles) with the license of `cargo metadata`; crates that only
+    appear in Cargo.lock (optional features nobody enables) are listed separately.
+  * npm: `npm ls --package-lock-only --all --json` in packages/ with the licenses of
+    package-lock.json (the lockfile alone when npm is not installed).
+  * Bundled data: the asset tables below, which are verified against the repository.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT = os.path.join(ROOT, "THIRD_PARTY.md")
+
+ALLOWED = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "OFL-1.1",
+    "Apache-2.0 WITH LLVM-exception",
+]
+
+# Dependencies outside the policy list that are accepted, with the reason. Nothing copyleft is ever
+# accepted. Keyed by (ecosystem, name).
+EXCEPTIONS = {
+    ("npm", "caniuse-lite"): (
+        "CC-BY-4.0",
+        "browser-support data (attribution license, no copyleft) read by `browserslist`, which "
+        "`@babel/core` (a runtime dependency of `@vespertine/solid`) requires; attribution: "
+        "caniuse.com (Alexis Deveria, Lennart Schoors) via the `caniuse-lite` package",
+    ),
+}
+
+# Crates vendored under third_party/, with what differs from the published crate.
+VENDORED = [
+    ("taffy", "0.13.0", "MIT", "modified measurement cache for persistent layout nodes (LAY-001)"),
+    ("merman-core", "0.8.0-alpha.5", "MIT OR Apache-2.0",
+     "HTML sanitizer reimplemented without the MPL-2.0 `lol_html` crate"),
+    ("merman-render", "0.8.0-alpha.5", "MIT OR Apache-2.0",
+     "CSS parsing reimplemented without the MPL-2.0 `cssparser` crate"),
+    ("dirs-sys", "0.5.0", "MIT OR Apache-2.0",
+     "without the MPL-2.0 `option-ext` dependency (one `Option::contains` call inlined)"),
+    ("zed-font-kit", "0.14.1-zed", "MIT OR Apache-2.0",
+     "without the DirectWrite backend, which needed the MPL-2.0 `dwrote` crate; Vespertine's "
+     "Windows text system does not use font-kit"),
+    ("const-random-macro", "0.1.16", "MIT OR Apache-2.0",
+     "SHA-256 counter-mode expansion instead of the CC0-1.0 `tiny-keccak` SHAKE256"),
+    ("rustls-platform-verifier", "0.7.0", "MIT OR Apache-2.0",
+     "without the wasm32 branch, which needed the CDLA-Permissive-2.0 `webpki-root-certs` data; "
+     "tests removed"),
+]
+
+# Files that ship with the repository or with a dependency, other than code.
+ASSETS = [
+    ("Lilex (Regular, Bold)", "OFL-1.1", "assets/fonts/lilex/OFL.txt", "test/example font"),
+    ("IBM Plex Sans (Regular)", "OFL-1.1", "assets/fonts/ibm-plex-sans/license.txt", "test/example font"),
+    ("Noto Sans Math (Regular)", "OFL-1.1",
+     "crates/vespertine_components/src/math/fonts/LICENSE-NotoSansMath-OFL.txt",
+     "math face of CMP-012"),
+]
+
+# What `two-face` embeds (its `generated/*.bin` dumps of the `bat` asset set), per license text
+# (from the crate's own acknowledgements, `two_face::acknowledgement`). Vespertine's highlighter
+# uses only the syntax dump; the theme dump is never referenced, so it is not linked.
+TWO_FACE = [
+    ("MIT", "about 55 syntaxes (Rust, AWK, Ada, AsciiDoc, CMake, Docker, Elixir, Julia, Nix, "
+     "Protobuf, Swift, TOML, Terraform, Vue, Zig, ...) and 11 themes"),
+    ("Apache-2.0", "Crystal, Idris2, Jsonnet, Kotlin, Lean, NSIS, SLS, SmartVHDL, SystemVerilog, "
+     "TypeScript"),
+    ("BSD-2-Clause / BSD-3-Clause", "Apache conf, HTML (Twig), Org mode syntaxes; zenburn theme"),
+    ("Sublime Text Packages notice (permissive grant, no copyleft)",
+     "the default `01_Packages` syntaxes"),
+    ("Unlicense (public domain dedication)", "GLSL and PureScript syntaxes"),
+    ("WTFPL (permissive, no condition)", "GraphQL syntax and the github theme"),
+]
+
+
+def run(*args, cwd=ROOT, check=True):
+    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        sys.exit(f"{' '.join(args)} failed:\n{result.stderr}")
+    return result
+
+
+def cargo(*args):
+    offline = run("cargo", *args, "--locked", "--offline", check=False)
+    if offline.returncode == 0:
+        return offline.stdout
+    return run("cargo", *args, "--locked").stdout
+
+
+def tokens(expression):
+    expression = expression.replace("/", " OR ")
+    return re.findall(r"\(|\)|AND|OR|[A-Za-z0-9.\-+]+(?: WITH [A-Za-z0-9.\-]+)?", expression)
+
+
+def elect(expression):
+    """The allowed license an expression is used under, or None when none qualifies."""
+    parts = tokens(expression)
+    position = [0]
+
+    def peek():
+        return parts[position[0]] if position[0] < len(parts) else None
+
+    def take():
+        position[0] += 1
+        return parts[position[0] - 1]
+
+    def atom():
+        item = take()
+        if item == "(":
+            value = alternatives()
+            take()
+            return value
+        return item if item in ALLOWED else None
+
+    def conjunction():
+        value = atom()
+        while peek() == "AND":
+            take()
+            other = atom()
+            value = f"{value} AND {other}" if value and other else None
+        return value
+
+    def alternatives():
+        value = conjunction()
+        while peek() == "OR":
+            take()
+            other = conjunction()
+            if value is None or (other is not None and rank(other) < rank(value)):
+                value = other
+        return value
+
+    return alternatives()
+
+
+def rank(elected):
+    first = elected.split(" AND ")[0]
+    return ALLOWED.index(first) if first in ALLOWED else len(ALLOWED)
+
+
+def rust_packages():
+    metadata = json.loads(cargo("metadata", "--format-version", "1"))
+    members = set(metadata["workspace_members"])
+    by_key = {}
+    for package in metadata["packages"]:
+        by_key[(package["name"], package["version"])] = package
+    tree = cargo(
+        "tree", "--workspace", "--target", "all", "-e", "normal,build,dev",
+        "--prefix", "none", "--format", "{p}",
+    )
+    built = set()
+    for line in tree.splitlines():
+        match = re.match(r"(\S+) v(\S+)", line.strip())
+        if match:
+            built.add((match.group(1), match.group(2)))
+    first_party = {
+        (p["name"], p["version"]) for p in metadata["packages"] if p["id"] in members
+    }
+    rows, lock_only = [], []
+    for key, package in sorted(by_key.items()):
+        if key in first_party:
+            continue
+        manifest = package["manifest_path"].replace("\\", "/")
+        vendored = "/third_party/" in manifest
+        license = package["license"] or ""
+        source = "vendored" if vendored else (package["source"] or "path")
+        if source.startswith("git+"):
+            source = "git " + source[4:].split("?")[0].split("#")[0]
+        elif source.startswith("registry+"):
+            source = "crates.io"
+        row = (key[0], key[1], license, source)
+        (rows if key in built else lock_only).append(row)
+    return rows, lock_only
+
+
+def npm_packages():
+    directory = os.path.join(ROOT, "packages")
+    lock = json.load(open(os.path.join(directory, "package-lock.json")))
+    licenses, first_party = {}, {}
+    for path, entry in lock["packages"].items():
+        if not path or entry.get("link"):
+            continue
+        if "node_modules/" in path:
+            name = path.rsplit("node_modules/", 1)[1]
+            licenses[(name, entry["version"])] = entry.get("license", "")
+        else:
+            package = json.load(open(os.path.join(directory, path, "package.json")))
+            first_party[package["name"]] = (package.get("version", ""), package.get("license", ""))
+    third = dict(licenses)
+    npm = run("npm", "ls", "--package-lock-only", "--all", "--json", cwd=directory, check=False)
+    if npm.returncode == 0 and npm.stdout.strip():
+        listed = {}
+
+        def walk(node):
+            for name, child in (node.get("dependencies") or {}).items():
+                version = child.get("version", "")
+                if name not in first_party:
+                    listed[(name, version)] = licenses.get((name, version), "")
+                walk(child)
+
+        walk(json.loads(npm.stdout))
+        if listed:
+            third = listed
+    return sorted((n, v, l) for (n, v), l in third.items()), sorted(
+        (n, v, l) for n, (v, l) in first_party.items()
+    )
+
+
+def find_violations(rust, npm_rows, npm_first):
+    problems = []
+    for name, version, license, source in rust:
+        if not license or elect(license) is None:
+            problems.append(f"crate {name} {version}: license `{license or 'none'}` ({source})")
+    for name, version, license in npm_rows:
+        if ("npm", name) in EXCEPTIONS and license == EXCEPTIONS[("npm", name)][0]:
+            continue
+        if not license or elect(license) is None:
+            problems.append(f"npm package {name} {version}: license `{license or 'none'}`")
+    for name, version, license in npm_first:
+        if license != "Apache-2.0":
+            problems.append(f"first-party npm package {name}: license `{license or 'none'}` is not Apache-2.0")
+    for name, license, path, _ in ASSETS:
+        if license not in ALLOWED:
+            problems.append(f"asset {name}: license {license}")
+        if not os.path.exists(os.path.join(ROOT, path)):
+            problems.append(f"asset {name}: license file {path} is missing")
+    for name, version, license, _ in VENDORED:
+        manifest = os.path.join(ROOT, "third_party", name, "Cargo.toml")
+        if not os.path.exists(manifest):
+            problems.append(f"vendored crate {name}: third_party/{name}/Cargo.toml is missing")
+    return problems
+
+
+def table(headers, rows):
+    lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(" --- " for _ in headers) + "|"]
+    for row in rows:
+        lines.append("| " + " | ".join(str(cell).replace("|", "\\|") for cell in row) + " |")
+    return "\n".join(lines)
+
+
+def render(rust, lock_only, npm_rows, npm_first):
+    counts = {}
+    for _, _, license, _ in rust:
+        key = elect(license) or "NOT ALLOWED"
+        counts[key] = counts.get(key, 0) + 1
+    out = []
+    out.append("# Third-party software\n")
+    out.append(
+        "Generated by `scripts/third-party` (run it after changing `Cargo.lock` or "
+        "`packages/package-lock.json`; `cargo test` runs `scripts/third-party --check`). "
+        "Vespertine itself is Apache-2.0 (see `LICENSE-APACHE` and `NOTICE`).\n"
+    )
+    out.append("## Policy\n")
+    out.append(
+        "Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, "
+        "ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, or OFL-1.1 for fonts. A dual-licensed crate "
+        "(`A OR B`) is used under an allowed alternative, shown as the *used under* column. "
+        "Copyleft licenses (MPL-2.0, LGPL, GPL, ...) are not accepted: a crate that needed one "
+        "was replaced or vendored with the dependency removed (see *Vendored crates*). "
+        "**No dependency is under an incompatible license.**\n"
+    )
+    out.append("## Summary\n")
+    out.append(f"- Rust crates compiled by some build, test or example: **{len(rust)}**")
+    out.append(f"- Rust crates present only in `Cargo.lock` (never compiled): **{len(lock_only)}**")
+    out.append(f"- npm packages (third-party): **{len(npm_rows)}**; first-party npm packages: {len(npm_first)}")
+    out.append("- Rust crates by license used: " + ", ".join(
+        f"{key} {count}" for key, count in sorted(counts.items(), key=lambda item: -item[1])
+    ) + "\n")
+    out.append("## Vendored crates (`third_party/`)\n")
+    out.append(table(["Crate", "Version", "License", "Change from the published crate"], VENDORED) + "\n")
+    out.append("## Bundled fonts\n")
+    out.append(table(
+        ["Font", "License", "License text", "Use"],
+        [(n, l, f"`{p}`", u) for n, l, p, u in ASSETS],
+    ) + "\n")
+    out.append("## Data bundled by dependencies\n")
+    out.append(
+        "- `two-face` (MIT OR Apache-2.0) embeds the syntax and theme definitions curated by the "
+        "[`bat`](https://github.com/sharkdp/bat) project, each under its own license (the crate "
+        "ships the texts as `two_face::acknowledgement`). The syntax dump is used by "
+        "`vespertine_richtext` (TXT-007); the theme dump is not referenced and not linked. None "
+        "is copyleft; the ones outside the policy list are permissive grants:\n"
+    )
+    out.append(table(["License of the definition", "Definitions"], TWO_FACE) + "\n")
+    out.append(
+        "- `merman-render` embeds generated font-metric tables (`src/generated/*.bin`: advance "
+        "widths measured for diagram text layout, not font files) under the crate license.\n"
+        "- `cosmic-text`, `fontdb` and `ttf-parser` ship test fonts (Fira Mono, Inter, Tuffy and "
+        "others) in their source packages only; no crate compiles them in.\n"
+        "- `syntect` is built without its `default-syntaxes` / `default-themes` features, so no "
+        "Sublime Text Packages dump comes from `syntect` itself.\n"
+    )
+    out.append("## npm packages\n")
+    out.append(table(
+        ["Name", "Version", "License"], [(n, v, l) for n, v, l in npm_rows]
+    ) + "\n")
+    out.append(
+        "`packages/starter` is the project template `create-vespertine` copies into new projects "
+        "(private, no license field of its own; it is Apache-2.0 as part of this repository).\n"
+    )
+    out.append("Accepted outside the policy list:\n")
+    for (ecosystem, name), (license, reason) in EXCEPTIONS.items():
+        out.append(f"- {ecosystem} `{name}` ({license}): {reason}.")
+    out.append("")
+    out.append("First-party npm packages (all Apache-2.0): " + ", ".join(
+        f"`{n}`" for n, _, _ in npm_first) + ".\n")
+    out.append("## Rust crates\n")
+    out.append(table(
+        ["Name", "Version", "License (declared)", "Used under", "Source"],
+        [(n, v, l, elect(l) or "NOT ALLOWED", s) for n, v, l, s in rust],
+    ) + "\n")
+    out.append("## Rust crates present only in Cargo.lock\n")
+    out.append(
+        "Optional dependencies that no enabled feature compiles (for example the AV1 encoder "
+        "behind `image`'s `avif` feature). They are listed because they are in the lockfile; "
+        "none of them is part of a build.\n"
+    )
+    out.append(table(
+        ["Name", "Version", "License (declared)", "Used under", "Source"],
+        [(n, v, l, elect(l) or "never compiled (permissive, outside the list)", s)
+         for n, v, l, s in lock_only],
+    ) + "\n")
+    return "\n".join(out)
+
+
+def main():
+    args = sys.argv[1:]
+    unknown = [a for a in args if a not in ("--check", "--stale")]
+    if unknown:
+        sys.exit(__doc__)
+    rust, lock_only = rust_packages()
+    npm_rows, npm_first = npm_packages()
+    problems = find_violations(rust, npm_rows, npm_first)
+    # Lock-only crates are not compiled; a violation there is reported but only as a warning
+    # unless it is copyleft, which must not be in the lockfile either.
+    copyleft = re.compile(r"\b(MPL|GPL|LGPL|AGPL|EPL|CDDL|OSL|SSPL)")
+    for name, version, license, source in lock_only:
+        if elect(license) is None:
+            if not license or copyleft.search(license):
+                problems.append(f"lock-only crate {name} {version}: license `{license or 'none'}`")
+            else:
+                print(f"note: lock-only crate {name} {version} ({license}) is outside the policy list",
+                      file=sys.stderr)
+    text = render(rust, lock_only, npm_rows, npm_first)
+    if problems:
+        print("license policy violations:", file=sys.stderr)
+        for problem in problems:
+            print("  " + problem, file=sys.stderr)
+        sys.exit(1)
+    if "--check" in args:
+        return
+    if "--stale" in args:
+        current = open(OUTPUT).read() if os.path.exists(OUTPUT) else ""
+        if current != text:
+            sys.exit("THIRD_PARTY.md is stale; run scripts/third-party")
+        return
+    with open(OUTPUT, "w") as handle:
+        handle.write(text)
+    print(f"wrote {OUTPUT}: {len(rust)} crates, {len(lock_only)} lock-only, {len(npm_rows)} npm")
+
+
+if __name__ == "__main__":
+    main()
