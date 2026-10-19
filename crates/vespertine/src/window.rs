@@ -73,6 +73,8 @@ pub(crate) mod a11y;
 #[cfg(test)]
 mod a11y_retained_tests;
 #[cfg(test)]
+mod a11y_virtual_list_tests;
+#[cfg(test)]
 mod hover_retained_tests;
 pub(crate) mod read_tracker;
 pub(crate) mod retained;
