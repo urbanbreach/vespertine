@@ -17,17 +17,28 @@ doctest = false
 vespertine.workspace = true
 vespertine_theme.workspace = true
 vespertine_webview.workspace = true
+thiserror.workspace = true
 unicode-segmentation.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+image.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
+vespertine_test_host = { path = "../vespertine_test_host" }
 vespertine_webview.workspace = true
 
 [[example]]
 name = "browser_surface"
 path = "examples/browser_surface.rs"
+
+[[example]]
+name = "chart_gallery"
+path = "examples/chart_gallery.rs"
+
+[[example]]
+name = "audio_activity"
+path = "examples/audio_activity.rs"

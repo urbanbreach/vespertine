@@ -4,6 +4,9 @@
 //! reload buttons, an address input, an open-in-default-browser button, validation and
 //! placeholder states) around the embedded web page of `vespertine_webview`.
 
+pub mod audio;
 pub mod browser;
+pub mod chart;
 pub mod floating;
+pub mod status;
 pub mod tokens;

@@ -7373,13 +7373,16 @@ dependencies = [
 name = "vespertine_components"
 version = "0.1.0"
 dependencies = [
+ "image",
  "parking_lot",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.17",
  "unicode-segmentation",
  "url",
  "vespertine",
  "vespertine_platform",
+ "vespertine_test_host",
  "vespertine_theme",
  "vespertine_webview",
 ]
