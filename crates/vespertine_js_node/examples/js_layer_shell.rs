@@ -4,7 +4,7 @@
 //! compositor's placement through `hyprctl`.
 //!
 //! ```text
-//! cargo run --release -p vespertine_js_node --example layer_shell
+//! cargo run --release -p vespertine_js_node --example js_layer_shell
 //! ```
 
 #![allow(
