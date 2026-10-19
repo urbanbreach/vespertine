@@ -1,0 +1,26 @@
+{
+  "name": "@vespertine/dev",
+  "version": "0.1.0",
+  "description": "Native development workflows for Vespertine: rebuild-and-restart watcher and sequential screenshot collector",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "vespertine-dev": "src/cli.js",
+    "vespertine-screenshots": "src/screenshots-cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "dev": "node src/cli.js",
+    "screenshots": "node src/screenshots-cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

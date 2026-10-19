@@ -1,0 +1,24 @@
+{
+  "name": "create-vespertine",
+  "version": "0.1.0",
+  "description": "Creates a new Vespertine project from the published starter",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "create-vespertine": "src/cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "create": "node src/cli.js new"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

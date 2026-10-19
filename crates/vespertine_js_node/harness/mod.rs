@@ -46,7 +46,12 @@ pub fn install_dependencies() {
 
 /// Runs `program args...` inside `packages/<package>` with the addon selected through the
 /// environment (dependencies are installed first).
-pub fn run_package(package: &str, program: &str, args: &[&str], addon: &Path) -> std::process::ExitStatus {
+pub fn run_package(
+    package: &str,
+    program: &str,
+    args: &[&str],
+    addon: &Path,
+) -> std::process::ExitStatus {
     install_dependencies();
     Command::new(program)
         .current_dir(packages_dir().join(package))

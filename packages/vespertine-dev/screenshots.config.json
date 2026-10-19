@@ -1,0 +1,12 @@
+{
+  "destination": "docs/screenshots",
+  "jobs": [
+    {
+      "name": "showcase",
+      "command": ["cargo", "test", "showcase"],
+      "images": [
+        { "source": "target/screenshots/showcase.png", "name": "showcase.png" }
+      ]
+    }
+  ]
+}

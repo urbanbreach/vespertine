@@ -1,0 +1,13 @@
+{
+  "name": "starter-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.tsx"
+  },
+  "dependencies": {
+    "@vespertine/react": "^0.1.0",
+    "react": "^19.2.0"
+  }
+}
