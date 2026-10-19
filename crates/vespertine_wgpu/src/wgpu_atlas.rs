@@ -50,6 +50,7 @@ impl WgpuAtlas {
         queue: Arc<wgpu::Queue>,
         color_texture_format: wgpu::TextureFormat,
     ) -> Self {
+        crate::gpu_counters::note_atlas_created();
         let max_texture_size = device.limits().max_texture_dimension_2d;
         WgpuAtlas(Mutex::new(AtlasState::new(WgpuAtlasTextures {
             device,

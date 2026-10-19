@@ -277,6 +277,127 @@ impl Scene {
         parent
     }
 
+    /// Whether the scene holds nothing drawable: no primitive and no backdrop blur. Layer
+    /// (and other scope) markers recorded without any primitive between them never make a
+    /// scene drawable, so a scene that only contains empty scopes is empty.
+    pub fn is_empty(&self) -> bool {
+        self.shadows.is_empty()
+            && self.quads.is_empty()
+            && self.paths.is_empty()
+            && self.underlines.is_empty()
+            && self.monochrome_sprites.is_empty()
+            && self.subpixel_sprites.is_empty()
+            && self.polychrome_sprites.is_empty()
+            && self.surfaces.is_empty()
+            && self.backdrop_blurs.is_empty()
+    }
+
+    /// Replays `range` of `prev_scene`'s paint operations into this scene with its scopes
+    /// balanced: scopes (layers) that were opened before the range and are still open at its
+    /// start are opened first, in their original nesting order, and scopes the range leaves
+    /// open are closed at its end. Fails, without touching the scene, when the operations
+    /// cannot be balanced: a scope is closed that was never opened, or closes a scope of
+    /// another kind than the innermost open one.
+    pub fn replay_balanced(
+        &mut self,
+        range: Range<usize>,
+        prev_scene: &Scene,
+    ) -> Result<(), UnbalancedScopes> {
+        let operations = &prev_scene.paint_operations;
+        if range.start > range.end || range.end > operations.len() {
+            return Err(UnbalancedScopes {
+                operation_index: range.end.min(operations.len()),
+            });
+        }
+        let mut tracker = ScopeTracker::default();
+        for (index, operation) in operations[..range.start].iter().enumerate() {
+            tracker.apply(index, operation)?;
+        }
+        let open = tracker.stack.clone();
+        for (offset, operation) in operations[range.clone()].iter().enumerate() {
+            tracker.apply(range.start + offset, operation)?;
+        }
+        self.replay_range_with_scopes(&operations[range], &open, &tracker.stack);
+        Ok(())
+    }
+
+    /// Splits the paint stream into one scene per target. `ranges` lists, in stream order and
+    /// covering `0..self.len()` without gaps, which target (an index below `targets`) each
+    /// stretch of paint operations belongs to. Repeated stretches of one target keep their
+    /// relative order and every stretch is replayed with balanced scopes (see
+    /// [`Scene::replay_balanced`]). The returned scenes are finished.
+    pub fn split_ranges(
+        &self,
+        ranges: &[(usize, Range<usize>)],
+        targets: usize,
+    ) -> Result<Vec<Scene>, UnbalancedScopes> {
+        let mut scenes: Vec<Scene> = (0..targets).map(|_| Scene::default()).collect();
+        let mut tracker = ScopeTracker::default();
+        for (target, range) in ranges {
+            let operations = &self.paint_operations;
+            if *target >= targets || range.start > range.end || range.end > operations.len() {
+                return Err(UnbalancedScopes {
+                    operation_index: range.start,
+                });
+            }
+            let open = tracker.stack.clone();
+            for (offset, operation) in operations[range.clone()].iter().enumerate() {
+                tracker.apply(range.start + offset, operation)?;
+            }
+            scenes[*target].replay_range_with_scopes(
+                &operations[range.clone()],
+                &open,
+                &tracker.stack,
+            );
+        }
+        for scene in &mut scenes {
+            scene.finish();
+        }
+        Ok(scenes)
+    }
+
+    /// Splits the paint stream at `overlay_start` into the base scene (operations before the
+    /// index) and the overlay scene (operations from it on). An index past the end of the
+    /// stream clamps to its length, which leaves the overlay empty. Both scenes are finished.
+    pub fn split_at_overlay(
+        &self,
+        overlay_start: usize,
+    ) -> Result<(Scene, Scene), UnbalancedScopes> {
+        let start = overlay_start.min(self.len());
+        let mut scenes = self
+            .split_ranges(&[(0, 0..start), (1, start..self.len())], 2)?
+            .into_iter();
+        let base = scenes.next().unwrap_or_default();
+        let overlay = scenes.next().unwrap_or_default();
+        Ok((base, overlay))
+    }
+
+    /// Replays `operations`, reopening `open` scopes first and closing `still_open` scopes
+    /// last. The scopes were validated by a [`ScopeTracker`] pass over the same operations.
+    fn replay_range_with_scopes(
+        &mut self,
+        operations: &[PaintOperation],
+        open: &[ScopeMarker],
+        still_open: &[ScopeMarker],
+    ) {
+        for marker in open {
+            marker.open(self);
+        }
+        for operation in operations {
+            match operation {
+                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                PaintOperation::BackdropBlur(blur) => self.insert_backdrop_blur(*blur),
+                PaintOperation::EndLayer => self.pop_layer(),
+                PaintOperation::PushCurvedClip(shape) => self.push_curved_clip(*shape),
+                PaintOperation::PopCurvedClip => self.pop_curved_clip(),
+            }
+        }
+        for marker in still_open.iter().rev() {
+            marker.close(self);
+        }
+    }
+
     pub fn finish(&mut self) {
         let SortScratch { index, gather } = &mut self.sort_scratch;
         sort_records(&mut self.shadows, &mut gather.shadows, index);
@@ -367,6 +488,108 @@ pub(crate) enum PaintOperation {
     BackdropBlur(BackdropBlur),
     PushCurvedClip(CurvedClipShape),
     PopCurvedClip,
+}
+
+/// A paint operation range could not be replayed with balanced scopes: it closes a scope that
+/// was never opened, or closes a scope of another kind than the innermost open one. A frame
+/// whose paint stream cannot be balanced is not drawn, because drawing it would apply
+/// clipping to the wrong primitives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "paint operation {operation_index} cannot be balanced: it closes a scope that is not the innermost open scope"
+)]
+pub struct UnbalancedScopes {
+    /// Index of the paint operation that cannot be balanced.
+    pub operation_index: usize,
+}
+
+/// An open scope in the paint stream: it applies to every primitive recorded until it is
+/// closed. Replaying a part of a stream reopens the scopes that enclose the part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ScopeMarker {
+    /// A paint layer (see [`Scene::push_layer`]).
+    Layer(Bounds<ScaledPixels>),
+    /// A curved overflow clip shape (see [`Scene::push_curved_clip`]).
+    CurvedClip(CurvedClipShape),
+}
+
+/// What a paint operation does to the stack of open scopes.
+enum ScopeEvent {
+    Open(ScopeMarker),
+    Close(ScopeKind),
+}
+
+/// The kind of a scope, so that a close can be checked against the scope it closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopeKind {
+    Layer,
+    CurvedClip,
+}
+
+impl ScopeMarker {
+    fn kind(&self) -> ScopeKind {
+        match self {
+            ScopeMarker::Layer(_) => ScopeKind::Layer,
+            ScopeMarker::CurvedClip(_) => ScopeKind::CurvedClip,
+        }
+    }
+
+    fn open(&self, scene: &mut Scene) {
+        match self {
+            ScopeMarker::Layer(bounds) => scene.push_layer(*bounds),
+            ScopeMarker::CurvedClip(shape) => scene.push_curved_clip(*shape),
+        }
+    }
+
+    fn close(&self, scene: &mut Scene) {
+        match self {
+            ScopeMarker::Layer(_) => scene.pop_layer(),
+            ScopeMarker::CurvedClip(_) => scene.pop_curved_clip(),
+        }
+    }
+}
+
+impl PaintOperation {
+    fn scope_event(&self) -> Option<ScopeEvent> {
+        match self {
+            PaintOperation::StartLayer(bounds) => {
+                Some(ScopeEvent::Open(ScopeMarker::Layer(*bounds)))
+            }
+            PaintOperation::EndLayer => Some(ScopeEvent::Close(ScopeKind::Layer)),
+            PaintOperation::PushCurvedClip(shape) => {
+                Some(ScopeEvent::Open(ScopeMarker::CurvedClip(*shape)))
+            }
+            PaintOperation::PopCurvedClip => Some(ScopeEvent::Close(ScopeKind::CurvedClip)),
+            PaintOperation::Primitive(_) | PaintOperation::BackdropBlur(_) => None,
+        }
+    }
+}
+
+/// Follows the stack of open scopes through a paint stream.
+#[derive(Default)]
+struct ScopeTracker {
+    stack: Vec<ScopeMarker>,
+}
+
+impl ScopeTracker {
+    fn apply(&mut self, index: usize, operation: &PaintOperation) -> Result<(), UnbalancedScopes> {
+        match operation.scope_event() {
+            None => Ok(()),
+            Some(ScopeEvent::Open(marker)) => {
+                self.stack.push(marker);
+                Ok(())
+            }
+            Some(ScopeEvent::Close(kind)) => match self.stack.last() {
+                Some(top) if top.kind() == kind => {
+                    self.stack.pop();
+                    Ok(())
+                }
+                _ => Err(UnbalancedScopes {
+                    operation_index: index,
+                }),
+            },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -786,7 +1009,7 @@ impl From<Quad> for Primitive {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct Underline {
@@ -805,7 +1028,7 @@ impl From<Underline> for Primitive {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct Shadow {

@@ -144,7 +144,7 @@ impl InputEvent for TouchEvent {
 }
 
 /// A mouse down event from the platform
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MouseDownEvent {
     /// Which mouse button was pressed.
     pub button: MouseButton,
@@ -181,7 +181,7 @@ impl MouseDownEvent {
 }
 
 /// A mouse up event from the platform
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MouseUpEvent {
     /// Which mouse button was released.
     pub button: MouseButton,
@@ -490,7 +490,7 @@ pub enum NavigationDirection {
 }
 
 /// A mouse move event from the platform.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MouseMoveEvent {
     /// The position of the mouse on the window.
     pub position: Point<Pixels>,
@@ -662,7 +662,7 @@ impl ScrollDelta {
 }
 
 /// A mouse exit event from the platform, generated when the mouse leaves the window.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MouseExitEvent {
     /// The position of the mouse relative to the window.
     pub position: Point<Pixels>,

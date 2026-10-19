@@ -1,5 +1,6 @@
 mod blur;
 mod cosmic_text_system;
+mod gpu_counters;
 #[cfg(all(test, target_os = "linux"))]
 mod image_update_tests;
 pub mod memory_report;
@@ -10,6 +11,7 @@ mod wgpu_renderer;
 mod wgpu_surfaces;
 
 pub use cosmic_text_system::*;
+pub use gpu_counters::{GpuCreationCounts, gpu_creation_counts};
 pub use wgpu;
 pub use wgpu_atlas::*;
 pub use wgpu_blur::{BlurResourceState, BlurStats};

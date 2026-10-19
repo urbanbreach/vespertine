@@ -250,6 +250,7 @@ impl WgpuContext {
         dual_source_blending: bool,
         color_texture_format: TextureFormat,
     ) -> Self {
+        crate::gpu_counters::note_device_created();
         let errors = DeviceErrorState::install(&device);
 
         log::info!(

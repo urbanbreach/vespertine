@@ -753,6 +753,8 @@ impl PrepaintStateIndex {
             && self.dispatch_tree_index <= range.end.dispatch_tree_index
             && self.accessed_element_states_index >= range.start.accessed_element_states_index
             && self.accessed_element_states_index <= range.end.accessed_element_states_index
+            && self.hitbox_switches_index >= range.start.hitbox_switches_index
+            && self.hitbox_switches_index <= range.end.hitbox_switches_index
             && self.effects_index >= range.start.effects_index
             && self.effects_index <= range.end.effects_index
             && self
@@ -772,6 +774,8 @@ impl PaintIndex {
         debug_bounds
             && self.scene_index >= range.start.scene_index
             && self.scene_index <= range.end.scene_index
+            && self.surface_switches_index >= range.start.surface_switches_index
+            && self.surface_switches_index <= range.end.surface_switches_index
             && self.mouse_listeners_index >= range.start.mouse_listeners_index
             && self.mouse_listeners_index <= range.end.mouse_listeners_index
             && self.input_handlers_index >= range.start.input_handlers_index

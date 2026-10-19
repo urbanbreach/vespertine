@@ -1396,6 +1396,84 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
+
+    /// Enables the two-plane scene overlay (PLT-001): ordinary content renders below native
+    /// children and deferred content in a transparent overlay above them. Called at most
+    /// once per window by [`Window::enable_scene_overlay`](crate::Window::enable_scene_overlay).
+    /// Platforms that cannot compose (no subcompositor, no SHAPE extension, headless or
+    /// in-memory windows) keep this default, which returns an error describing the
+    /// unavailability; the window then keeps drawing a single plane.
+    fn enable_scene_overlay(&self) -> Result<()> {
+        bail!("scene layering around native content is not available on this platform")
+    }
+
+    /// Enables the general window composition (PLT-001): the surface tree. It implies the
+    /// overlay plane. Called at most once per window, after or instead of
+    /// [`Self::enable_scene_overlay`].
+    fn enable_window_composition(&self) -> Result<()> {
+        bail!("window composition is not available on this platform")
+    }
+
+    /// The display-server handles native producers attach to, and the generation that
+    /// changes whenever the compositor surface is recreated. `None` without composition.
+    fn native_composition(&self) -> Option<crate::NativeComposition> {
+        None
+    }
+
+    /// Draws a frame of a window with the scene overlay enabled. Primitives (paint
+    /// operations) before `overlay_start` belong to the base plane, the rest to the
+    /// overlay; an index past the end of the scene clamps to its length and leaves the
+    /// overlay empty. `capture` is true when the overlay holds deferred draws, prompts or
+    /// active drag visuals and false for tooltips alone. Implementations derive the planes
+    /// with [`Scene::split_at_overlay`] and must not draw a frame whose scopes cannot be
+    /// balanced (log the error instead). The default draws the whole scene as one plane.
+    fn draw_layered(&self, scene: &Scene, overlay_start: usize, capture: bool) {
+        let _ = (overlay_start, capture);
+        self.draw(scene);
+    }
+
+    /// Draws a frame of a window with more than the base and overlay framework surfaces:
+    /// one drawable scene per framework surface in tree order with per-layer hitboxes.
+    fn draw_composed(&self, composed: &crate::ComposedScene) -> Result<()> {
+        let _ = composed;
+        bail!("composed drawing is not available on this platform")
+    }
+
+    /// Sets the input region of the overlay: the union of the overlay's prepared hitbox
+    /// bounds, in window-content logical pixels, while the overlay captures input; empty
+    /// when it does not or has no hitbox, so pointer events reach the native and base
+    /// surfaces below. Called before each layered draw.
+    fn set_overlay_input_region(&self, region: &[Bounds<Pixels>]) {
+        let _ = region;
+    }
+
+    /// Creates the platform side of a native or external-GPU surface. The surface is hidden
+    /// until its first visibility write.
+    fn create_native_attachment(
+        &self,
+        surface: crate::SurfaceId,
+        kind: crate::SurfaceKind,
+    ) -> Result<std::rc::Rc<dyn crate::NativeAttachment>> {
+        let _ = (surface, kind);
+        bail!("native attachments are not available on this platform")
+    }
+
+    /// Makes the platform's surfaces follow `layout`: creates the overlay surfaces of new
+    /// framework entries, stacks everything bottom to top and destroys surfaces that are
+    /// not listed any more. On failure the platform's previous arrangement must remain in
+    /// effect.
+    fn sync_composition_order(&self, layout: &crate::CompositionLayout) -> Result<()> {
+        let _ = layout;
+        bail!("window composition is not available on this platform")
+    }
+
+    /// Whether a native child of this window currently holds keyboard focus.
+    fn native_focus_active(&self) -> bool {
+        false
+    }
+
+    /// Moves keyboard focus from a native child to the framework window.
+    fn focus_framework_window(&self) {}
     /// Called when the window parks: its demand-gated frame scheduling stopped requesting
     /// frames after the last rendered one. Renderers release transient GPU resources that a
     /// parked window does not need (path intermediates after a path-free frame, backdrop-blur

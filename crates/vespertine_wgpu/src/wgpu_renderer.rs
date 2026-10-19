@@ -307,6 +307,47 @@ impl WgpuRenderer {
     where
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
+        Self::create(gpu_context, window, config, compositor_gpu, None)
+    }
+
+    /// Creates a renderer for an additional presentation surface of a window, for example
+    /// an overlay plane (PLT-001 R8). It shares the device already held by `gpu_context` and
+    /// the given sprite `atlas` (the window renderer's, see [`Self::sprite_atlas`]), so
+    /// atlas tiles referenced by primitives stay valid across planes and no second device
+    /// or atlas is allocated.
+    ///
+    /// Fails when `gpu_context` holds no device yet: the atlas could not belong to one.
+    ///
+    /// # Safety
+    /// The caller must ensure that the window handle remains valid for the lifetime of the
+    /// returned renderer, and that `atlas` was created for the device in `gpu_context`.
+    pub fn new_sharing_atlas<W>(
+        gpu_context: GpuContext,
+        window: &W,
+        config: WgpuSurfaceConfig,
+        compositor_gpu: Option<CompositorGpuHint>,
+        atlas: Arc<WgpuAtlas>,
+    ) -> anyhow::Result<Self>
+    where
+        W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
+        anyhow::ensure!(
+            gpu_context.borrow().is_some(),
+            "a renderer sharing an atlas needs the device the atlas belongs to"
+        );
+        Self::create(gpu_context, window, config, compositor_gpu, Some(atlas))
+    }
+
+    fn create<W>(
+        gpu_context: GpuContext,
+        window: &W,
+        config: WgpuSurfaceConfig,
+        compositor_gpu: Option<CompositorGpuHint>,
+        shared_atlas: Option<Arc<WgpuAtlas>>,
+    ) -> anyhow::Result<Self>
+    where
+        W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         let window_handle = window
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
@@ -344,7 +385,7 @@ impl WgpuRenderer {
             None => ctx_ref.insert(WgpuContext::new(instance, &surface, compositor_gpu)?),
         };
 
-        let atlas = Arc::new(WgpuAtlas::from_context(context));
+        let atlas = shared_atlas.unwrap_or_else(|| Arc::new(WgpuAtlas::from_context(context)));
 
         Self::new_internal(
             Some(Rc::clone(&gpu_context)),
@@ -354,6 +395,13 @@ impl WgpuRenderer {
             compositor_gpu,
             atlas,
         )
+    }
+
+    /// Whether this renderer can draw another frame: it still holds its GPU resources and
+    /// its device is not lost. A renderer that reports otherwise must be discarded and
+    /// recreated from the current device, never reused (PLT-001 R18).
+    pub fn is_reusable(&self) -> bool {
+        !matches!(self.state, RendererState::Released) && !self.device_errors.device_lost()
     }
 
     fn new_internal(

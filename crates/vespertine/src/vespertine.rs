@@ -24,6 +24,7 @@ pub mod colors;
 #[cfg(test)]
 mod counting_allocator;
 mod custom_element;
+mod composition;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 pub mod drag_drop;
@@ -175,6 +176,7 @@ pub use clipboard::{
 };
 pub use color::*;
 pub use color_css::{css_color_to_packed, css_color_to_rgba, oklch_to_rgba, parse_css_color};
+pub use composition::*;
 pub use ctor::ctor;
 pub use custom_element::*;
 #[cfg(feature = "profiler")]

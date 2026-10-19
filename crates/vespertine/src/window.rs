@@ -79,6 +79,7 @@ pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames
 mod glyph_blur_tests;
 #[cfg(test)]
 mod key_tests;
+mod composition;
 mod lifecycle;
 mod pointer;
 mod present;
@@ -91,6 +92,7 @@ use self::a11y::A11y;
 use self::a11y::ROOT_NODE_ID;
 pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
 use self::pointer::{PointerState, pointer_within_keyboard_slop};
+use self::composition::WindowComposition;
 use self::present::PresentCallback;
 use crate::text_system::glyph_store::{
     GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
@@ -1111,6 +1113,17 @@ pub(crate) struct Frame {
     pub(crate) cursor_styles: Vec<CursorStyleRequest>,
     /// Repeatable callbacks registered during paint by [`Window::on_present`].
     pub(crate) present_callbacks: Vec<PresentCallback>,
+    /// Callbacks registered while prepainting by native surface positioning; they join
+    /// `present_callbacks` when paint starts (composition only).
+    pub(crate) prepaint_present_callbacks: Vec<PresentCallback>,
+    /// Switches of the paint target surface in the paint stream, ordered by scene index
+    /// (composition only; empty for windows that never opted in).
+    pub(crate) surface_switches: Vec<crate::SurfaceSwitch>,
+    /// Switches of the surface hitboxes are prepared for, as (hitbox index, surface).
+    pub(crate) hitbox_switches: Vec<(usize, crate::SurfaceId)>,
+    /// Whether the overlay holds deferred draws, a prompt or an active drag, so it captures
+    /// input (false for tooltips alone).
+    pub(crate) overlay_capture: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
     #[cfg(any(test, feature = "test-support"))]
@@ -1142,6 +1155,7 @@ pub(crate) struct PrepaintStateIndex {
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
     effects_index: usize,
+    hitbox_switches_index: usize,
 }
 
 #[derive(Clone, Default)]
@@ -1153,6 +1167,7 @@ pub(crate) struct PaintIndex {
     input_handlers_index: usize,
     cursor_styles_index: usize,
     present_callbacks_index: usize,
+    surface_switches_index: usize,
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
@@ -1191,6 +1206,8 @@ impl PrepaintStateIndex {
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
+            hitbox_switches_index: self.hitbox_switches_index - from.hitbox_switches_index
+                + to.hitbox_switches_index,
             effects_index: self.effects_index - from.effects_index + to.effects_index,
         }
     }
@@ -1213,6 +1230,8 @@ impl PaintIndex {
                 + to.cursor_styles_index,
             present_callbacks_index: self.present_callbacks_index - from.present_callbacks_index
                 + to.present_callbacks_index,
+            surface_switches_index: self.surface_switches_index - from.surface_switches_index
+                + to.surface_switches_index,
             accessed_element_states_index: self.accessed_element_states_index
                 - from.accessed_element_states_index
                 + to.accessed_element_states_index,
@@ -1248,6 +1267,10 @@ impl Frame {
             tooltip_requests: Vec::new(),
             cursor_styles: Vec::new(),
             present_callbacks: Vec::new(),
+            prepaint_present_callbacks: Vec::new(),
+            surface_switches: Vec::new(),
+            hitbox_switches: Vec::new(),
+            overlay_capture: false,
 
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds: FxHashMap::default(),
@@ -1275,6 +1298,10 @@ impl Frame {
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
         self.present_callbacks.clear();
+        self.prepaint_present_callbacks.clear();
+        self.surface_switches.clear();
+        self.hitbox_switches.clear();
+        self.overlay_capture = false;
         self.hitboxes.clear();
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
@@ -1434,6 +1461,9 @@ pub struct Window {
     pub(crate) needs_present: Rc<Cell<bool>>,
     /// True while [`Window::on_present`] callbacks run; drawing is forbidden then.
     pub(crate) running_present_callbacks: bool,
+    /// Layered composition around native children (PLT-001); `None` until the window opted
+    /// in with [`Window::enable_scene_overlay`] or [`Window::enable_window_composition`].
+    pub(crate) composition: Option<WindowComposition>,
     /// The drawable size (device pixels) of the most recently completed draw.
     last_drawn_drawable_size: Option<Size<DevicePixels>>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
@@ -2337,6 +2367,7 @@ impl Window {
             hovered,
             needs_present,
             running_present_callbacks: false,
+            composition: None,
             last_drawn_drawable_size: None,
             input_rate_tracker,
             #[cfg(feature = "profiler")]
@@ -4060,7 +4091,11 @@ impl Window {
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
-        self.platform_window.draw(&self.rendered_frame.scene);
+        if self.composition.is_some() {
+            self.present_composition();
+        } else {
+            self.platform_window.draw(&self.rendered_frame.scene);
+        }
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
             present_start,
@@ -4135,6 +4170,7 @@ impl Window {
     fn draw_roots(&mut self, cx: &mut App) {
         self.glyph_store.begin_frame();
         self.invalidator.set_phase(DrawPhase::Prepaint);
+        self.begin_composition_frame();
         self.tooltip_bounds.take();
 
         self.a11y.sync_active_flag();
@@ -4179,6 +4215,7 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
+        self.begin_overlay();
         self.prepaint_deferred_draws(cx);
 
         let mut prompt_element = None;
@@ -4209,16 +4246,23 @@ impl Window {
         } else {
             self.next_frame.hit_test(self.mouse_position)
         };
+        if self.composition.is_some() {
+            self.next_frame.overlay_capture = !self.next_frame.deferred_draws.is_empty()
+                || prompt_element.is_some()
+                || active_drag_element.is_some();
+        }
 
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
         let paint_start = Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
+        self.begin_composition_paint();
         root_element.paint(self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector(inspector_element, cx);
 
+        self.begin_overlay();
         self.paint_deferred_draws(cx);
 
         if let Some(mut prompt_element) = prompt_element {
@@ -4461,6 +4505,7 @@ impl Window {
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
+            hitbox_switches_index: self.next_frame.hitbox_switches.len(),
             line_layout_index: self.text_system.layout_index(),
             effects_index: self.next_frame.prepaint_effects.len(),
         }
@@ -4480,6 +4525,8 @@ impl Window {
         map: Option<&retained::SpliceMap>,
         cx: &mut App,
     ) {
+        let hitbox_start = self.next_frame.hitboxes.len();
+        self.replay_hitbox_switches(&range, hitbox_start);
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -4565,6 +4612,7 @@ impl Window {
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
             present_callbacks_index: self.next_frame.present_callbacks.len(),
+            surface_switches_index: self.next_frame.surface_switches.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
@@ -4618,12 +4666,14 @@ impl Window {
                 [range.start.tab_handle_index..range.end.tab_handle_index],
         );
 
-        self.text_system
-            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+        let scene_start = self.next_frame.scene.len();
         self.next_frame.scene.replay(
             range.start.scene_index..range.end.scene_index,
             &self.rendered_frame.scene,
         );
+        self.replay_surface_switches(&range, scene_start);
+        self.text_system
+            .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
 
         let effects: SmallVec<[ReplayEffect; 4]> = self.rendered_frame.paint_effects
             [range.start.effects_index..range.end.effects_index]
@@ -7153,6 +7203,7 @@ impl Window {
 
         if let Some(any_mouse_event) = event.mouse_event() {
             self.dispatch_mouse_event(any_mouse_event, cx);
+            self.forward_native_input(&event, cx);
         } else if let Some(any_key_event) = event.keyboard_event() {
             self.dispatch_key_event(any_key_event, cx);
         } else if let Some(touch_event) = event.touch_event() {

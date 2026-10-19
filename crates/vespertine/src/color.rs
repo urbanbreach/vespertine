@@ -849,6 +849,17 @@ impl Background {
             BackgroundTag::Checkerboard => self.solid.is_transparent(),
         }
     }
+
+    /// Returns whether every pixel the background paints is fully opaque: a solid color
+    /// with alpha 1 or a linear gradient whose two stops both have alpha 1. Pattern
+    /// backgrounds leave pixels unpainted and are never opaque.
+    pub fn is_opaque(&self) -> bool {
+        match self.tag {
+            BackgroundTag::Solid => self.solid.a >= 1.0,
+            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.a >= 1.0),
+            BackgroundTag::PatternSlash | BackgroundTag::Checkerboard => false,
+        }
+    }
 }
 
 impl From<Hsla> for Background {

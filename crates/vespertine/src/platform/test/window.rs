@@ -97,6 +97,7 @@ pub(crate) struct TestWindowState {
     a11y_callbacks: Option<crate::A11yCallbacks>,
     last_a11y_tree_update: Option<accesskit::TreeUpdate>,
     pub(crate) chrome: crate::TestChromeState,
+    pub(crate) composition: crate::TestCompositionState,
     pub(crate) lifecycle: TestWindowLifecycle,
 }
 
@@ -179,6 +180,7 @@ impl TestWindow {
             a11y_callbacks: None,
             last_a11y_tree_update: None,
             chrome: Default::default(),
+            composition: Default::default(),
             lifecycle: TestWindowLifecycle::new(params.bounds),
         })))
     }
@@ -859,6 +861,73 @@ impl PlatformWindow for TestWindow {
 
     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
         self.0.lock().last_a11y_tree_update = Some(tree_update);
+    }
+
+    fn enable_scene_overlay(&self) -> anyhow::Result<()> {
+        self.0.lock().composition.enable(false)
+    }
+
+    fn enable_window_composition(&self) -> anyhow::Result<()> {
+        self.0.lock().composition.enable(true)
+    }
+
+    fn native_composition(&self) -> Option<crate::NativeComposition> {
+        self.0.lock().composition.native_composition()
+    }
+
+    fn draw_layered(&self, scene: &Scene, overlay_start: usize, capture: bool) {
+        {
+            let mut state = self.0.lock();
+            if !state.composition.overlay_enabled {
+                // Without composition the entry flattens to ordinary drawing.
+                drop(state);
+                return self.draw(scene);
+            }
+            state.draw_count += 1;
+            state
+                .composition
+                .draw_layered(scene, overlay_start, capture);
+        }
+    }
+
+    fn draw_composed(&self, composed: &crate::ComposedScene) -> anyhow::Result<()> {
+        let mut state = self.0.lock();
+        if !state.composition.window_enabled {
+            anyhow::bail!("window composition is not enabled");
+        }
+        state.draw_count += 1;
+        state.composition.draw_composed(composed);
+        Ok(())
+    }
+
+    fn set_overlay_input_region(&self, region: &[Bounds<Pixels>]) {
+        self.0
+            .lock()
+            .composition
+            .input_regions
+            .push(region.to_vec());
+    }
+
+    fn create_native_attachment(
+        &self,
+        surface: crate::SurfaceId,
+        kind: crate::SurfaceKind,
+    ) -> anyhow::Result<Rc<dyn crate::NativeAttachment>> {
+        self.0.lock().composition.create_attachment(surface, kind)
+    }
+
+    fn sync_composition_order(&self, layout: &crate::CompositionLayout) -> anyhow::Result<()> {
+        self.0.lock().composition.sync_order(layout)
+    }
+
+    fn native_focus_active(&self) -> bool {
+        self.0.lock().composition.native_focus
+    }
+
+    fn focus_framework_window(&self) {
+        let mut state = self.0.lock();
+        state.composition.native_focus = false;
+        state.composition.framework_focus_requests += 1;
     }
 
     fn sprite_atlas(&self) -> sync::Arc<dyn crate::PlatformAtlas> {
