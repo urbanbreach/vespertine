@@ -8,6 +8,10 @@
 #
 # `--dry-run` does everything except the final fast-forward of main (for testing this script);
 # `VSP_LAND_LOCK` and `VSP_LAND_WORKTREE` override the lock file and integration worktree for such tests.
+#
+# A land whose rebase conflicts aborts the rebase and reserves the next landing for its branch for
+# 20 minutes (`<lock file>` with `.reserved` instead of `.lock`); other lands wait for an unexpired
+# reservation, so a conflicted owner can resolve and re-run without queueing again.
 set -euo pipefail
 
 dry_run=0
@@ -38,16 +42,47 @@ esac
 
 cd "$worktree"
 
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-    echo "land: waiting for the landing lock (another worktree is landing)..." >&2
-    flock 9
-fi
+RESERVATION_FILE="${LOCK_FILE%.lock}.reserved"
+RESERVATION_MINUTES=20
+conflicted=0
+
+# Reservation file: "<branch> <expiry as unix seconds>". Only the reserving branch removes it.
+reservation_branch() { [ -f "$RESERVATION_FILE" ] && read -r held _ < "$RESERVATION_FILE" && echo "$held"; true; }
+clear_own_reservation() {
+    if [ "$(reservation_branch)" = "$branch" ]; then rm -f "$RESERVATION_FILE"; fi
+}
+# Every exit except a repeated rebase conflict gives the reservation up (landed, failed, interrupted).
+trap '[ "$conflicted" = 1 ] || clear_own_reservation' EXIT
+
+# Take the lock, honouring an unexpired reservation held by a different branch: release the lock
+# so that the reserving branch can land, then retry.
+while :; do
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        echo "land: waiting for the landing lock (another worktree is landing)..." >&2
+        flock 9
+    fi
+    if [ -f "$RESERVATION_FILE" ]; then
+        read -r held expiry < "$RESERVATION_FILE" || true
+        if [ -z "${expiry:-}" ] || [ "$expiry" -le "$(date +%s)" ] 2>/dev/null; then
+            rm -f "$RESERVATION_FILE"
+        elif [ "$held" != "$branch" ]; then
+            exec 9>&-
+            echo "land: waiting for reservation of $held (expires in $((expiry - $(date +%s))) s)" >&2
+            sleep 30
+            continue
+        fi
+    fi
+    break
+done
 
 echo "land: rebasing $branch onto main"
 if ! git rebase main; then
-    echo "land: rebase onto main has conflicts. Resolve them, 'git rebase --continue', then run ./scripts/land again." >&2
-    echo "land: to give up instead: git rebase --abort" >&2
+    git rebase --abort
+    conflicted=1
+    echo "$branch $(( $(date +%s) + RESERVATION_MINUTES * 60 ))" > "$RESERVATION_FILE"
+    echo "land: rebase onto main has conflicts; the rebase was aborted." >&2
+    echo "land: $branch holds a $RESERVATION_MINUTES-minute reservation (other lands wait for it): rebase onto main now (git rebase main), resolve the conflicts, then re-run ./scripts/land." >&2
     exit 1
 fi
 
