@@ -331,14 +331,38 @@ mod server_tests {
         window
     }
 
-    fn pixel(connection: &RustConnection, window: Window, x: i16, y: i16) -> [u8; 3] {
+    /// The pixel, or `None` while the server cannot read the window yet.
+    fn pixel(connection: &RustConnection, window: Window, x: i16, y: i16) -> Option<[u8; 3]> {
         let image = connection
             .get_image(ImageFormat::Z_PIXMAP, window, x, y, 1, 1, u32::MAX)
-            .unwrap()
+            .ok()?
             .reply()
-            .unwrap();
+            .ok()?;
         // Little-endian 32 bits per pixel: blue, green, red, padding or alpha.
-        [image.data[2], image.data[1], image.data[0]]
+        Some([image.data[2], image.data[1], image.data[0]])
+    }
+
+    /// The server composes the window's pixels asynchronously on some setups (XWayland): wait
+    /// for the expected pixel instead of reading it once.
+    fn assert_pixel(
+        connection: &RustConnection,
+        window: Window,
+        x: i16,
+        y: i16,
+        expected: [u8; 3],
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let actual = pixel(connection, window, x, y);
+            if actual == Some(expected) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pixel ({x}, {y}) is {actual:?}, expected {expected:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]
@@ -362,10 +386,10 @@ mod server_tests {
         };
         producer.present(size, left, right).unwrap();
         producer.connection.sync().unwrap();
-        assert_eq!(pixel(&connection, window, 5, 5), left);
-        assert_eq!(pixel(&connection, window, 31, 31), left);
-        assert_eq!(pixel(&connection, window, 32, 0), right);
-        assert_eq!(pixel(&connection, window, 63, 31), right);
+        assert_pixel(&connection, window, 5, 5, left);
+        assert_pixel(&connection, window, 31, 31, left);
+        assert_pixel(&connection, window, 32, 0, right);
+        assert_pixel(&connection, window, 63, 31, right);
 
         // Nothing changed: no request at all is sent, so the window keeps its pixels even if
         // another client scribbles over them before the next call.
@@ -388,7 +412,7 @@ mod server_tests {
         connection.sync().unwrap();
         producer.present(size, left, right).unwrap();
         producer.connection.sync().unwrap();
-        assert_eq!(pixel(&connection, window, 5, 5), [0, 0xFF, 0]);
+        assert_pixel(&connection, window, 5, 5, [0, 0xFF, 0]);
 
         // The window is resized behind the caller's back: the producer paints the size the
         // server reports, not the stale one it is told.
@@ -405,9 +429,9 @@ mod server_tests {
         connection.sync().unwrap();
         producer.present(size, right, left).unwrap();
         producer.connection.sync().unwrap();
-        assert_eq!(pixel(&connection, window, 49, 39), right);
-        assert_eq!(pixel(&connection, window, 50, 39), left);
-        assert_eq!(pixel(&connection, window, 99, 0), left);
+        assert_pixel(&connection, window, 49, 39, right);
+        assert_pixel(&connection, window, 50, 39, left);
+        assert_pixel(&connection, window, 99, 0, left);
 
         // An expose repaints the last request without a new call to present.
         connection
@@ -431,8 +455,8 @@ mod server_tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         producer.pump().unwrap();
         producer.connection.sync().unwrap();
-        assert_eq!(pixel(&connection, window, 10, 10), right);
-        assert_eq!(pixel(&connection, window, 90, 10), left);
+        assert_pixel(&connection, window, 10, 10, right);
+        assert_pixel(&connection, window, 90, 10, left);
 
         drop(producer);
         connection.destroy_window(window).unwrap().check().unwrap();
