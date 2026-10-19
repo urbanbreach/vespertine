@@ -139,9 +139,9 @@ impl Element for AreaElement {
         let placeholder = state.placeholder_ref().clone();
         let font = state.resolved_font.clone();
         let size_px = state.metrics().size;
-        let animating = state
-            .settled_height_value()
-            .is_some_and(|settled| (f32::from(settled) - f32::from(bounds.size.height)).abs() > 0.5);
+        let animating = state.settled_height_value().is_some_and(|settled| {
+            (f32::from(settled) - f32::from(bounds.size.height)).abs() > 0.5
+        });
         let scroll = state.scroll_y;
         let inset = state.content_inset_value();
         let clip_height = if animating {
@@ -239,7 +239,9 @@ impl Element for AreaElement {
                         cx.stop_propagation();
                     }
                     MouseButton::Right => {
-                        area.update(cx, |_, cx| cx.emit(TextAreaEvent::ContextMenu(event.position)));
+                        area.update(cx, |_, cx| {
+                            cx.emit(TextAreaEvent::ContextMenu(event.position))
+                        });
                     }
                     _ => {}
                 }
@@ -346,32 +348,46 @@ impl Render for TextArea {
             .on_action(cx.listener(|this: &mut TextArea, _: &Down, window, cx| {
                 this.move_vertical(true, false, window, cx)
             }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &SelectUp, window, cx| {
-                this.move_vertical(false, true, window, cx)
-            }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &SelectDown, window, cx| {
-                this.move_vertical(true, true, window, cx)
-            }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &DocumentStart, window, cx| {
-                this.move_with(window, cx, |core| core.move_document_start(false))
-            }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &DocumentEnd, window, cx| {
-                this.move_with(window, cx, |core| core.move_document_end(false))
-            }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &SelectDocumentStart, window, cx| {
-                this.move_with(window, cx, |core| core.move_document_start(true))
-            }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &SelectDocumentEnd, window, cx| {
-                this.move_with(window, cx, |core| core.move_document_end(true))
-            }))
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &SelectUp, window, cx| {
+                    this.move_vertical(false, true, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &SelectDown, window, cx| {
+                    this.move_vertical(true, true, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &DocumentStart, window, cx| {
+                    this.move_with(window, cx, |core| core.move_document_start(false))
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &DocumentEnd, window, cx| {
+                    this.move_with(window, cx, |core| core.move_document_end(false))
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &SelectDocumentStart, window, cx| {
+                    this.move_with(window, cx, |core| core.move_document_start(true))
+                }),
+            )
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &SelectDocumentEnd, window, cx| {
+                    this.move_with(window, cx, |core| core.move_document_end(true))
+                }),
+            )
             .on_action(cx.listener(|this: &mut TextArea, _: &Newline, window, cx| {
                 this.insert_newline(window, cx)
             }))
-            .on_action(cx.listener(|this: &mut TextArea, _: &ModifiedSubmit, window, cx| {
-                if !this.modified_submit(window, cx) {
-                    cx.propagate();
-                }
-            }))
+            .on_action(
+                cx.listener(|this: &mut TextArea, _: &ModifiedSubmit, window, cx| {
+                    if !this.modified_submit(window, cx) {
+                        cx.propagate();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this: &mut TextArea, _: &Indent, window, cx| {
                 if !this.indent(false, window, cx) {
                     window.focus_next(cx);

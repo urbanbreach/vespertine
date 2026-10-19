@@ -158,7 +158,10 @@ impl Fixture {
     fn raw(&mut self, input: PlatformInput) {
         let window = self.host.window();
         self.host.flush();
-        self.host.app().simulate_platform_input(window, input).unwrap();
+        self.host
+            .app()
+            .simulate_platform_input(window, input)
+            .unwrap();
         self.host.flush();
     }
 
@@ -250,7 +253,11 @@ fn a2_selecting_across_a_soft_wrap_gives_the_expected_rectangles_and_range() {
     assert_eq!(range.start, 3);
     assert!(range.end > rows[1].source_start && range.end <= rows[2].source_start + 1);
     let (rects, bounds) = fx.read(|area| (area.selection_rects(), area.viewport_bounds().unwrap()));
-    assert_eq!(rects.len(), 2, "first row to the right edge and last row from the left: {rects:?}");
+    assert_eq!(
+        rects.len(),
+        2,
+        "first row to the right edge and last row from the left: {rects:?}"
+    );
     assert_eq!(rects[0].right(), bounds.right());
     assert_eq!(rects[1].left(), bounds.left());
     assert_eq!(f32::from(rects[0].size.height), 20.0);
@@ -280,7 +287,11 @@ fn a2_click_past_a_row_end_keeps_the_row_by_affinity_and_never_splits_crlf() {
     fx.release_at(past_end);
     assert_eq!(fx.selection(), first_end..first_end);
     let caret = fx.read(|area| area.caret_rect().unwrap());
-    assert_eq!(caret.top(), rows_top(&mut fx, 0), "the caret stays on the upper row");
+    assert_eq!(
+        caret.top(),
+        rows_top(&mut fx, 0),
+        "the caret stays on the upper row"
+    );
     // The same offset with downstream affinity lives on the lower row.
     fx.keys("right left");
     let caret = fx.read(|area| area.caret_rect().unwrap());
@@ -290,7 +301,11 @@ fn a2_click_past_a_row_end_keeps_the_row_by_affinity_and_never_splits_crlf() {
     let past_end = point(px(190.0), fx.point_of(0).y + px(10.0));
     fx.press_at(past_end, 1, false);
     fx.release_at(past_end);
-    assert_eq!(fx.selection(), 10..10, "a click past the end lands before the CR");
+    assert_eq!(
+        fx.selection(),
+        10..10,
+        "a click past the end lands before the CR"
+    );
     fx.keys("down");
     fx.keys("home");
     assert_eq!(fx.selection(), 12..12);
@@ -305,7 +320,9 @@ fn rows_top(fx: &mut Fixture, row: usize) -> vespertine::Pixels {
 fn a3_drag_autoscroll_steps_follow_the_distance_and_stale_generations_do_nothing() {
     require_backend!();
     let lines: String = (0..40).map(|n| format!("line {n}\n")).collect();
-    let mut fx = fixture(300.0, 400.0, false, move |area| area.value(&lines).rows(1, 5));
+    let mut fx = fixture(300.0, 400.0, false, move |area| {
+        area.value(&lines).rows(1, 5)
+    });
     fx.focus();
     fx.select(0..0);
     let bounds = fx.read(|area| area.viewport_bounds().unwrap());
@@ -347,14 +364,26 @@ fn a4_redo_invalidation_paste_steps_and_typing_coalescing() {
     for ch in ["a", "b", "c"] {
         fx.type_text(ch);
     }
-    assert_eq!(fx.read(|area| area.core().undo_len()), 1, "typing within 700 ms is one step");
+    assert_eq!(
+        fx.read(|area| area.core().undo_len()),
+        1,
+        "typing within 700 ms is one step"
+    );
     fx.keys("enter");
     fx.type_text("d");
-    assert_eq!(fx.read(|area| area.core().undo_len()), 3, "a newline starts a new step");
+    assert_eq!(
+        fx.read(|area| area.core().undo_len()),
+        3,
+        "a newline starts a new step"
+    );
     fx.keys("ctrl-z");
     assert_eq!(fx.text(), "abc\n");
     fx.type_text("x");
-    assert_eq!(fx.read(|area| area.core().redo_len()), 0, "a new edit invalidates redo");
+    assert_eq!(
+        fx.read(|area| area.core().redo_len()),
+        0,
+        "a new edit invalidates redo"
+    );
     fx.with(|area, window, cx| {
         area.paste_item(&ClipboardItem::new_string("p".into()), window, cx);
         area.paste_item(&ClipboardItem::new_string("q".into()), window, cx);
@@ -381,7 +410,9 @@ fn a5_modal_editor_isolates_its_selection_and_copy_from_the_document() {
     let selected = fx
         .host
         .app()
-        .update_window(window, |_, window, cx| TextService::of(window, cx).selected_text())
+        .update_window(window, |_, window, cx| {
+            TextService::of(window, cx).selected_text()
+        })
         .unwrap();
     assert_eq!(selected, None, "the document selection stays empty");
     fx.keys("ctrl-c");
@@ -396,7 +427,11 @@ fn a6_auto_grow_stops_at_ten_rows_and_scrolls_internally() {
         let value = vec!["row"; rows].join("\n");
         fx.set_value(&value);
         fx.host.flush();
-        assert_eq!(f32::from(fx.read(|area| area.measured_height())), expected, "{rows} rows");
+        assert_eq!(
+            f32::from(fx.read(|area| area.measured_height())),
+            expected,
+            "{rows} rows"
+        );
     }
     // Wrapped rows count the same as hard lines.
     fx.set_value(&WRAPPED.repeat(6));
@@ -407,7 +442,11 @@ fn a6_auto_grow_stops_at_ten_rows_and_scrolls_internally() {
     fx.set_value(&vec!["row"; 25].join("\n"));
     assert_eq!(f32::from(fx.read(|area| area.content_height())), 500.0);
     fx.with(|area, _, cx| area.set_scroll_offset(px(999.0), cx));
-    assert_eq!(f32::from(fx.read(|area| area.scroll_offset())), 300.0, "maximum scroll");
+    assert_eq!(
+        f32::from(fx.read(|area| area.scroll_offset())),
+        300.0,
+        "maximum scroll"
+    );
     // Caret follow: minimal adjustment from the top to the last row and back.
     fx.focus();
     fx.keys("ctrl-home");
@@ -415,7 +454,11 @@ fn a6_auto_grow_stops_at_ten_rows_and_scrolls_internally() {
     fx.keys("ctrl-end");
     assert_eq!(f32::from(fx.read(|area| area.scroll_offset())), 300.0);
     fx.keys("up");
-    assert_eq!(f32::from(fx.read(|area| area.scroll_offset())), 300.0, "visible rows do not scroll");
+    assert_eq!(
+        f32::from(fx.read(|area| area.scroll_offset())),
+        300.0,
+        "visible rows do not scroll"
+    );
     fx.keys("ctrl-home");
     assert_eq!(f32::from(fx.read(|area| area.scroll_offset())), 0.0);
 
@@ -459,16 +502,26 @@ fn a8_external_producer_replaces_a_selected_range_as_one_undo_edit() {
     let selection = start..start + "replace".len();
     fx.select(selection.clone());
     fx.with(|area, _, cx| area.begin_external_replacement(None, cx));
-    assert_eq!(fx.read(|area| area.external_phase()), ExternalPhase::Starting);
+    assert_eq!(
+        fx.read(|area| area.external_phase()),
+        ExternalPhase::Starting
+    );
     for text in ["你好", "bonjour 🌍"] {
         let outcome = fx.with(|area, window, cx| area.apply_provisional(text, window, cx));
         assert_eq!(outcome, ExternalOutcome::Applied);
     }
-    assert_eq!(fx.read(|area| area.external_phase()), ExternalPhase::Listening);
+    assert_eq!(
+        fx.read(|area| area.external_phase()),
+        ExternalPhase::Listening
+    );
     let outcome = fx.with(|area, window, cx| area.finalize("salut 🌍", window, cx));
     assert_eq!(outcome, ExternalOutcome::Applied);
     assert_eq!(fx.text(), "👩🏽‍💻 salut 🌍 café");
-    assert_eq!(fx.read(|area| area.core().undo_len()), 1, "exactly one undo step");
+    assert_eq!(
+        fx.read(|area| area.core().undo_len()),
+        1,
+        "exactly one undo step"
+    );
     fx.keys("ctrl-z");
     assert_eq!(fx.text(), original);
     assert_eq!(fx.selection(), selection);
@@ -492,9 +545,8 @@ fn a8_external_producer_replaces_a_selected_range_as_one_undo_edit() {
     let cursor = fx.read(|area| area.cursor_offset());
     fx.with(|area, window, cx| area.replace_range(cursor..cursor, "!", window, cx));
     assert_ne!(fx.read(|area| area.external_generation()), generation);
-    let outcome = fx.with(|area, window, cx| {
-        area.finalize_for_generation(generation, "never", window, cx)
-    });
+    let outcome =
+        fx.with(|area, window, cx| area.finalize_for_generation(generation, "never", window, cx));
     assert_eq!(outcome, ExternalOutcome::Stale);
     assert!(!fx.text().contains("never"));
     fx.keys("ctrl-z");
@@ -510,7 +562,10 @@ fn a8_external_producer_replaces_a_selected_range_as_one_undo_edit() {
     let outcome = fx.with(|area, window, cx| {
         area.apply_provisional_for_generation(generation, "late", window, cx)
     });
-    assert!(matches!(outcome, ExternalOutcome::Stale | ExternalOutcome::Inactive));
+    assert!(matches!(
+        outcome,
+        ExternalOutcome::Stale | ExternalOutcome::Inactive
+    ));
     assert_eq!(fx.text(), "another draft");
 }
 
@@ -573,7 +628,11 @@ fn a10_newline_follows_the_line_terminator_and_the_submit_mode() {
         fx.set_value("x");
         fx.take_events();
         fx.keys("shift-enter");
-        assert_eq!(fx.text(), "x\n", "Shift+Enter always inserts a newline in {mode:?}");
+        assert_eq!(
+            fx.text(),
+            "x\n",
+            "Shift+Enter always inserts a newline in {mode:?}"
+        );
         fx.take_events();
         fx.keys("enter");
         let submitted_by_enter = fx
@@ -595,8 +654,16 @@ fn a10_newline_follows_the_line_terminator_and_the_submit_mode() {
     let before = fx.text();
     fx.keys("enter");
     let events = fx.take_events();
-    assert!(events.iter().any(|event| matches!(event, TextAreaEvent::AcceptCompletion)));
-    assert!(!events.iter().any(|event| matches!(event, TextAreaEvent::Submitted(_))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, TextAreaEvent::AcceptCompletion))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TextAreaEvent::Submitted(_)))
+    );
     assert_eq!(fx.text(), before);
 }
 
@@ -617,12 +684,20 @@ fn a11_wheel_is_consumed_when_scrollable_and_triple_click_selects_the_line() {
     assert_eq!(f32::from(fx.read(|area| area.scroll_offset())), 300.0);
     let before = fx.wheel.get();
     fx.host.scroll_wheel(x, y, 0.0, -50.0, "").unwrap();
-    assert_eq!(fx.wheel.get(), before, "a wheel at the scroll limit is still consumed");
+    assert_eq!(
+        fx.wheel.get(),
+        before,
+        "a wheel at the scroll limit is still consumed"
+    );
 
     fx.set_value("a\nb");
     let before = fx.wheel.get();
     fx.host.scroll_wheel(x, y, 0.0, -50.0, "").unwrap();
-    assert_eq!(fx.wheel.get(), before + 1, "a non-scrollable editor lets the wheel propagate");
+    assert_eq!(
+        fx.wheel.get(),
+        before + 1,
+        "a non-scrollable editor lets the wheel propagate"
+    );
 
     // Three clicks select the line with its trailing LF, except on the last line.
     fx.set_value("first\nsecond\nthird");
@@ -656,18 +731,31 @@ fn a11_triple_click_selects_all_when_configured() {
 #[test]
 fn vertical_movement_keeps_the_preferred_column_and_edges_go_to_the_document_ends() {
     require_backend!();
-    let mut fx = fixture(300.0, 200.0, false, |area| area.value("long first line\nab\nlong third line"));
+    let mut fx = fixture(300.0, 200.0, false, |area| {
+        area.value("long first line\nab\nlong third line")
+    });
     fx.focus();
     fx.select(10..10);
     fx.keys("down");
     assert_eq!(fx.selection(), 18..18, "the short line ends at its end");
     fx.keys("down");
     let third = fx.selection().start;
-    assert!((24..=29).contains(&third), "the preferred column is reused: {third}");
+    assert!(
+        (24..=29).contains(&third),
+        "the preferred column is reused: {third}"
+    );
     fx.keys("down");
-    assert_eq!(fx.selection(), 34..34, "Down from the last row goes to the end");
+    assert_eq!(
+        fx.selection(),
+        34..34,
+        "Down from the last row goes to the end"
+    );
     fx.keys("up up up");
-    assert_eq!(fx.selection(), 0..0, "Up from the first row goes to offset 0");
+    assert_eq!(
+        fx.selection(),
+        0..0,
+        "Up from the first row goes to offset 0"
+    );
     fx.keys("shift-down");
     assert!(fx.selection().end > 0);
     fx.keys("ctrl-shift-end");
@@ -677,7 +765,9 @@ fn vertical_movement_keeps_the_preferred_column_and_edges_go_to_the_document_end
 #[test]
 fn read_only_and_disabled_editors_keep_the_core_semantics() {
     require_backend!();
-    let mut fx = fixture(300.0, 200.0, false, |area| area.value("hello").read_only(true));
+    let mut fx = fixture(300.0, 200.0, false, |area| {
+        area.value("hello").read_only(true)
+    });
     fx.focus();
     fx.keys("ctrl-a ctrl-c");
     assert_eq!(fx.clipboard_text().as_deref(), Some("hello"));

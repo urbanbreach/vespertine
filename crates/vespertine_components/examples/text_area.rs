@@ -31,16 +31,22 @@ impl Render for Example {
 
 async fn script(cx: &mut AsyncApp, window: WindowHandle<Example>) -> Vec<String> {
     let mut failures = Vec::new();
-    let pause = |cx: &AsyncApp| cx.background_executor().timer(std::time::Duration::from_millis(80));
+    let pause = |cx: &AsyncApp| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(80))
+    };
     pause(cx).await;
     let any: AnyWindowHandle = window.into();
     let area = window
         .read_with(cx, |example, _| example.area.clone())
         .expect("example state");
-    let run = |cx: &mut AsyncApp, f: &dyn Fn(&mut TextArea, &mut Window, &mut Context<TextArea>)| {
+    let run = |cx: &mut AsyncApp,
+               f: &dyn Fn(&mut TextArea, &mut Window, &mut Context<TextArea>)| {
         let area = area.clone();
-        cx.update_window(any, |_, window, cx| area.update(cx, |area, cx| f(area, window, cx)))
-            .ok();
+        cx.update_window(any, |_, window, cx| {
+            area.update(cx, |area, cx| f(area, window, cx))
+        })
+        .ok();
     };
     let read = |cx: &mut AsyncApp| {
         let area = area.clone();
@@ -59,7 +65,9 @@ async fn script(cx: &mut AsyncApp, window: WindowHandle<Example>) -> Vec<String>
             area.replace_and_mark_text_in_range(None, marked, None, window, cx)
         });
     }
-    run(cx, &|area, window, cx| area.replace_text_in_range(None, "日本語", window, cx));
+    run(cx, &|area, window, cx| {
+        area.replace_text_in_range(None, "日本語", window, cx)
+    });
     let (text, _) = read(cx);
     if text != "a日本語bc" {
         failures.push(format!("commit produced {text:?}"));
@@ -72,11 +80,15 @@ async fn script(cx: &mut AsyncApp, window: WindowHandle<Example>) -> Vec<String>
     if text != "abc" || selection != (1..1) {
         failures.push(format!("undo restored {text:?} {selection:?}"));
     }
-    run(cx, &|area, window, cx| area.set_selected_range(1..2, false, window, cx));
+    run(cx, &|area, window, cx| {
+        area.set_selected_range(1..2, false, window, cx)
+    });
     run(cx, &|area, window, cx| {
         area.replace_and_mark_text_in_range(None, "に", None, window, cx)
     });
-    run(cx, &|area, window, cx| area.replace_text_in_range(None, "日本語", window, cx));
+    run(cx, &|area, window, cx| {
+        area.replace_text_in_range(None, "日本語", window, cx)
+    });
     cx.update_window(any, |_, window, cx| {
         window.dispatch_keystroke(Keystroke::parse("ctrl-z").expect("keystroke"), cx);
     })

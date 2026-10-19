@@ -191,11 +191,7 @@ pub struct AreaLayout {
 
 impl AreaLayout {
     /// Places the shaped lines; `full_lens` holds each line's length including a trailing CR.
-    pub fn new(
-        shapes: Vec<(Rc<LineShape>, usize)>,
-        line_height: Pixels,
-        width: Pixels,
-    ) -> Self {
+    pub fn new(shapes: Vec<(Rc<LineShape>, usize)>, line_height: Pixels, width: Pixels) -> Self {
         let mut lines = Vec::with_capacity(shapes.len());
         let mut display_start = 0;
         let mut top = px(0.0);
@@ -235,7 +231,9 @@ impl AreaLayout {
     pub fn row_at(&self, offset: usize, affinity: Affinity) -> VisualRow {
         let line_ix = self.line_index(offset.min(self.display_len));
         let line = &self.lines[line_ix];
-        let rel = offset.saturating_sub(line.display_start).min(line.shape.len);
+        let rel = offset
+            .saturating_sub(line.display_start)
+            .min(line.shape.len);
         let row = line.shape.row_for(rel, affinity);
         self.visual_row(line_ix, row)
     }
@@ -309,8 +307,7 @@ impl AreaLayout {
             .partition_point(|line| line.top <= at.y)
             .saturating_sub(1);
         let line = &self.lines[line_ix];
-        let row = (((at.y - line.top) / self.line_height) as usize)
-            .min(line.shape.row_count() - 1);
+        let row = (((at.y - line.top) / self.line_height) as usize).min(line.shape.row_count() - 1);
         let (rel, affinity) = line.shape.hit(row, at.x);
         (line.display_start + rel, affinity)
     }
@@ -326,7 +323,11 @@ impl AreaLayout {
     /// the first row from the start to the right edge of the content box, full-width middle
     /// rows (none when the selection spans exactly two rows) and the last row from the left
     /// edge to the end point. Zero-width pieces on a single row produce nothing.
-    pub fn selection_rects(&self, range: Range<usize>, content_width: Pixels) -> Vec<Bounds<Pixels>> {
+    pub fn selection_rects(
+        &self,
+        range: Range<usize>,
+        content_width: Pixels,
+    ) -> Vec<Bounds<Pixels>> {
         let mut rects = Vec::new();
         if range.start >= range.end {
             return rects;
@@ -440,7 +441,8 @@ mod tests {
     #[test]
     fn auto_height_clamps_between_the_row_bounds() {
         let (min, max) = row_bounds(1, 10, px(20.0));
-        let height = |rows: usize| f32::from(auto_height(px(20.0 * rows as f32), px(0.0), min, max));
+        let height =
+            |rows: usize| f32::from(auto_height(px(20.0 * rows as f32), px(0.0), min, max));
         assert_eq!(height(1), 20.0);
         assert_eq!(height(5), 100.0);
         assert_eq!(height(10), 200.0);

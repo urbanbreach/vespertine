@@ -2,8 +2,8 @@
 //! geometry, auto-growing height followed by internal scrolling, native composition, a
 //! source/display projection layer and a transactional path for external progressive text.
 
-pub mod external;
 mod element;
+pub mod external;
 pub mod layers;
 pub mod layout;
 pub mod projection;
@@ -26,9 +26,9 @@ use layout::{AreaLayout, LineShape, auto_height, clamp_scroll, follow_scroll, ro
 use runs::{BaseStyle, SpanSweep, line_runs};
 use std::{collections::HashMap, ops::Range, path::PathBuf, rc::Rc};
 use vespertine::{
-    App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, Font, Hsla, Image, KeyDownEvent, KeyUpEvent, Pixels, Point, Role, SharedString,
-    Task, TextRun, UTF16Selection, Window, point, px, size,
+    App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    Font, Hsla, Image, KeyDownEvent, KeyUpEvent, Pixels, Point, Role, SharedString, Task, TextRun,
+    UTF16Selection, Window, point, px, size,
 };
 
 /// Vertical space the chrome (padding and border) takes around the content: 2 x (4 + 1) px.
@@ -566,7 +566,11 @@ impl TextArea {
     /// Whether content is hidden past the top or bottom edge, judged against the SETTLED height
     /// (R13).
     pub fn overflow_edges(&self) -> OverflowEdges {
-        layout::overflow_edges(self.scroll_y, self.content_height(), self.settled_viewport())
+        layout::overflow_edges(
+            self.scroll_y,
+            self.content_height(),
+            self.settled_viewport(),
+        )
     }
 
     /// Every visual row with its source start, logical line and content-space geometry.
@@ -643,7 +647,11 @@ impl TextArea {
     }
 
     /// Sets the placeholder.
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.placeholder = placeholder.into();
         cx.notify();
     }
@@ -758,7 +766,12 @@ impl TextArea {
     }
 
     /// Pastes a clipboard item exactly as the Paste action pastes the system clipboard.
-    pub fn paste_item(&mut self, item: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn paste_item(
+        &mut self,
+        item: &ClipboardItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.disabled || self.core.is_read_only() {
             return;
         }
@@ -823,9 +836,9 @@ impl TextArea {
     }
 
     fn layers_version(&self) -> u64 {
-        self.layers
-            .iter()
-            .fold(0, |acc, layer| acc.wrapping_mul(31).wrapping_add(layer.version()))
+        self.layers.iter().fold(0, |acc, layer| {
+            acc.wrapping_mul(31).wrapping_add(layer.version())
+        })
     }
 
     /// Rebuilds the projection, display text and mapped spans when the source, the active
@@ -897,7 +910,11 @@ impl TextArea {
     ) -> Rc<AreaLayout> {
         self.refresh_projection(cx);
         let theme = self.resolved_theme(cx);
-        let color = if self.disabled { theme.muted } else { theme.text };
+        let color = if self.disabled {
+            theme.muted
+        } else {
+            theme.text
+        };
         let monospace: SharedString = vespertine_theme::appearance::try_theme_of(cx)
             .map(|theme| theme.typography.code_family.clone())
             .unwrap_or_else(|| "DejaVu Sans Mono".into());
@@ -922,9 +939,8 @@ impl TextArea {
             monospace_family: monospace,
             color,
         };
-        let marked_display = marked_source.map(|marked| {
-            self.display_of(marked.start)..self.display_of(marked.end)
-        });
+        let marked_display =
+            marked_source.map(|marked| self.display_of(marked.start)..self.display_of(marked.end));
         let mut sweep = SpanSweep::new(&self.display_spans);
         let mut old = std::mem::take(&mut self.line_cache);
         let mut fresh: HashMap<u64, Vec<Rc<CachedLine>>> = HashMap::new();
@@ -1092,7 +1108,10 @@ impl TextArea {
     }
 
     pub(crate) fn content_origin(&self, bounds: Bounds<Pixels>) -> Point<Pixels> {
-        point(bounds.left() + self.content_inset, bounds.top() - self.scroll_y)
+        point(
+            bounds.left() + self.content_inset,
+            bounds.top() - self.scroll_y,
+        )
     }
 
     // ---- geometry queries ---------------------------------------------------------------------------
@@ -1282,9 +1301,9 @@ impl TextArea {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> ExternalOutcome {
-        let outcome = self
-            .external
-            .apply_provisional_for_generation(generation, &mut self.core, text);
+        let outcome =
+            self.external
+                .apply_provisional_for_generation(generation, &mut self.core, text);
         self.after_external(outcome, window, cx)
     }
 
@@ -1319,19 +1338,21 @@ impl TextArea {
                 .iter()
                 .find_map(|layer| layer.newline_edit(text, selection.start));
             if let Some(edit) = hook {
-                let changed = self.core.apply(edit.range, &edit.text, EditKind::Other, now);
+                let changed = self
+                    .core
+                    .apply(edit.range, &edit.text, EditKind::Other, now);
                 self.finish_edit(changed, window, cx);
                 return;
             }
         }
         let crlf = {
             let end = super::boundaries::raw_line_end(text, selection.start);
-            end > 0 && text.as_bytes().get(end - 1) == Some(&b'\r') && end > line_start(text, selection.start)
+            end > 0
+                && text.as_bytes().get(end - 1) == Some(&b'\r')
+                && end > line_start(text, selection.start)
         };
         let terminator = if crlf { "\r\n" } else { "\n" };
-        let changed = self
-            .core
-            .apply(selection, terminator, EditKind::Other, now);
+        let changed = self.core.apply(selection, terminator, EditKind::Other, now);
         self.finish_edit(changed, window, cx);
     }
 
@@ -1360,8 +1381,7 @@ impl TextArea {
             self.core
                 .apply(indent.edit.range, &indent.edit.text, EditKind::Other, now)
         };
-        self.core
-            .set_selection(indent.selection, indent.reversed);
+        self.core.set_selection(indent.selection, indent.reversed);
         self.finish_edit(changed, window, cx);
         true
     }
@@ -1502,7 +1522,12 @@ impl TextArea {
         }
     }
 
-    fn drag_selection(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    fn drag_selection(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let clamped = self.clamp_position(position);
         let Some((hit, _)) = self.hit_source(clamped) else {
             return;
@@ -1510,7 +1535,8 @@ impl TextArea {
         let Some(anchor) = self.drag.as_ref().map(|drag| drag.anchor.clone()) else {
             return;
         };
-        self.core.drag_to(&anchor, hit, self.triple_click_selects_all);
+        self.core
+            .drag_to(&anchor, hit, self.triple_click_selects_all);
         self.blink.reset(cx);
         window.notify_text_selection_changed(&self.focus_handle);
         cx.emit(TextAreaEvent::CursorMoved);
@@ -1537,7 +1563,9 @@ impl TextArea {
                     ))
                     .await;
                 let keep_going = this
-                    .update_in(cx, |this, window, cx| this.autoscroll_tick(generation, window, cx))
+                    .update_in(cx, |this, window, cx| {
+                        this.autoscroll_tick(generation, window, cx)
+                    })
                     .unwrap_or(false);
                 if !keep_going {
                     break;
@@ -1557,7 +1585,8 @@ impl TextArea {
         if generation != self.pointer_generation || self.drag.is_none() {
             return false;
         }
-        let (Some(bounds), Some(position)) = (self.bounds, self.drag.as_ref().map(|drag| drag.position))
+        let (Some(bounds), Some(position)) =
+            (self.bounds, self.drag.as_ref().map(|drag| drag.position))
         else {
             return false;
         };
@@ -1585,7 +1614,11 @@ impl TextArea {
 
     /// Wheel scrolling (R10): returns whether the editor consumed the event. A scrollable editor
     /// consumes it even at a scroll limit so the gesture does not chain into an ancestor.
-    pub(crate) fn on_wheel(&mut self, event: &vespertine::ScrollWheelEvent, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn on_wheel(
+        &mut self,
+        event: &vespertine::ScrollWheelEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let viewport = self.settled_viewport();
         let content = self.content_height();
         if self.disabled || content <= viewport {
@@ -1694,7 +1727,6 @@ impl TextArea {
     pub(crate) fn content_inset_value(&self) -> Pixels {
         self.content_inset
     }
-
 }
 
 impl EditorHost for TextArea {

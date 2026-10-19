@@ -1467,7 +1467,11 @@ mod tests {
         assert_eq!(core.selection(), 2..2);
         core.move_to(12, false);
         core.delete_backward(0.0);
-        assert_eq!(core.text(), "abcd", "Backspace after a chip deletes it whole");
+        assert_eq!(
+            core.text(),
+            "abcd",
+            "Backspace after a chip deletes it whole"
+        );
         core.undo();
         assert_eq!(core.text(), "ab0123456789cd");
         core.move_to(2, false);

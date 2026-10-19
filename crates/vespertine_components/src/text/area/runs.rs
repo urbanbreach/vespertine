@@ -222,12 +222,12 @@ mod tests {
         let runs = line_runs(&base(), 0..12, &spans, None);
         assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), 12);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
-        assert_eq!(lens, [4, 2, 2, 1, 3]);
+        assert_eq!(lens, [4, 2, 2, 1, 1, 2]);
         assert_eq!(runs[0].font.weight, FontWeight::BOLD);
         assert_eq!(runs[1].font.style, FontStyle::Italic);
         assert_eq!(runs[1].font.weight, FontWeight::BOLD);
         assert_eq!(runs[2].font.family.as_ref(), "Test Mono");
-        assert_eq!(runs[4].font.weight, FontWeight::NORMAL);
+        assert_eq!(runs[5].font.weight, FontWeight::NORMAL);
     }
 
     #[test]
