@@ -154,3 +154,11 @@ path = "examples/text_area.rs"
 [[example]]
 name = "markdown_editor"
 path = "examples/markdown_editor.rs"
+
+[[example]]
+name = "tab_strip"
+path = "examples/tab_strip.rs"
+
+[[example]]
+name = "toasts"
+path = "examples/toasts.rs"
