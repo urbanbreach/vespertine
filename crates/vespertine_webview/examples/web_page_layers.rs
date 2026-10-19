@@ -13,6 +13,9 @@
 //! * showing a tooltip over the page changes neither the page's keyboard focus nor a pending
 //!   press: pressing on the page, hovering the tooltip target and releasing completes one click.
 //!
+//! The window opts into the two-plane layering of PLT-001, so on Linux the menu and the dialog
+//! live in the overlay plane above the page (the page itself is never a native child).
+//!
 //! `WEB_PAGE_INTERACTIVE=1` keeps the window open; press `m` for the menu, `d` for the dialog.
 
 #[cfg(target_os = "linux")]
@@ -422,6 +425,12 @@ button{position:absolute;left:300px;top:150px;width:160px;height:60px;font-size:
                         ..Default::default()
                     },
                     |window, cx| {
+                        // The page is base content; the menu and the dialog are deferred content
+                        // that the platform composes into the transparent overlay above it
+                        // (PLT-001) where it can.
+                        if let Err(error) = window.enable_scene_overlay() {
+                            eprintln!("the window keeps a single plane: {error:#}");
+                        }
                         let page =
                             cx.new(|cx| WebPage::new(BrowserContext::ephemeral(), window, cx));
                         cx.new(|cx| {

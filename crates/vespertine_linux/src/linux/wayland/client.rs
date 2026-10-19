@@ -1823,13 +1823,31 @@ fn pointer_target(
     state: &WaylandClientState,
     surface: &ObjectId,
 ) -> (Option<WaylandWindowStatePtr>, Point<Pixels>) {
-    if let Some(window) = state.windows.get(surface) {
+    resolve_pointer_target(
+        state.windows.get(surface),
+        state.subsurfaces.get(surface).map(|input| {
+            (
+                &input.window,
+                input.framework_pointer.get(),
+                input.origin.get(),
+            )
+        }),
+    )
+}
+
+/// The decision behind [`pointer_target`]: a window's own surface delivers to the window at its
+/// own coordinates; a composition subsurface (given with whether it delivers to the framework
+/// and its origin in window coordinates) delivers to its owner at its origin; anything else is
+/// not the framework's.
+fn resolve_pointer_target<W: Clone>(
+    window: Option<&W>,
+    subsurface: Option<(&W, bool, Point<Pixels>)>,
+) -> (Option<W>, Point<Pixels>) {
+    if let Some(window) = window {
         return (Some(window.clone()), Point::default());
     }
-    match state.subsurfaces.get(surface) {
-        Some(input) if input.framework_pointer.get() => {
-            (Some(input.window.clone()), input.origin.get())
-        }
+    match subsurface {
+        Some((owner, true, origin)) => (Some(owner.clone()), origin),
         _ => (None, Point::default()),
     }
 }
@@ -3450,6 +3468,37 @@ mod tests {
         fn destroy(&self) {
             self.destroyed.set(true);
         }
+    }
+
+    #[test]
+    fn pointer_events_on_composition_subsurfaces_resolve_to_the_owning_window() {
+        let owner = 7u32;
+        let origin = point(px(40.0), px(25.0));
+        // The window's own surface: itself, at its own coordinates.
+        assert_eq!(
+            resolve_pointer_target(Some(&1u32), None),
+            (Some(1), Point::default())
+        );
+        // An overlay plane (delivers to the framework at the window origin).
+        assert_eq!(
+            resolve_pointer_target(None, Some((&owner, true, Point::default()))),
+            (Some(owner), Point::default())
+        );
+        // A native child that opted into framework forwarding: its owner, at its origin so the
+        // surface-local coordinates become window-content coordinates.
+        assert_eq!(
+            resolve_pointer_target(None, Some((&owner, true, origin))),
+            (Some(owner), origin)
+        );
+        // A native child keeping its own event path, and surfaces nobody knows.
+        assert_eq!(
+            resolve_pointer_target(None, Some((&owner, false, origin))),
+            (None, Point::default())
+        );
+        assert_eq!(
+            resolve_pointer_target::<u32>(None, None),
+            (None, Point::default())
+        );
     }
 
     fn drag_state() -> DragState<FakeDataOffer, &'static str> {

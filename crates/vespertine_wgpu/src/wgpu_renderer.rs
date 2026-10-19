@@ -1575,6 +1575,18 @@ impl WgpuRenderer {
         self.device_errors.device_lost()
     }
 
+    /// Loses the device: destroys it, so frames fail, and delivers the report a driver loss
+    /// would produce (see `WgpuHeadlessRenderer::force_device_loss`). Every renderer sharing
+    /// the device observes the loss.
+    #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+    pub fn force_device_loss(&self) {
+        if let Some(core) = self.core() {
+            core.resources.device.destroy();
+        }
+        self.device_errors
+            .report_lost(wgpu::DeviceLostReason::Unknown, "forced by test");
+    }
+
     /// The device and queue this renderer draws with, shared and type-erased (they are the
     /// `Arc<wgpu::Device>` and `Arc<wgpu::Queue>` the renderer itself holds).
     ///
