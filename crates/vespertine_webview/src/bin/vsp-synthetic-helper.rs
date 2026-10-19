@@ -29,7 +29,9 @@ fn log_line(value: &Value) {
             .append(true)
             .open(path)
     {
-        let _ = writeln!(file, "{value}");
+        // One write per line: helpers of several pages append to the same log, and `writeln!`
+        // issues the text and the newline separately, so lines of two helpers could merge.
+        let _ = file.write_all(format!("{value}\n").as_bytes());
     }
 }
 

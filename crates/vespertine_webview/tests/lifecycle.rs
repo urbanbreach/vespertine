@@ -347,6 +347,9 @@ fn a_helper_that_ignores_end_of_file_is_killed_after_the_grace_period() {
     );
 }
 
+/// Bound for conditions that hold promptly on an idle machine; generous so a loaded one passes.
+const LOADED_MACHINE: Duration = Duration::from_secs(60);
+
 // ---- PLT-014 A10: failure ---------------------------------------------------------------------
 
 #[test]
@@ -360,12 +363,13 @@ fn killing_the_helper_fails_every_page_and_retry_spawns_a_new_helper() {
     let old_pid = first.helper().pid();
     first.helper().kill_for_tests();
     for (page, events) in [(&first, &first_events), (&second, &second_events)] {
-        assert!(wait_until(Duration::from_secs(5), || {
+        assert!(wait_until(LOADED_MACHINE, || {
             page.state().error.as_deref() == Some(ERROR_HELPER_STOPPED)
         }));
         assert!(!page.state().loading);
+        // The event may trail the state it reports by a scheduling quantum.
         assert!(
-            events.try_recv().is_ok(),
+            wait_until(LOADED_MACHINE, || events.try_recv().is_ok()),
             "a state-changed event is emitted"
         );
     }
@@ -375,13 +379,15 @@ fn killing_the_helper_fails_every_page_and_retry_spawns_a_new_helper() {
     let retried = start(&context);
     assert_ne!(retried.helper().pid(), old_pid);
     retried.load("http://example.test/a").unwrap();
-    assert!(wait_until(Duration::from_secs(5), || retried
+    assert!(wait_until(LOADED_MACHINE, || retried
         .state()
         .title
         .contains("example.test/a")));
     // The other page is unaffected by that retry until it is retried too.
     assert_eq!(second.state().error.as_deref(), Some(ERROR_HELPER_STOPPED));
     assert_eq!(second.helper().pid(), old_pid);
+    // The synthetic helper records its pid after it started; wait for the record.
+    assert!(wait_until(LOADED_MACHINE, || synth.started_pids().len() >= 2));
     assert_eq!(synth.started_pids().len(), 2);
 }
 
