@@ -96,6 +96,12 @@ pub(crate) struct ViewRecord {
     pub splice_unsafe: bool,
     /// This view was notified since the preceding frame.
     pub notified: bool,
+    /// The last rebuild of this view happened because the view itself was flagged dirty, and
+    /// because reads of its own were stale (not merely because a nested view was dirty).
+    pub rebuilt_dirty: bool,
+    pub rebuilt_stale: bool,
+    /// Length of the frame's accessed-element-state list when the row build began (rows only).
+    pub row_mark: usize,
     /// Reads of this view alone (nested views excluded).
     pub reads: ReadSet,
     /// Logical time at which the reads were completed.
@@ -143,6 +149,14 @@ pub(crate) struct RowData {
     pub hitboxes: Vec<crate::Hitbox>,
     /// Whether the pointer was over the row's hitboxes when it was last recorded or replayed.
     pub hovered: bool,
+    /// The row accessed element states while it was built.
+    pub has_states: bool,
+    /// The row was kept in a frame without its element states (it was not shown): the states
+    /// were dropped, so the row is built again before it is shown (PRF-005 R3).
+    pub states_dropped: bool,
+    /// The tab stops the row registered while it was painted; they enter the frame only
+    /// while the row is shown.
+    pub tab_ops: Vec<crate::tab_stop::TabStopOperation>,
 }
 
 /// Where a replayed stretch of output lands (rows and scroll layers, PRF-004/PRF-005).
@@ -272,6 +286,9 @@ impl RetainedViews {
             dirty_descendants: false,
             splice_unsafe: false,
             notified: false,
+            rebuilt_dirty: false,
+            rebuilt_stale: false,
+            row_mark: 0,
             reads: ReadSet::default(),
             built_clock: 0,
             layout: OwnedLayoutNodes::default(),
@@ -636,6 +653,8 @@ impl RetainedViews {
         if let Some(record) = self.get_mut(key) {
             record.build_epoch += 1;
             record.children.clear();
+            record.rebuilt_dirty = record.dirty;
+            record.rebuilt_stale = false;
             record.dirty = false;
             record.dirty_descendants = false;
             record.splice_unsafe = false;
@@ -643,6 +662,14 @@ impl RetainedViews {
             record.live_epoch = epoch;
         }
         self.register_with_parent(key);
+    }
+
+    /// Records that the rebuild just begun is also due to reads of the view that went stale
+    /// (see [`Self::reads_stale`]).
+    pub fn mark_rebuilt_stale(&mut self, key: ViewKey) {
+        if let Some(record) = self.get_mut(key) {
+            record.rebuilt_stale = true;
+        }
     }
 
     /// Registers `key` as a child of its parent (once per parent build).

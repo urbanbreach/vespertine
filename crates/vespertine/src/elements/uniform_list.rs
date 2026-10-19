@@ -781,7 +781,15 @@ impl UniformList {
         let Some(list) = list.filter(|_| self.item_count > 0 && window.rows_enabled()) else {
             return self.measure_item(None, window, cx);
         };
-        let ambiguous = window.rows_owner_ambiguous();
+        // A changed scroll offset explains the notification that came with it.
+        let last_top = window.row_store(list).last_scroll_top;
+        let scrolled = self.scroll_handle.as_ref().map_or(0, |handle| {
+            let top = -window
+                .pixel_snap(handle.0.borrow().base_handle.offset().y)
+                .to_f64();
+            u64::from(top != last_top)
+        });
+        let ambiguous = window.rows_owner_ambiguous_with(scrolled);
         let cached = window
             .row_store(list)
             .measure
@@ -1171,13 +1179,16 @@ fn prepaint_rows(
         bounds: padded_bounds,
         available_width,
         scale_factor: scale,
+        ambient: window.row_ambient(),
     };
     if !window.retention_reuse_allowed()
         || window.row_store(list).geometry.as_ref() != Some(&geometry)
     {
         window.row_store_clear(list);
     }
-    let ambiguous = window.rows_owner_ambiguous()
+    // A changed scroll offset explains the notification that came with it.
+    let scrolled = u64::from(window.row_store(list).last_scroll_top != scroll_top);
+    let ambiguous = window.rows_owner_ambiguous_with(scrolled)
         || window.row_store(list).render_type != Some(source.render_type);
     let (mut rows, constructed, last_top, was_moving_down) = {
         let store = window.row_store(list);
@@ -1327,7 +1338,7 @@ fn prepare_row(
             keep_states: shown,
             scale_factor: frame.scale,
         };
-        if window.row_reusable(key) && !window.row_hover_changed(key, &placement) {
+        if window.row_reusable_for(key, shown) && !window.row_hover_changed(key, &placement) {
             window.row_replay_prepaint(key, &placement, cx);
             plans.push(RowPlan {
                 ix,
@@ -1370,11 +1381,13 @@ fn prepare_row(
         origin.x,
         frame.padded_origin_y + Pixels::from(frame.row_extent * ix as f64 - frame.scroll_top),
     );
-    window.row_prepaint(
+    window.row_prepaint_ex(
         key,
         frame.extent,
         frame.clip,
         frame.content_origin,
+        shown,
+        false,
         |window| item.prepaint_at(origin, window, cx),
     );
     plans.push(RowPlan {
@@ -1402,7 +1415,9 @@ fn paint_rows(frame_state: &mut UniformListFrameState, window: &mut Window, cx: 
     for plan in &mut frame_state.rows {
         match plan.element.as_mut() {
             Some(element) => {
-                window.row_paint(plan.key, extent, |window| element.paint(window, cx));
+                window.row_paint_phase(plan.key, extent, plan.shown, |window| {
+                    element.paint(window, cx)
+                });
             }
             None => window.row_replay_paint(plan.key, &plan.placement, cx),
         }

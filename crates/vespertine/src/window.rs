@@ -3990,9 +3990,9 @@ impl Window {
             }
         }
         if !cx.mode.skip_drawing() {
-            self.retention.tracker.set_drawing(true);
+            read_tracker::ReadTracker::begin_draw(&self.retention.tracker);
             self.draw_roots(cx);
-            self.retention.tracker.set_drawing(false);
+            read_tracker::ReadTracker::end_draw(&self.retention.tracker);
             self.finish_retained_frame();
             #[cfg(feature = "profiler")]
             {

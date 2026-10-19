@@ -115,16 +115,33 @@ pub(crate) struct ReadTracker {
     scroll_notifies: Cell<u64>,
     animation_notifies: Cell<u64>,
 }
-
 /// What caused the notifications received since the preceding frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FrameCauses {
     /// Some notification is neither a scroll nor an animation-frame notification: the
     /// notified views may render different output for reasons nothing tracked explains.
+    #[allow(dead_code, reason = "read by scroll layers (PRF-004 R2)")]
     pub unexplained: bool,
+    /// How many notifications were neither scroll nor animation-frame notifications.
+    pub unexplained_count: u64,
     /// A scroll listener notified.
     #[allow(dead_code, reason = "read by scroll layers (PRF-004 R2)")]
     pub scrolled: bool,
+}
+
+thread_local! {
+    /// The tracker of the draw in progress on this thread, for reads made by state that has
+    /// no window at hand (versioned list and scroll queries).
+    static DRAWING: RefCell<Option<Rc<ReadTracker>>> = const { RefCell::new(None) };
+}
+
+/// Records that the view being built read the versioned counter `cell`: a no-op outside a draw.
+pub(crate) fn read_versioned_in_draw(cell: &VersionCell) {
+    DRAWING.with(|drawing| {
+        if let Some(tracker) = drawing.borrow().as_ref() {
+            tracker.read_versioned(cell);
+        }
+    });
 }
 
 impl ReadTracker {
@@ -143,8 +160,16 @@ impl ReadTracker {
         next
     }
 
-    pub fn set_drawing(&self, drawing: bool) {
-        self.drawing.set(drawing);
+    /// Starts a draw: reads and writes are attributed to views until [`Self::end_draw`].
+    pub fn begin_draw(this: &Rc<Self>) {
+        this.drawing.set(true);
+        DRAWING.with(|drawing| *drawing.borrow_mut() = Some(this.clone()));
+    }
+
+    /// Ends the draw started by [`Self::begin_draw`].
+    pub fn end_draw(this: &Rc<Self>) {
+        this.drawing.set(false);
+        DRAWING.with(|drawing| *drawing.borrow_mut() = None);
     }
 
     pub fn push_frame(&self, key: ViewKey, reads: ReadSet) {
@@ -249,6 +274,13 @@ impl ReadTracker {
         self.scroll_notifies.set(self.scroll_notifies.get() + 1);
     }
 
+    /// Records that a hover transition is about to notify: rows predict hover themselves, so
+    /// the notification does not make the owner of a list suspicious (PRF-005 R3).
+    pub fn note_hover_notification(&self) {
+        self.animation_notifies
+            .set(self.animation_notifies.get() + 1);
+    }
+
     /// Records that an animation-frame request is about to notify.
     pub fn note_animation_notification(&self) {
         self.animation_notifies
@@ -272,6 +304,7 @@ impl ReadTracker {
         *baseline = now;
         FrameCauses {
             unexplained: calls > scrolls + animations,
+            unexplained_count: calls.saturating_sub(scrolls + animations),
             scrolled: scrolls > 0,
         }
     }

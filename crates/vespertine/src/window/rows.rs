@@ -10,7 +10,7 @@
 use super::{
     Window,
     read_tracker::ViewKey,
-    retained::{Placement, RowData},
+    retained::{CacheKey, Placement, RowData},
 };
 use crate::{App, Bounds, ContentMask, ElementId, GlobalElementId, Pixels, Point, Scene};
 use std::collections::BTreeMap;
@@ -42,6 +42,9 @@ pub(crate) struct RowGeometry {
     pub bounds: Bounds<Pixels>,
     pub available_width: Pixels,
     pub scale_factor: f32,
+    /// What rows inherit (text style, opacity, rem size, retention context): a change makes
+    /// every recorded row obsolete.
+    pub ambient: CacheKey,
 }
 
 /// The rows of one list element.
@@ -59,6 +62,10 @@ pub(crate) struct RowStore {
     /// The type of the callback that rendered the rows.
     pub render_type: Option<std::any::TypeId>,
     pub measure: Option<MeasureSample>,
+    /// The list's structural revision the rows were recorded at (variable-height list).
+    pub revision: u64,
+    /// The list's count of scroll mutations as of the previous frame (variable-height list).
+    pub scroll_marks: u64,
 }
 
 impl Window {
@@ -67,6 +74,17 @@ impl Window {
     /// drawn inside deferred content.
     pub(crate) fn rows_enabled(&self) -> bool {
         self.retention_tracking() && !self.a11y.is_active()
+    }
+
+    /// What rows inherit from the place their list is drawn in (text style, opacity, rem
+    /// size, retention context), without the geometry that moves rows rather than
+    /// invalidating them.
+    pub(crate) fn row_ambient(&self) -> CacheKey {
+        let mut key = self.ambient_cache_key(Bounds::default());
+        key.content_mask = ContentMask {
+            bounds: Bounds::default(),
+        };
+        key
     }
 
     /// The store of the list drawn at `id`, created on first use and marked as seen.
@@ -118,18 +136,31 @@ impl Window {
         });
     }
 
-    /// Whether the row's recorded output may be replayed in this frame.
+    /// Whether the row's recorded output may be replayed in this frame, whether it is shown
+    /// or kept without being shown.
+    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
     pub(crate) fn row_reusable(&self, key: ViewKey) -> bool {
+        self.row_reusable_for(key, false)
+    }
+
+    /// Whether the row's recorded output may be replayed in this frame. A row that was kept
+    /// without its element states (it was not shown) is built again before it is shown.
+    pub(crate) fn row_reusable_for(&self, key: ViewKey, shown: bool) -> bool {
         let Some(record) = self.retention.views.get(key) else {
             return false;
         };
         let Some(row) = record.row.as_deref() else {
             return false;
         };
-        if record.dirty || record.prepaint.is_none() || record.paint.is_none() {
+        // A dirty nested view cannot be spliced into a replayed row: the row is built again.
+        if record.dirty
+            || record.dirty_descendants
+            || record.prepaint.is_none()
+            || record.paint.is_none()
+        {
             return false;
         }
-        if row.suspect || !row.replayable {
+        if row.suspect || !row.replayable || (shown && row.states_dropped) {
             return false;
         }
         // Ordinary descendants of a notified ancestor re-evaluate updates that were never
@@ -151,11 +182,55 @@ impl Window {
         }
     }
 
-    /// Whether the owner of the list was rebuilt for a reason nothing tracked explains: a
-    /// notification that is neither a scroll nor an animation frame, or a frame that
-    /// reconstructs everything (PRF-005 R5).
-    pub(crate) fn rows_owner_ambiguous(&self) -> bool {
-        self.retention.causes.unexplained || !self.retention_reuse_allowed()
+    /// Marks the row as one that cannot be replayed (it asked for an autoscroll while it was
+    /// prepainted, which only a build can repeat).
+    pub(crate) fn row_forbid_replay(&mut self, key: ViewKey) {
+        if let Some(row) = self
+            .retention
+            .views
+            .get_mut(key)
+            .and_then(|record| record.row.as_deref_mut())
+        {
+            row.replayable = false;
+        }
+    }
+
+    /// Whether the owner of the list was rebuilt for a reason nothing tracked explains (PRF-005
+    /// R5), for a list that knows `scrolls` scroll mutations (scrollbar offsets and
+    /// programmatic scrolls) since the previous frame: each explains one notification of the
+    /// owner.
+    ///
+    /// The owner is rebuilt for an unexplained reason when it was notified itself (rather than
+    /// being rebuilt only because a row nested in it changed) while some notification is
+    /// neither a scroll nor an animation frame, or when reads of its own went stale.
+    pub(crate) fn rows_owner_ambiguous_with(&self, scrolls: u64) -> bool {
+        if !self.retention_reuse_allowed() {
+            return true;
+        }
+        let Some(owner) = self
+            .retention
+            .stack
+            .last()
+            .and_then(|key| self.retention.views.get(*key))
+        else {
+            return true;
+        };
+        owner.rebuilt_stale
+            || (owner.rebuilt_dirty && self.retention.causes.unexplained_count > scrolls)
+    }
+
+    /// Runs `f`, which renders and measures a row that is not retained, so that what it reads
+    /// belongs to no row and to no owner (PRF-005 R4), and counts the measurement.
+    pub(crate) fn row_measure_scope<R>(&mut self, f: impl FnOnce(&mut Window) -> R) -> R {
+        self.frame_stats_mut().rows_measured += 1;
+        let Some(owner) = self.retention.stack.last().copied() else {
+            return f(self);
+        };
+        let tracker = self.retention.tracker.clone();
+        tracker.push_frame(owner, super::read_tracker::ReadSet::default());
+        let result = f(self);
+        tracker.pop_frame();
+        result
     }
 
     /// Creates or returns the record of row `ix` of the list at `list`.
@@ -183,6 +258,13 @@ impl Window {
         let parent = self.retention.stack.last().copied();
         self.retention.views.begin_rebuild(key, parent);
         self.retention.views.reset_reads(key);
+        let mark = self.next_frame.accessed_element_states.len();
+        if let Some(record) = self.retention.views.get_mut(key) {
+            record.row_mark = mark;
+            // The output of the build before is obsolete until this build produces new.
+            record.prepaint = None;
+            record.paint = None;
+        }
         self.begin_view_phase(key);
         self.begin_layout_owner();
         self.retention.layout_state_sink.push(Vec::new());
@@ -198,9 +280,17 @@ impl Window {
         }
     }
 
+    /// Ends the render and layout part of a row build and its read phase, for rows that are
+    /// prepainted later (see [`Self::row_prepaint_phase`]).
+    pub(crate) fn row_layout_end(&mut self, key: ViewKey) {
+        self.row_layout_done(key);
+        self.end_view_phase(key);
+    }
+
     /// Prepaints a freshly built row under the mask `extent` (which covers the whole row), clips
     /// the hitboxes it produced to `clip`, and records its prepaint range. Ends the build's
     /// read phase.
+    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
     pub(crate) fn row_prepaint<R>(
         &mut self,
         key: ViewKey,
@@ -209,10 +299,44 @@ impl Window {
         anchor: Point<Pixels>,
         f: impl FnOnce(&mut Window) -> R,
     ) -> R {
+        self.row_prepaint_ex(key, extent, clip, anchor, true, false, f)
+    }
+
+    /// Like [`Self::row_prepaint`] for a row whose layout phase ended with
+    /// [`Self::row_layout_end`]: the read phase starts again here. A row that is not `shown`
+    /// keeps none of the element states of its build.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn row_prepaint_phase<R>(
+        &mut self,
+        key: ViewKey,
+        extent: ContentMask<Pixels>,
+        clip: Bounds<Pixels>,
+        anchor: Point<Pixels>,
+        shown: bool,
+        f: impl FnOnce(&mut Window) -> R,
+    ) -> R {
+        self.row_prepaint_ex(key, extent, clip, anchor, shown, true, f)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn row_prepaint_ex<R>(
+        &mut self,
+        key: ViewKey,
+        extent: ContentMask<Pixels>,
+        clip: Bounds<Pixels>,
+        anchor: Point<Pixels>,
+        shown: bool,
+        begin_phase: bool,
+        f: impl FnOnce(&mut Window) -> R,
+    ) -> R {
+        if begin_phase {
+            self.begin_view_phase(key);
+        }
+        self.frame_stats_mut().rows_built += 1;
         let hover_before = self.hover_reads.get();
-        let start = self.prepaint_index();
+        let mut start = self.prepaint_index();
         let result = self.with_content_mask_override(extent, f);
-        let end = self.prepaint_index();
+        let mut end = self.prepaint_index();
         let hitboxes = self.next_frame.hitboxes[start.hitboxes_index..].to_vec();
         for hitbox in &mut self.next_frame.hitboxes[start.hitboxes_index..] {
             hitbox.content_mask.bounds = hitbox.content_mask.bounds.intersect(&clip);
@@ -221,6 +345,24 @@ impl Window {
         // Content that switches the surface it is drawn into (PLT-001) is drawn in place.
         let deferred = end.deferred_draws_index != start.deferred_draws_index
             || end.hitbox_switches_index != start.hitbox_switches_index;
+        let mark = self
+            .retention
+            .views
+            .get(key)
+            .map_or(start.accessed_element_states_index, |record| record.row_mark);
+        let mut has_states = end.accessed_element_states_index > start.accessed_element_states_index
+            || self
+                .retention
+                .views
+                .get(key)
+                .is_some_and(|record| !record.layout_states.is_empty());
+        if !shown {
+            // Element states live only while the row is shown.
+            has_states |= self.next_frame.accessed_element_states.len() > mark;
+            self.forget_accessed_states(mark);
+            start.accessed_element_states_index = mark;
+            end.accessed_element_states_index = mark;
+        }
         self.end_view_phase(key);
         if let Some(record) = self.retention.views.get_mut(key) {
             record.prepaint = Some(start..end);
@@ -232,43 +374,87 @@ impl Window {
                 hover_sensitive,
                 hitboxes,
                 hovered: false,
+                has_states,
+                states_dropped: false,
+                tab_ops: Vec::new(),
             }));
         }
         result
     }
 
+    /// Forgets the element states the frame recorded as accessed from `mark` on, and their
+    /// values.
+    fn forget_accessed_states(&mut self, mark: usize) {
+        if self.next_frame.accessed_element_states.len() <= mark {
+            return;
+        }
+        let keys: Vec<_> = self.next_frame.accessed_element_states.drain(mark..).collect();
+        for key in keys {
+            self.next_frame.element_states.remove(&key);
+        }
+    }
+
     /// Paints a freshly built row under `extent`, into a scene of its own, and records its
     /// paint range.
+    #[allow(dead_code, reason = "the recording of scroll layers shares the row helpers (PRF-004)")]
     pub(crate) fn row_paint<R>(
         &mut self,
         key: ViewKey,
         extent: ContentMask<Pixels>,
         f: impl FnOnce(&mut Window) -> R,
     ) -> R {
+        self.row_paint_phase(key, extent, true, f)
+    }
+
+    /// Like [`Self::row_paint`]; a row that is not `shown` keeps none of the element states
+    /// of its paint.
+    pub(crate) fn row_paint_phase<R>(
+        &mut self,
+        key: ViewKey,
+        extent: ContentMask<Pixels>,
+        shown: bool,
+        f: impl FnOnce(&mut Window) -> R,
+    ) -> R {
         self.begin_view_phase(key);
         let hover_before = self.hover_reads.get();
         let scene_position = self.next_frame.scene.len();
         let main = std::mem::take(&mut self.next_frame.scene);
-        let start = self.paint_index();
+        let mut start = self.paint_index();
         let result = self.with_content_mask_override(extent, f);
-        let end = self.paint_index();
+        let mut end = self.paint_index();
         let scene = std::mem::replace(&mut self.next_frame.scene, main);
         // The row's scene operations are kept apart: as far as the frame's ranges are
         // concerned the row produced no scene output, at this position.
         let switched = end.surface_switches_index != start.surface_switches_index;
-        let (mut start, mut end) = (start, end);
         start.scene_index = scene_position;
         end.scene_index = scene_position;
+        let mut has_states = end.accessed_element_states_index > start.accessed_element_states_index;
+        if !shown {
+            self.forget_accessed_states(start.accessed_element_states_index);
+            end.accessed_element_states_index = start.accessed_element_states_index;
+        }
+        // The tab stops the row registered enter the frame only while it is shown.
+        let tab_ops: Vec<_> = self.next_frame.tab_stops.insertion_history
+            [start.tab_handle_index..end.tab_handle_index]
+            .to_vec();
+        if !tab_ops.is_empty() {
+            self.next_frame.tab_stops.truncate(start.tab_handle_index);
+            end.tab_handle_index = start.tab_handle_index;
+        }
         self.end_view_phase(key);
         let hover_read = self.hover_reads.get() != hover_before;
         let hovered = self.row_hit_by_pointer(key, None);
         if let Some(record) = self.retention.views.get_mut(key) {
             record.paint = Some(start..end);
             if let Some(row) = record.row.as_deref_mut() {
+                has_states |= row.has_states;
+                row.has_states = has_states;
+                row.states_dropped = !shown && has_states;
                 row.hover_sensitive |= hover_read;
                 row.replayable &= !scene.has_active_scope() && !switched;
                 row.scene = scene;
                 row.hovered = hovered;
+                row.tab_ops = tab_ops;
             }
         }
         result
@@ -355,6 +541,7 @@ impl Window {
         else {
             return;
         };
+        self.frame_stats_mut().rows_replayed += 1;
         let hovered = self.row_hit_by_pointer(key, Some(placement));
         self.row_adopt(key);
         let start = self.prepaint_index();
@@ -391,6 +578,9 @@ impl Window {
             .and_then(|record| record.row.as_deref_mut())
         {
             row.hovered = hovered;
+            if !placement.keep_states && row.has_states {
+                row.states_dropped = true;
+            }
         }
     }
 
@@ -431,6 +621,7 @@ impl Window {
         self.next_frame
             .scene
             .replay_moved(0..len, &row.scene, offset, Some(clip));
+        self.next_frame.tab_stops.replay(&row.tab_ops);
     }
 
     /// The content origin a row was recorded at.
@@ -462,6 +653,7 @@ impl Window {
 
     /// Ends the read phase of a measurement sample.
     pub(crate) fn row_finish_measure(&mut self, key: ViewKey) {
+        self.frame_stats_mut().rows_measured += 1;
         self.end_view_phase(key);
     }
 }

@@ -3194,6 +3194,7 @@ impl Interactivity {
                 if phase == DispatchPhase::Capture && hovered != was_hovered {
                     if let Some(hover_state) = &hover_state {
                         hover_state.borrow_mut().element = hovered;
+                        window.retention.tracker.note_hover_notification();
                         cx.notify(current_view);
                     }
                 }
@@ -3216,6 +3217,7 @@ impl Interactivity {
                     if phase == DispatchPhase::Capture && group_hovered != was_group_hovered {
                         if let Some(hover_state) = &hover_state {
                             hover_state.borrow_mut().group = group_hovered;
+                            window.retention.tracker.note_hover_notification();
                             cx.notify(current_view);
                         }
                     }

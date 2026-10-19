@@ -691,7 +691,16 @@ fn build_view(
     erased: Option<AnyView>,
     render: &mut dyn FnMut(&mut Window, &mut App) -> AnyElement,
 ) -> (LayoutId, AnyElement) {
+    let stale = window.retention.notified_ancestors > 0
+        && window
+            .retention
+            .views
+            .get(key)
+            .is_some_and(|record| RetainedViews::reads_stale(&window.retention.tracker, record));
     window.retention.views.begin_rebuild(key, parent);
+    if stale {
+        window.retention.views.mark_rebuilt_stale(key);
+    }
     window.retention.views.reset_reads(key);
     let layout_key = window.layout_key_context();
     let mut ambient = window.capture_ambient();

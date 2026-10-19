@@ -17,6 +17,8 @@ mod svg;
 mod text;
 mod uniform_list;
 #[cfg(test)]
+mod list_row_tests;
+#[cfg(test)]
 mod uniform_list_row_tests;
 
 pub use anchored::*;

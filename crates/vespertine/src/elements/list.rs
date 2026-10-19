@@ -24,12 +24,14 @@ use crate::{
     FocusHandle, FocusId, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
     Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
     Window, point, px, size,
+    window::read_tracker::{VersionCell, ViewKey},
 };
 use std::{
-    cell::RefCell,
+    any::TypeId,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
     hash::Hash,
-    ops::Range,
+    ops::{Deref, DerefMut, Range},
     rc::Rc,
 };
 use vespertine_collections::VecDeque;
@@ -51,19 +53,28 @@ pub fn list(
     state: ListState,
     render_item: impl FnMut(usize, &mut Window, &mut App) -> AnyElement + 'static,
 ) -> List {
+    let render_type = type_of(&render_item);
     List {
         state,
         render_item: Box::new(render_item),
+        render_type,
         style: StyleRefinement::default(),
         sizing_behavior: ListSizingBehavior::default(),
         a11y: crate::Interactivity::default(),
     }
 }
 
+fn type_of<T: 'static>(_: &T) -> TypeId {
+    TypeId::of::<T>()
+}
+
 /// A list element
 pub struct List {
     state: ListState,
     render_item: Box<RenderItemFn>,
+    /// The type of the row callback: a list whose callback is a different closure than last
+    /// frame cannot reuse the rows the old one rendered (PRF-005 R5).
+    render_type: TypeId,
     style: StyleRefinement,
     sizing_behavior: ListSizingBehavior,
     pub(crate) a11y: crate::Interactivity,
@@ -124,6 +135,20 @@ struct StateInner {
     reservation_extra: Pixels,
     /// The focus handle of the row that held focus at the last layout.
     last_focus_id: Option<FocusId>,
+    /// Bumped whenever rows may have changed identity or content (splices, resets,
+    /// remeasures, windowing changes): retained rows recorded before are obsolete.
+    revision: u64,
+    /// Scroll mutations made through the state (scrollbar offsets, programmatic scrolls);
+    /// each explains one notification of the list's owner.
+    scroll_marks: u64,
+    /// Version of the at-end answer: bumped only when [`ListState::is_scrolled_to_end`]
+    /// gives a different answer than before, so readers depend on the Boolean rather than on
+    /// the exact scroll offset (PRF-005 R5).
+    at_end_version: VersionCell,
+    at_end_answer: Cell<Option<Option<bool>>>,
+    /// Rows are being retained in the layout pass in progress: rows that are only measured
+    /// read in a scope of their own.
+    row_pass: bool,
 }
 
 /// Deferred scroll adjustment applied after the scroll-top item has been remeasured.
@@ -306,13 +331,17 @@ struct LayoutItemsResponse {
 
 struct ItemLayout {
     index: usize,
-    element: AnyElement,
+    /// The row's element; `None` for a retained row that is replayed.
+    element: Option<AnyElement>,
+    /// The retained row this item is (when the list retains its rows).
+    row: Option<ViewKey>,
 }
 
 /// Frame state used by the [List] element after layout.
 pub struct ListPrepaintState {
     hitbox: Hitbox,
     layout: LayoutItemsResponse,
+    rows: Option<row_replay::RowPaint>,
 }
 
 #[derive(Clone)]
@@ -443,6 +472,11 @@ impl ListState {
             reservation: None,
             reservation_extra: px(0.),
             last_focus_id: None,
+            revision: 0,
+            scroll_marks: 0,
+            at_end_version: Rc::new(Cell::new(0)),
+            at_end_answer: Cell::new(None),
+            row_pass: false,
         })));
         this.splice(0..0, item_count);
         this
@@ -452,7 +486,7 @@ impl ListState {
     ///
     /// This is useful for ensuring that the scrollbar size is correct instead of based on only rendered elements.
     pub fn measure_all(self) -> Self {
-        self.0.borrow_mut().measuring_behavior = ListMeasuringBehavior::Measure(false);
+        self.edit().measuring_behavior = ListMeasuringBehavior::Measure(false);
         self
     }
 
@@ -473,8 +507,9 @@ impl ListState {
     /// Note that this will cause scroll events to be dropped until the next paint.
     pub fn reset(&self, element_count: usize) {
         let old_count = {
-            let state = &mut *self.0.borrow_mut();
+            let state = &mut *self.edit();
             state.reset = true;
+            state.revision += 1;
             state.measuring_behavior.reset();
             state.logical_scroll_top = None;
             state.pending_scroll = None;
@@ -495,7 +530,8 @@ impl ListState {
     }
 
     fn apply_uniform_item_height(&self, height: Pixels) {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.edit();
+        state.revision += 1;
         let size_hint = Size {
             width: px(0.),
             height,
@@ -544,7 +580,8 @@ impl ListState {
     }
 
     fn remeasure_items_with_scroll_anchor(&self, range: Range<usize>, scroll_anchor: ScrollAnchor) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.revision += 1;
         let window_start = state.mounted_range().start;
         let logical_range = window_start + range.start..window_start + range.end;
 
@@ -626,20 +663,20 @@ impl ListState {
 
     /// Whether the list is scrolled to the end, or `None` if the list is
     /// not scrollable or the total content height is not yet known.
+    ///
+    /// A view that reads this depends on the answer, not on the exact scroll offset: it is
+    /// built again only when the answer differs from the one it saw (PRF-005 R5).
     pub fn is_scrolled_to_end(&self) -> Option<bool> {
         let state = self.0.borrow();
-        let bounds = state.last_layout_bounds?;
-        if state.has_unknown_height() {
-            return None;
-        }
-        let padding = state.last_padding.unwrap_or_default();
-        let content_height = state.total_height() + padding.top + padding.bottom;
-        let scroll_max = (content_height - bounds.size.height).max(px(0.));
-        if scroll_max <= px(0.) {
-            return None;
-        }
-        let scroll_top = state.scroll_px(&state.logical_scroll_top());
-        Some(scroll_top >= scroll_max)
+        state.sync_at_end();
+        crate::window::read_tracker::read_versioned_in_draw(&state.at_end_version);
+        state.at_end()
+    }
+
+    /// Gives mutable access to the state; when the access ends the at-end answer is brought up
+    /// to date, so views that read it see its version change exactly when the answer does.
+    fn edit(&self) -> StateEdit<'_> {
+        StateEdit(self.0.borrow_mut())
     }
 
     /// Inform the list state that the items in `old_range` (mounted-row indices) have been
@@ -660,7 +697,8 @@ impl ListState {
         old_range: Range<usize>,
         focus_handles: impl IntoIterator<Item = Option<FocusHandle>>,
     ) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.revision += 1;
         state.strip_reservation_extra();
         let old_mounted_len = state.items.summary().count;
         let estimate = state.estimate_px();
@@ -724,11 +762,12 @@ impl ListState {
         window_start: Option<usize>,
         new_focus_handle: impl FnMut(usize) -> Option<FocusHandle>,
     ) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
         let window_start_before = state.mounted_range().start;
         if old_keys == new_keys && window_start.is_none_or(|start| start == window_start_before) {
             return;
         }
+        state.revision += 1;
         let new_start = match window_start {
             Some(start) if state.is_windowed() => start.min(state.logical_count()),
             _ => window_start_before,
@@ -801,7 +840,7 @@ impl ListState {
         &self,
         handler: impl FnMut(&ListScrollEvent, &mut Window, &mut App) + 'static,
     ) {
-        self.0.borrow_mut().scroll_handler = Some(Rc::new(RefCell::new(handler)));
+        self.edit().scroll_handler = Some(Rc::new(RefCell::new(handler)));
     }
 
     /// Get the current scroll offset, in terms of the list's items.
@@ -826,7 +865,8 @@ impl ListState {
         }
 
         let current_offset = self.logical_scroll_top();
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.scroll_marks += 1;
 
         if distance < px(0.) {
             state.follow_state.stop_following();
@@ -854,7 +894,8 @@ impl ListState {
     /// always show the bottom of the last item — even when that item is still
     /// growing (e.g. during streaming).
     pub fn scroll_to_end(&self) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.scroll_marks += 1;
         let item_count = state.logical_count();
         state.pending_scroll = None;
         state.logical_scroll_top = Some(ListOffset {
@@ -868,7 +909,7 @@ impl ListState {
     /// scrolls back to the bottom. In `Normal` mode, no automatic
     /// following occurs.
     pub fn set_follow_mode(&self, mode: FollowMode) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
 
         match mode {
             FollowMode::Normal => {
@@ -909,7 +950,7 @@ impl ListState {
     /// diagram) and the current position should stay put rather than snapping
     /// to the end.
     pub fn pause_following_tail(&self) {
-        self.0.borrow_mut().follow_state.stop_following();
+        self.edit().follow_state.stop_following();
     }
 
     /// Returns whether the list is currently actively following the
@@ -925,7 +966,8 @@ impl ListState {
     /// negative offset places the row below the viewport top and is resolved during layout.
     /// An index at or beyond the row count normalizes to the end of the list with offset zero.
     pub fn scroll_to(&self, mut scroll_top: ListOffset) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.scroll_marks += 1;
         let item_count = state.logical_count();
         if scroll_top.item_ix >= item_count {
             scroll_top.item_ix = item_count;
@@ -943,7 +985,8 @@ impl ListState {
     /// Scroll the list to the given item, such that the item is fully visible, moving as
     /// little as possible.
     pub fn scroll_to_reveal_item(&self, ix: usize) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.scroll_marks += 1;
         if state.logical_count() == 0 {
             return;
         }
@@ -983,7 +1026,7 @@ impl ListState {
     /// This will prevent the height reported to the scrollbar from changing during the drag
     /// as items in the overdraw get measured, and help offset scroll position changes accordingly.
     pub fn scrollbar_drag_started(&self) {
-        let mut state = self.0.borrow_mut();
+        let mut state = self.edit();
         state.scrollbar_drag_start_height = Some(state.total_height());
     }
 
@@ -991,7 +1034,7 @@ impl ListState {
     ///
     /// See `scrollbar_drag_started`.
     pub fn scrollbar_drag_ended(&self) {
-        self.0.borrow_mut().scrollbar_drag_start_height.take();
+        self.edit().scrollbar_drag_start_height.take();
     }
 
     /// Returns `true` if the scrollbar is currently being dragged.
@@ -1006,7 +1049,7 @@ impl ListState {
 
     /// Set the offset from the scrollbar
     pub fn set_offset_from_scrollbar(&self, point: Point<Pixels>) {
-        self.0.borrow_mut().set_offset_from_scrollbar(point);
+        self.edit().set_offset_from_scrollbar(point);
     }
 
     /// Returns the maximum scroll offset according to the items we have measured.
@@ -1147,7 +1190,7 @@ impl ListState {
 
     /// Change the alignment, preserving the logical scroll anchor.
     pub fn set_alignment(&self, alignment: ListAlignment) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
         if state.alignment == alignment {
             return;
         }
@@ -1165,7 +1208,7 @@ impl ListState {
     /// Change the overdraw distance (clamped to at least zero).
     pub fn set_overdraw(&self, overdraw: Pixels) {
         let overdraw = overdraw.max(px(0.));
-        self.0.borrow_mut().overdraw = overdraw;
+        self.edit().overdraw = overdraw;
     }
 
     /// Set the uniform row height estimate. Only a strictly positive finite value activates it;
@@ -1173,11 +1216,12 @@ impl ListState {
     /// measurement nor a hint use the estimate.
     pub fn set_estimated_item_height(&self, estimate: Option<Pixels>) {
         let estimate = estimate.filter(|height| height.0.is_finite() && height.0 > 0.);
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
         if state.estimate == estimate {
             return;
         }
         state.estimate = estimate;
+        state.revision += 1;
         let estimate = state.estimate_px();
         let new_items = state.items.iter().map(|item| match item {
             ListItem::Unmeasured {
@@ -1202,7 +1246,9 @@ impl ListState {
         let count = count
             .filter(|count| count.is_finite() && *count >= 0.)
             .map(|count| count as usize);
-        self.0.borrow_mut().configured_count = count;
+        let mut state = self.edit();
+        state.configured_count = count;
+        state.revision += 1;
     }
 
     /// Whether the list is in windowed mode (see [`Self::set_logical_item_count`]).
@@ -1222,7 +1268,9 @@ impl ListState {
     /// the mounted rows change at the same time use [`Self::reconcile_keys_in_window`] or
     /// [`Self::slide_window`], which keep the measurements of the rows that stay mounted.
     pub fn set_window_start(&self, start: usize) {
-        self.0.borrow_mut().window_start = start;
+        let mut state = self.edit();
+        state.window_start = start;
+        state.revision += 1;
     }
 
     /// Slide the mounted window to `count` rows starting at logical row `start`, preserving the
@@ -1231,7 +1279,8 @@ impl ListState {
     /// was measured before it left the window) and rows leaving it retain their height as a
     /// hint for the scroll geometry of placeholders.
     pub fn slide_window(&self, start: usize, count: usize) {
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
+        state.revision += 1;
         let old = state.mounted_range();
         let new_start = if state.is_windowed() {
             start.min(state.logical_count())
@@ -1253,7 +1302,7 @@ impl ListState {
     /// height applied so far (the last row is remeasured by the next layout).
     pub fn set_trailing_reservation(&self, reservation: Option<(usize, Pixels)>) {
         let reservation = reservation.map(|(start, inset)| TrailingReservation { start, inset });
-        let state = &mut *self.0.borrow_mut();
+        let state = &mut *self.edit();
         if state.reservation == reservation {
             return;
         }
@@ -1284,7 +1333,55 @@ impl ListState {
     }
 }
 
+/// Mutable access to the state of a list that refreshes the at-end version when it ends.
+struct StateEdit<'a>(std::cell::RefMut<'a, StateInner>);
+
+impl Deref for StateEdit<'_> {
+    type Target = StateInner;
+
+    fn deref(&self) -> &StateInner {
+        &self.0
+    }
+}
+
+impl DerefMut for StateEdit<'_> {
+    fn deref_mut(&mut self) -> &mut StateInner {
+        &mut self.0
+    }
+}
+
+impl Drop for StateEdit<'_> {
+    fn drop(&mut self) {
+        self.0.sync_at_end();
+    }
+}
+
 impl StateInner {
+    /// Whether the list is scrolled to the end; see [`ListState::is_scrolled_to_end`].
+    fn at_end(&self) -> Option<bool> {
+        let bounds = self.last_layout_bounds?;
+        if self.has_unknown_height() {
+            return None;
+        }
+        let padding = self.last_padding.unwrap_or_default();
+        let content_height = self.total_height() + padding.top + padding.bottom;
+        let scroll_max = (content_height - bounds.size.height).max(px(0.));
+        if scroll_max <= px(0.) {
+            return None;
+        }
+        let scroll_top = self.scroll_px(&self.logical_scroll_top());
+        Some(scroll_top >= scroll_max)
+    }
+
+    /// Bumps the at-end version when the at-end answer differs from the one last recorded.
+    fn sync_at_end(&self) {
+        let answer = self.at_end();
+        if self.at_end_answer.get() != Some(answer) {
+            self.at_end_answer.set(Some(answer));
+            self.at_end_version.set(self.at_end_version.get() + 1);
+        }
+    }
+
     // Geometry over the logical dataset.
 
     fn estimate_px(&self) -> Pixels {
@@ -1883,6 +1980,7 @@ impl StateInner {
             self.follow_state.stop_following();
         }
 
+        cx.entities.tracker.note_scroll_notification();
         cx.notify(current_view);
 
         let handler = self.scroll_handler.clone()?;
@@ -1902,6 +2000,48 @@ impl StateInner {
 
     // Layout.
 
+    /// Renders and lays out row `ix` only to learn its size. When the list retains its rows,
+    /// what the row reads belongs neither to a row nor to the owner of the list.
+    fn measure_row(
+        &self,
+        ix: usize,
+        space: Size<AvailableSpace>,
+        render_item: &mut RenderItemFn,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Size<Pixels> {
+        let mut measure = |window: &mut Window| {
+            let mut element = render_item(ix, window, cx);
+            window.with_layout_item_index(ix, |window| element.layout_as_root(space, window, cx))
+        };
+        if self.row_pass {
+            window.row_measure_scope(measure)
+        } else {
+            measure(window)
+        }
+    }
+
+    /// Renders and lays out row `ix` to be shown. When the list retains its rows the build is
+    /// recorded as the row's own.
+    fn build_row(
+        &self,
+        ix: usize,
+        space: Size<AvailableSpace>,
+        rows: Option<&mut row_replay::RowSession>,
+        render_item: &mut RenderItemFn,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (AnyElement, Size<Pixels>, Option<ViewKey>) {
+        let key = rows.map(|rows| rows.begin_build(window, ix));
+        let mut element = render_item(ix, window, cx);
+        let size =
+            window.with_layout_item_index(ix, |window| element.layout_as_root(space, window, cx));
+        if let Some(key) = key {
+            window.row_layout_end(key);
+        }
+        (element, size, key)
+    }
+
     /// The height of row `ix` for walks that must not guess: a measured mounted row keeps its
     /// size, any other mounted row is rendered and measured, placeholders use their height.
     fn walk_row_height(
@@ -1914,14 +2054,7 @@ impl StateInner {
     ) -> Pixels {
         match self.mounted_item(ix) {
             Some(item) => item.size().map_or_else(
-                || {
-                    let mut element = render_item(ix, window, cx);
-                    window
-                        .with_layout_item_index(ix, |window| {
-                            element.layout_as_root(space, window, cx)
-                        })
-                        .height
-                },
+                || self.measure_row(ix, space, render_item, window, cx).height,
                 |size| size.height,
             ),
             None => self.placeholder_height(ix),
@@ -1960,11 +2093,13 @@ impl StateInner {
                 continue;
             }
             let size = item.size().unwrap_or_else(|| {
-                let item_index = mounted.start + ix;
-                let mut element = render_item(item_index, window, cx);
-                window.with_layout_item_index(item_index, |window| {
-                    element.layout_as_root(available_item_space, window, cx)
-                })
+                self.measure_row(
+                    mounted.start + ix,
+                    available_item_space,
+                    render_item,
+                    window,
+                    cx,
+                )
             });
 
             measured_items.push(ListItem::Measured {
@@ -1984,7 +2119,9 @@ impl StateInner {
         render_item: &mut RenderItemFn,
         window: &mut Window,
         cx: &mut App,
+        rows: Option<&mut row_replay::RowSession>,
     ) -> LayoutItemsResponse {
+        let mut rows = rows;
         let count = self.logical_count();
         let mounted = self.mounted_range();
         let old_items = self.items.clone();
@@ -2020,14 +2157,18 @@ impl StateInner {
         );
 
         // A pending adjustment (from a remeasure) needs the remeasured anchor row first.
-        let mut prerendered: Option<(usize, AnyElement, Size<Pixels>)> = None;
+        let mut prerendered: Option<(usize, AnyElement, Size<Pixels>, Option<ViewKey>)> = None;
         if mounted.contains(&scroll_top.item_ix) {
             if let Some(pending_scroll) = self.pending_scroll.take() {
                 let item_ix = scroll_top.item_ix;
-                let mut element = render_item(item_ix, window, cx);
-                let element_size = window.with_layout_item_index(item_ix, |window| {
-                    element.layout_as_root(available_item_space, window, cx)
-                });
+                let (element, element_size, row) = self.build_row(
+                    item_ix,
+                    available_item_space,
+                    rows.as_deref_mut(),
+                    render_item,
+                    window,
+                    cx,
+                );
                 match pending_scroll {
                     PendingScroll::Absolute {
                         item_ix: ix,
@@ -2045,7 +2186,7 @@ impl StateInner {
                     }
                     _ => {}
                 }
-                prerendered = Some((item_ix, element, element_size));
+                prerendered = Some((item_ix, element, element_size, row));
             }
         }
 
@@ -2094,23 +2235,68 @@ impl StateInner {
 
                 // If we're within the visible area or the height wasn't cached, render and measure the item's element
                 if visible_height < available_height || size.is_none() || remeasure_last {
-                    let (element, element_size) =
-                        match prerendered.take_if(|prerendered| prerendered.0 == ix) {
-                            Some((_, element, element_size)) => (element, element_size),
-                            None => {
-                                let mut element = render_item(ix, window, cx);
-                                let element_size = window.with_layout_item_index(ix, |window| {
-                                    element.layout_as_root(available_item_space, window, cx)
-                                });
-                                (element, element_size)
-                            }
-                        };
-                    size = Some(element_size);
-
-                    if visible_height < available_height {
-                        item_layouts.push_back(ItemLayout { index: ix, element });
+                    let visible = visible_height < available_height;
+                    // A visible row whose recorded output is still good is replayed.
+                    let reusable = if visible
+                        && size.is_some()
+                        && !remeasure_last
+                        && prerendered.as_ref().is_none_or(|prerendered| prerendered.0 != ix)
+                    {
+                        rows.as_deref().and_then(|rows| rows.reusable(window, ix))
+                    } else {
+                        None
+                    };
+                    if let Some(key) = reusable {
+                        item_layouts.push_back(ItemLayout {
+                            index: ix,
+                            element: None,
+                            row: Some(key),
+                        });
                         if let Some(focus_id) = item.focus_id_if_focused(window, cx) {
                             rendered_focus_id = Some(focus_id);
+                        }
+                    } else {
+                        let (element, element_size, row) =
+                            match prerendered.take_if(|prerendered| prerendered.0 == ix) {
+                                Some((_, element, element_size, row)) => {
+                                    (Some(element), element_size, row)
+                                }
+                                None if visible => {
+                                    let (element, element_size, row) = self.build_row(
+                                        ix,
+                                        available_item_space,
+                                        rows.as_deref_mut(),
+                                        render_item,
+                                        window,
+                                        cx,
+                                    );
+                                    (Some(element), element_size, row)
+                                }
+                                None => (
+                                    None,
+                                    self.measure_row(
+                                        ix,
+                                        available_item_space,
+                                        render_item,
+                                        window,
+                                        cx,
+                                    ),
+                                    None,
+                                ),
+                            };
+                        size = Some(element_size);
+
+                        if visible {
+                            if element.is_some() {
+                                item_layouts.push_back(ItemLayout {
+                                    index: ix,
+                                    element,
+                                    row,
+                                });
+                            }
+                            if let Some(focus_id) = item.focus_id_if_focused(window, cx) {
+                                rendered_focus_id = Some(focus_id);
+                            }
                         }
                     }
                 }
@@ -2148,10 +2334,23 @@ impl StateInner {
             while rendered_height < available_height && top_ix > 0 {
                 let prev_ix = top_ix - 1;
                 if let Some(item) = self.mounted_item(prev_ix) {
-                    let mut element = render_item(prev_ix, window, cx);
-                    let element_size = window.with_layout_item_index(prev_ix, |window| {
-                        element.layout_as_root(available_item_space, window, cx)
-                    });
+                    let stored = item.size();
+                    let reusable = stored
+                        .and_then(|_| rows.as_deref().and_then(|rows| rows.reusable(window, prev_ix)));
+                    let (element, element_size, row) = match (reusable, stored) {
+                        (Some(key), Some(stored)) => (None, stored, Some(key)),
+                        _ => {
+                            let (element, element_size, row) = self.build_row(
+                                prev_ix,
+                                available_item_space,
+                                rows.as_deref_mut(),
+                                render_item,
+                                window,
+                                cx,
+                            );
+                            (Some(element), element_size, row)
+                        }
+                    };
                     rendered_height += element_size.height;
                     measured_items.push_front(ListItem::Measured {
                         size: element_size,
@@ -2161,6 +2360,7 @@ impl StateInner {
                     item_layouts.push_front(ItemLayout {
                         index: prev_ix,
                         element,
+                        row,
                     });
                     if let Some(focus_id) = item.focus_id_if_focused(window, cx) {
                         rendered_focus_id = Some(focus_id);
@@ -2200,10 +2400,7 @@ impl StateInner {
             let prev_ix = top_ix - 1;
             leading_overdraw += if let Some(item) = self.mounted_item(prev_ix) {
                 let size = item.size().unwrap_or_else(|| {
-                    let mut element = render_item(prev_ix, window, cx);
-                    window.with_layout_item_index(prev_ix, |window| {
-                        element.layout_as_root(available_item_space, window, cx)
-                    })
+                    self.measure_row(prev_ix, available_item_space, render_item, window, cx)
                 });
                 measured_items.push_front(ListItem::Measured {
                     size,
@@ -2279,13 +2476,18 @@ impl StateInner {
                 }
             }
             if let Some((item_index, focus_id, focus_handle)) = found {
-                let mut element = render_item(item_index, window, cx);
-                let element_size = window.with_layout_item_index(item_index, |window| {
-                    element.layout_as_root(available_item_space, window, cx)
-                });
+                let (element, element_size, row) = self.build_row(
+                    item_index,
+                    available_item_space,
+                    rows.as_deref_mut(),
+                    render_item,
+                    window,
+                    cx,
+                );
                 item_layouts.push_back(ItemLayout {
                     index: item_index,
-                    element,
+                    element: Some(element),
+                    row,
                 });
                 // Its height is now known to the scroll geometry (the reserved last row keeps
                 // the stored size that includes its extra).
@@ -2322,8 +2524,10 @@ impl StateInner {
         render_item: &mut RenderItemFn,
         window: &mut Window,
         cx: &mut App,
+        rows: Option<&mut row_replay::RowSession>,
     ) -> Result<LayoutItemsResponse, ListOffset> {
-        window.transact(|window| {
+        let mut rows = rows;
+        let result = window.transact(|window| {
             // Rows are laid out in the list's width minus its horizontal padding.
             let content_width = (bounds.size.width - padding.left - padding.right).max(px(0.));
             if let ListMeasuringBehavior::Measure(false) = self.measuring_behavior {
@@ -2337,6 +2541,7 @@ impl StateInner {
                 render_item,
                 window,
                 cx,
+                rows.as_deref_mut(),
             );
 
             // Avoid honoring autoscroll requests from elements other than our children.
@@ -2350,17 +2555,35 @@ impl StateInner {
             if bounds.size.height > padding.top + padding.bottom {
                 let item_space = size(content_width.into(), AvailableSpace::MinContent);
                 let content_origin = bounds.origin + Point::new(padding.left, padding.top);
-                let scroll_px = self.scroll_px(&layout_response.scroll_top);
+                // Scroll offsets place content on the device pixel grid (PRF-004 R3).
+                let scroll_px = window.pixel_snap(self.scroll_px(&layout_response.scroll_top));
                 for item in &mut layout_response.item_layouts {
                     let item_origin = point(
                         content_origin.x,
                         content_origin.y + self.row_top(item.index) - scroll_px,
                     );
-                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                        item.element.prepaint_at(item_origin, window, cx);
-                    });
+                    let requested = match (rows.as_deref_mut(), item.row) {
+                        (Some(rows), Some(key)) => self.prepare_visible_row(
+                            rows,
+                            item,
+                            key,
+                            item_origin,
+                            item_space,
+                            render_item,
+                            window,
+                            cx,
+                        ),
+                        _ => {
+                            if let Some(element) = item.element.as_mut() {
+                                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                                    element.prepaint_at(item_origin, window, cx);
+                                });
+                            }
+                            window.take_autoscroll()
+                        }
+                    };
 
-                    if let Some(autoscroll_bounds) = window.take_autoscroll()
+                    if let Some(autoscroll_bounds) = requested
                         && autoscroll
                     {
                         if autoscroll_bounds.top() < bounds.top() {
@@ -2420,17 +2643,39 @@ impl StateInner {
                         }
                     }
                 }
+                if let Some(rows) = rows.as_deref_mut() {
+                    self.prepare_overscan(
+                        rows,
+                        bounds,
+                        content_origin,
+                        scroll_px,
+                        item_space,
+                        render_item,
+                        window,
+                        cx,
+                    );
+                }
             } else {
                 layout_response.item_layouts.clear();
+                if let Some(rows) = rows.as_deref_mut() {
+                    rows.discard_pass(window);
+                }
             }
 
             Ok(layout_response)
-        })
+        });
+        if result.is_err()
+            && let Some(rows) = rows
+        {
+            rows.discard_pass(window);
+        }
+        result
     }
 
     // Scrollbar support
 
     fn set_offset_from_scrollbar(&mut self, point: Point<Pixels>) {
+        self.scroll_marks += 1;
         let Some(bounds) = self.last_layout_bounds else {
             return;
         };
@@ -2530,7 +2775,7 @@ impl Element for List {
                 style.overflow.y = Overflow::Scroll;
                 style.refine(&self.style);
                 window.with_text_style(style.text_style().cloned(), |window| {
-                    let state = &mut *self.state.0.borrow_mut();
+                    let state = &mut *self.state.edit();
 
                     let available_height = if let Some(last_bounds) = state.last_layout_bounds {
                         last_bounds.size.height
@@ -2551,6 +2796,7 @@ impl Element for List {
                         &mut self.render_item,
                         window,
                         cx,
+                        None,
                     );
                     let max_element_width = layout_response.max_item_width;
 
@@ -2592,7 +2838,7 @@ impl Element for List {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
@@ -2608,8 +2854,8 @@ impl Element for List {
             .to_pixels(bounds.size.into(), window.rem_size());
         let content_width = (bounds.size.width - padding.left - padding.right).max(px(0.));
 
-        let (layout, notification) = {
-            let state = &mut *self.state.0.borrow_mut();
+        let (layout, notification, rows) = {
+            let state = &mut *self.state.edit();
             state.reset = false;
 
             // If the content width of the list has changed (its width or its horizontal
@@ -2619,6 +2865,32 @@ impl Element for List {
                 state.last_content_width = Some(content_width);
             }
 
+            // Rows are retained for lists that have an identity to key them by and size
+            // themselves (a list that infers its size renders and measures every visible row
+            // to do so); not while accessibility is active.
+            let mut session = match id {
+                Some(id)
+                    if self.sizing_behavior == ListSizingBehavior::Auto && window.rows_enabled() =>
+                {
+                    Some(row_replay::RowSession::begin(
+                        window,
+                        id,
+                        bounds,
+                        content_width,
+                        state.logical_count(),
+                        self.render_type,
+                        state.revision,
+                        state.scroll_marks,
+                    ))
+                }
+                Some(id) => {
+                    window.row_store_clear(id);
+                    None
+                }
+                None => None,
+            };
+            state.row_pass = session.is_some();
+
             let layout = match state.prepaint_items(
                 bounds,
                 padding,
@@ -2626,21 +2898,35 @@ impl Element for List {
                 &mut self.render_item,
                 window,
                 cx,
+                session.as_mut(),
             ) {
                 Ok(layout) => layout,
                 Err(autoscroll_request) => {
                     state.logical_scroll_top = Some(autoscroll_request);
                     state
-                        .prepaint_items(bounds, padding, false, &mut self.render_item, window, cx)
+                        .prepaint_items(
+                            bounds,
+                            padding,
+                            false,
+                            &mut self.render_item,
+                            window,
+                            cx,
+                            session.as_mut(),
+                        )
                         .unwrap()
                 }
             };
+            state.row_pass = false;
+            let rows = session.map(|session| {
+                let scroll_px = window.pixel_snap(state.scroll_px(&layout.scroll_top));
+                session.finish(window, scroll_px)
+            });
 
             state.last_layout_bounds = Some(bounds);
             state.last_padding = Some(padding);
             let notification =
                 state.visible_range_notification(bounds.size.height, &layout.scroll_top);
-            (layout, notification)
+            (layout, notification, rows)
         };
 
         if let Some((handler, event)) = notification {
@@ -2649,7 +2935,11 @@ impl Element for List {
             });
         }
 
-        ListPrepaintState { hitbox, layout }
+        ListPrepaintState {
+            hitbox,
+            layout,
+            rows,
+        }
     }
 
     fn paint(
@@ -2678,7 +2968,7 @@ impl Element for List {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
                 accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
                 let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
-                let notification = list_state.0.borrow_mut().scroll(
+                let notification = list_state.edit().scroll(
                     &scroll_top,
                     height,
                     pixel_delta,
@@ -2692,8 +2982,13 @@ impl Element for List {
         });
 
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            if let Some(rows) = prepaint.rows.as_mut() {
+                rows.paint(window, cx);
+            }
             for item in &mut prepaint.layout.item_layouts {
-                item.element.paint(window, cx);
+                if let Some(element) = item.element.as_mut() {
+                    element.paint(window, cx);
+                }
             }
         });
 
@@ -2821,6 +3116,8 @@ impl vespertine_sum_tree::SeekTarget<'_, ListItemSummary, ListItemSummary> for H
         self.0.partial_cmp(&other.height).unwrap()
     }
 }
+
+mod row_replay;
 
 #[cfg(test)]
 mod scroll_by_tests;
