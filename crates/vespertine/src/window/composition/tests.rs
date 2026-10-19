@@ -587,6 +587,113 @@ fn is_balanced(scene: &Scene) -> bool {
     depth == 0
 }
 
+fn curved_clip_depth(scene: &Scene) -> Option<i32> {
+    let mut depth = 0i32;
+    for operation in &scene.paint_operations {
+        match operation {
+            crate::PaintOperation::PushCurvedClip(_) => depth += 1,
+            crate::PaintOperation::PopCurvedClip => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(depth)
+}
+
+fn rounded_shape(x: f32, y: f32, w: f32, h: f32, radius: f32) -> crate::CurvedClipShape {
+    crate::CurvedClipShape {
+        bounds: [x, y, x + w, y + h],
+        radii_x: [radius; 4],
+        radii_y: [radius; 4],
+    }
+}
+
+fn red_quad(x: f32) -> crate::Quad {
+    crate::Quad {
+        bounds: scaled(x, 0.0, 10.0, 10.0),
+        content_mask: crate::ContentMask {
+            bounds: scaled(0.0, 0.0, 1000.0, 1000.0),
+        },
+        background: red().into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a3_a_range_boundary_inside_a_rounded_clip_scope_reopens_and_closes_it() {
+    let mut scene = Scene::default();
+    let shape = rounded_shape(0.0, 0.0, 100.0, 100.0, 12.0);
+    scene.push_curved_clip(shape);
+    scene.insert_primitive(red_quad(0.0));
+    scene.insert_primitive(red_quad(20.0));
+    scene.pop_curved_clip();
+    // Push, quad, quad, Pop: split between the quads.
+    let (base, overlay) = scene.split_at_overlay(2).unwrap();
+    for plane in [&base, &overlay] {
+        assert_eq!(curved_clip_depth(plane), Some(0), "balanced");
+        assert_eq!(plane.len(), 3, "push, one quad, pop");
+        assert_eq!(plane.quads.len(), 1);
+        assert!(
+            plane.quads.iter().all(|quad| quad.scope.curved_clip != 0),
+            "the reopened scope still clips its quad"
+        );
+        assert_eq!(plane.curved_clips, [shape]);
+    }
+    // Layer and rounded scopes nest: closing a layer while a rounded clip is open fails.
+    let mut crossed = Scene::default();
+    crossed.push_layer(scaled(0.0, 0.0, 10.0, 10.0));
+    crossed.push_curved_clip(shape);
+    crossed.pop_layer();
+    assert!(crossed.split_at_overlay(1).is_err());
+}
+
+#[test]
+fn a3_empty_rounded_clip_markers_do_not_make_a_scene_drawable() {
+    let mut scene = Scene::default();
+    scene.push_curved_clip(rounded_shape(0.0, 0.0, 10.0, 10.0, 4.0));
+    scene.pop_curved_clip();
+    assert!(scene.is_empty());
+    let (base, overlay) = scene.split_at_overlay(1).unwrap();
+    assert!(base.is_empty() && overlay.is_empty());
+    assert_eq!(curved_clip_depth(&base), Some(0));
+    assert_eq!(curved_clip_depth(&overlay), Some(0));
+}
+
+#[test]
+fn a10_rounded_clip_scopes_are_containers_for_occlusion() {
+    // An empty rounded scope never occludes, and content inside it is bounded by it.
+    let mut scene = Scene::default();
+    scene.push_curved_clip(rounded_shape(0.0, 0.0, 500.0, 500.0, 8.0));
+    scene.pop_curved_clip();
+    assert!(crate::collect_occlusion_rects([&scene], false).is_empty());
+
+    let mut scene = Scene::default();
+    scene.push_curved_clip(rounded_shape(100.0, 100.0, 50.0, 50.0, 8.0));
+    scene.insert_primitive(crate::Quad {
+        bounds: scaled(90.0, 90.0, 200.0, 40.0),
+        content_mask: crate::ContentMask {
+            bounds: scaled(0.0, 0.0, 1000.0, 1000.0),
+        },
+        background: red().into(),
+        ..Default::default()
+    });
+    scene.pop_curved_clip();
+    assert_eq!(
+        crate::collect_occlusion_rects([&scene], false),
+        [crate::Bounds {
+            origin: crate::Point::new(crate::DevicePixels(100), crate::DevicePixels(100)),
+            size: crate::Size {
+                width: crate::DevicePixels(50),
+                height: crate::DevicePixels(30),
+            },
+        }]
+    );
+}
+
 fn quad_colors(scene: &Scene) -> Vec<crate::Hsla> {
     scene
         .quads

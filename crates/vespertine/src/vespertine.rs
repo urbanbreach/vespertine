@@ -21,10 +21,10 @@ mod color;
 mod color_css;
 /// The default colors used by VESPERTINE.
 pub mod colors;
+mod composition;
 #[cfg(test)]
 mod counting_allocator;
 mod custom_element;
-mod composition;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 pub mod drag_drop;

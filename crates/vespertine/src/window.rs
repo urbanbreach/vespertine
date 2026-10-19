@@ -75,11 +75,11 @@ pub(crate) mod retained;
 #[cfg(test)]
 mod retained_tests;
 pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames_disabled};
+mod composition;
 #[cfg(test)]
 mod glyph_blur_tests;
 #[cfg(test)]
 mod key_tests;
-mod composition;
 mod lifecycle;
 mod pointer;
 mod present;
@@ -90,9 +90,9 @@ pub use a11y::A11ySubtreeBuilder;
 
 use self::a11y::A11y;
 use self::a11y::ROOT_NODE_ID;
+use self::composition::WindowComposition;
 pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
 use self::pointer::{PointerState, pointer_within_keyboard_slop};
-use self::composition::WindowComposition;
 use self::present::PresentCallback;
 use crate::text_system::glyph_store::{
     GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
