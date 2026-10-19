@@ -21,8 +21,15 @@ unicode-segmentation.workspace = true
 syntect.workspace = true
 two-face.workspace = true
 sha2.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 vespertine = { workspace = true, features = ["test-support"] }
 vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 vespertine_wgpu = { workspace = true, features = ["test-support"] }
+image.workspace = true
+
+[[example]]
+name = "rich_geometry"
+path = "examples/rich_geometry.rs"

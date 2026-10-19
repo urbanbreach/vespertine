@@ -1,7 +1,127 @@
 //! Exact-cover run construction (TXT-006 R1-R3).
 
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use vespertine::{Font, Hsla, TextRun};
+use vespertine::{Font, Hsla, Pixels, TextOverflow, TextRun};
+
+/// A validated rich text: a text plus runs that cover it exactly (TXT-006 R1).
+#[derive(Clone, Debug)]
+pub struct RichSpans {
+    text: String,
+    runs: Vec<TextRun>,
+}
+
+/// Why a run list does not cover its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CoverError {
+    /// The run lengths do not sum to the text length.
+    #[error("run lengths sum to {runs} bytes but the text has {text}")]
+    Length {
+        /// Sum of the run lengths.
+        runs: usize,
+        /// Length of the text.
+        text: usize,
+    },
+    /// A run boundary falls inside a character.
+    #[error("run boundary at byte {0} is not on a character boundary")]
+    Boundary(usize),
+}
+
+impl RichSpans {
+    /// Validates that `runs` cover `text` exactly: lengths sum to the text length and every
+    /// boundary is on a character boundary. Zero-length runs are dropped.
+    pub fn new(text: impl Into<String>, mut runs: Vec<TextRun>) -> Result<Self, CoverError> {
+        let text = text.into();
+        runs.retain(|run| run.len > 0);
+        let total: usize = runs.iter().map(|run| run.len).sum();
+        if total != text.len() {
+            return Err(CoverError::Length {
+                runs: total,
+                text: text.len(),
+            });
+        }
+        let mut offset = 0;
+        for run in &runs {
+            offset += run.len;
+            if !text.is_char_boundary(offset) {
+                return Err(CoverError::Boundary(offset));
+            }
+        }
+        Ok(Self { text, runs })
+    }
+
+    /// Builds the runs of one line from `(range, color)` spans per [`runs_from_spans`].
+    pub fn from_color_spans(
+        text: impl Into<String>,
+        spans: &[(Range<usize>, Hsla)],
+        plain: Hsla,
+        font: &Font,
+    ) -> Self {
+        let text = text.into();
+        let runs = runs_from_spans(&text, spans, plain, font);
+        Self { text, runs }
+    }
+
+    /// The text.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The runs, covering the text exactly.
+    pub fn runs(&self) -> &[TextRun] {
+        &self.runs
+    }
+
+    /// Splits into the text and its runs.
+    pub fn into_parts(self) -> (String, Vec<TextRun>) {
+        (self.text, self.runs)
+    }
+
+    /// The text as an element, with these runs.
+    pub fn styled_text(&self) -> vespertine::StyledText {
+        vespertine::StyledText::new(self.text.clone()).with_runs(self.runs.clone())
+    }
+
+    /// Key of everything that influences shaping and line breaking: the text, each run's length
+    /// and font (family, weight, style, features), the size, the wrap width and the overflow mode.
+    /// Colors, backgrounds, underlines and strikethroughs are paint-only and never part of it
+    /// (R3).
+    pub fn shaping_key(
+        &self,
+        font_size: Pixels,
+        wrap_width: Option<Pixels>,
+        overflow: Option<&TextOverflow>,
+    ) -> u64 {
+        shaping_key(&self.text, &self.runs, font_size, wrap_width, overflow)
+    }
+}
+
+/// See [`RichSpans::shaping_key`].
+pub fn shaping_key(
+    text: &str,
+    runs: &[TextRun],
+    font_size: Pixels,
+    wrap_width: Option<Pixels>,
+    overflow: Option<&TextOverflow>,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    for run in runs {
+        run.len.hash(&mut hasher);
+        run.font.hash(&mut hasher);
+    }
+    f32::from(font_size).to_bits().hash(&mut hasher);
+    wrap_width
+        .map(|width| f32::from(width).to_bits())
+        .hash(&mut hasher);
+    match overflow {
+        None => 0u8.hash(&mut hasher),
+        Some(TextOverflow::Truncate(ellipsis)) => (1u8, ellipsis).hash(&mut hasher),
+        Some(TextOverflow::TruncateStart(ellipsis)) => (2u8, ellipsis).hash(&mut hasher),
+        Some(TextOverflow::TruncateMiddle(ellipsis)) => (3u8, ellipsis).hash(&mut hasher),
+    }
+    hasher.finish()
+}
 
 /// Largest character boundary of `text` that is `<= index` (and `<= text.len()`).
 pub fn floor_char_boundary(text: &str, index: usize) -> usize {
