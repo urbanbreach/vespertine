@@ -30,6 +30,7 @@ pub mod browser;
 pub mod chart;
 pub mod controls;
 pub mod dialog;
+pub mod diagram;
 pub mod diff;
 pub mod elastic;
 pub mod floating;
