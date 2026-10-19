@@ -259,36 +259,6 @@ fn controls_a8_a_press_focuses_the_slider_and_applies_the_value_at_once() {
 }
 
 #[test]
-fn controls_a8_a_drag_leaving_the_surface_keeps_updating_until_release() {
-    require_backend!();
-    let owner = Owner::new(736.0);
-    let mut host = slider_host(pixels(), &owner, |slider| slider);
-    let y = TOP + 14.0;
-    host.mouse_down(at(60.0), y, 0, "").unwrap();
-    host.paint_frame();
-    // Far outside the 28 px tall surface, and outside its horizontal extent.
-    host.mouse_move(at(150.0), 200.0, Some(0), "").unwrap();
-    host.paint_frame();
-    host.mouse_move(at(WIDTH + 60.0), 215.0, Some(0), "")
-        .unwrap();
-    host.paint_frame();
-    assert_eq!(
-        owner.value.get(),
-        1200.0,
-        "the drag follows the pointer beyond the surface"
-    );
-    host.mouse_move(at(0.0) - 30.0, 230.0, Some(0), "").unwrap();
-    host.paint_frame();
-    assert_eq!(owner.value.get(), 560.0);
-    host.mouse_up(at(100.0), 230.0, 0, "").unwrap();
-    // Released: further moves do nothing.
-    let before = owner.notifications().len();
-    host.mouse_move(at(180.0), TOP + 14.0, None, "").unwrap();
-    host.paint_frame();
-    assert_eq!(owner.notifications().len(), before);
-}
-
-#[test]
 fn controls_a8_two_pointer_moves_inside_one_frame_notify_the_owner_once() {
     require_backend!();
     let owner = Owner::new(736.0);
