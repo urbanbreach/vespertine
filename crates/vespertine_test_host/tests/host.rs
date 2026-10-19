@@ -923,7 +923,6 @@ fn dev_006_key_down_repeat_flag_key_up_and_mouse_exit_reach_window_listeners() {
                     canvas(
                         |_, _, _| (),
                         move |_, _, window, _| {
-                            let exit = exit.clone();
                             window.on_mouse_event(
                                 move |_: &vespertine::MouseExitEvent, phase, _, _| {
                                     if phase.bubble() {
