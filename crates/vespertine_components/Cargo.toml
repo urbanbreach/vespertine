@@ -150,3 +150,7 @@ path = "examples/text_field.rs"
 [[example]]
 name = "text_area"
 path = "examples/text_area.rs"
+
+[[example]]
+name = "markdown_editor"
+path = "examples/markdown_editor.rs"

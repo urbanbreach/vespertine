@@ -48,6 +48,25 @@ pub enum SubmitMode {
     ModifiedEnter,
 }
 
+/// One row segment of a span wash (window coordinates): painted as a rounded quad whose outer
+/// corners are rounded where the span begins or ends and square where it continues on another row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WashQuad {
+    /// The row segment's box.
+    pub bounds: Bounds<Pixels>,
+    /// The wash color.
+    pub color: Hsla,
+    /// Whether the left corners are rounded (the span begins here).
+    pub round_left: bool,
+    /// Whether the right corners are rounded (the span ends here).
+    pub round_right: bool,
+}
+
+/// Corner radius of the code wash.
+pub const WASH_RADIUS: f32 = 3.0;
+/// Vertical inset of the code wash inside its row.
+pub const WASH_INSET_Y: f32 = 1.0;
+
 /// A visual row of the editor for gutters and overlays (content coordinates, before scrolling).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowInfo {
@@ -1195,6 +1214,42 @@ impl TextArea {
                 size: rect.size,
             })
             .collect()
+    }
+
+    /// The washes behind spans that carry a background (inline and fenced code, CMP-009 R2), one
+    /// quad per visual row, in window coordinates. Adjacent spans of one color are one run.
+    pub fn wash_quads(&self) -> Vec<WashQuad> {
+        let (Some(layout), Some(bounds)) = (&self.layout, self.bounds) else {
+            return Vec::new();
+        };
+        let mut runs: Vec<(Range<usize>, Hsla)> = Vec::new();
+        for (range, style) in &self.display_spans {
+            let Some(color) = style.background else {
+                continue;
+            };
+            match runs.last_mut() {
+                Some((last, last_color)) if last.end == range.start && *last_color == color => {
+                    last.end = range.end;
+                }
+                _ => runs.push((range.clone(), color)),
+            }
+        }
+        let origin = self.content_origin(bounds);
+        let mut quads = Vec::new();
+        for (range, color) in runs {
+            for segment in layout.range_segments(range) {
+                quads.push(WashQuad {
+                    bounds: Bounds {
+                        origin: origin + segment.bounds.origin,
+                        size: segment.bounds.size,
+                    },
+                    color,
+                    round_left: segment.starts,
+                    round_right: segment.ends,
+                });
+            }
+        }
+        quads
     }
 
     /// Whether the caret is drawn right now (CMP-007 R14).

@@ -95,7 +95,9 @@ pub fn run_for(base: &BaseStyle, style: SpanStyle, len: usize, marked: bool) -> 
         len,
         font,
         color,
-        background_color: style.background,
+        // A span's wash is painted by the element as a rounded quad per row segment
+        // (CMP-009 R2), never as the rectangle of the shaped run.
+        background_color: None,
         underline: (style.underline || marked).then_some(UnderlineStyle {
             color: Some(base.color),
             thickness: px(1.0),

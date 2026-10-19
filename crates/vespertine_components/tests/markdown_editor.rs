@@ -143,3 +143,36 @@ fn a6_sources_over_the_limit_are_plain_while_continuation_still_works() {
     fx.keys("enter");
     assert!(fx.text().ends_with("- item\n- "));
 }
+
+#[test]
+fn r2_the_code_wash_is_one_rounded_quad_per_row_and_only_behind_code() {
+    require_backend!();
+    let source = "plain `code` and a fenced block:\n```\nlet x = 1;\n```\nafter";
+    let mut fx = fixture(400.0, 300.0, false, move |area| {
+        area.value(source).with_markdown(MarkdownOptions::default())
+    });
+    // The caret on the last line keeps the code line's delimiters hidden.
+    fx.select(source.len()..source.len());
+    let quads = fx.read(|area| area.wash_quads());
+    assert!(
+        quads.len() >= 3,
+        "the inline span and the fence rows are washed: {quads:?}"
+    );
+    let rows = fx.read(|area| area.visual_rows());
+    // The inline span: one quad, rounded at both ends, on the first row.
+    let inline = &quads[0];
+    assert!(inline.round_left && inline.round_right);
+    assert_eq!(inline.bounds.size.height, vespertine::px(20.0));
+    assert!(inline.bounds.size.width > vespertine::px(10.0));
+    // The fence spans several rows: rounded where it starts and ends, square in between.
+    let fence: Vec<_> = quads.iter().skip(1).collect();
+    assert!(fence.len() >= 2);
+    assert!(fence.first().unwrap().round_left && !fence.first().unwrap().round_right);
+    assert!(!fence.last().unwrap().round_left && fence.last().unwrap().round_right);
+    // Nothing is washed on the prose row or after the fence.
+    assert!(
+        quads
+            .iter()
+            .all(|quad| quad.bounds.origin.y < fx.point_of(rows.last().unwrap().source_start).y)
+    );
+}

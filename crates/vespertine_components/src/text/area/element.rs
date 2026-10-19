@@ -1,14 +1,14 @@
 //! The element and render function of the multiline editor.
 
-use super::{TextArea, TextAreaEvent, layout::painted_height};
+use super::{TextArea, TextAreaEvent, WASH_INSET_Y, WASH_RADIUS, layout::painted_height};
 use crate::text::{actions::*, editor::EditorHost};
 use vespertine::{
-    AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, CursorStyle, DispatchPhase,
-    Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign, Window,
-    div, fill, point, px, relative, size,
+    AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, Corners, CursorStyle,
+    DispatchPhase, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
+    HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Style, Styled, TextAlign,
+    Window, div, fill, point, px, relative, size,
 };
 
 struct AreaElement {
@@ -119,10 +119,14 @@ impl Element for AreaElement {
         );
         // The editor owns the selection started inside it, also inside a modal (R20).
         if let Some(service) = vespertine_richtext::TextService::current() {
-            service.register_region(vespertine_richtext::StartRegion {
-                bounds,
-                selectable: false,
-            });
+            service.register_region(
+                vespertine_richtext::StartRegion {
+                    bounds,
+                    selectable: false,
+                },
+                window,
+                cx,
+            );
         }
 
         let state = area.read(cx);
@@ -135,6 +139,7 @@ impl Element for AreaElement {
             .then(|| state.caret_rect())
             .flatten();
         let wash = state.wash().zip(state.line_wash_rect(bounds));
+        let span_washes = state.wash_quads();
         let empty = state.is_empty();
         let placeholder = state.placeholder_ref().clone();
         let font = state.resolved_font.clone();
@@ -157,6 +162,34 @@ impl Element for AreaElement {
         window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
             if let Some((color, rect)) = wash {
                 window.paint_quad(fill(rect, color));
+            }
+            for quad in span_washes {
+                let rect = Bounds {
+                    origin: point(
+                        quad.bounds.origin.x,
+                        quad.bounds.origin.y + px(WASH_INSET_Y),
+                    ),
+                    size: size(
+                        quad.bounds.size.width,
+                        (quad.bounds.size.height - px(2.0 * WASH_INSET_Y)).max(px(0.0)),
+                    ),
+                };
+                let left = if quad.round_left {
+                    px(WASH_RADIUS)
+                } else {
+                    px(0.0)
+                };
+                let right = if quad.round_right {
+                    px(WASH_RADIUS)
+                } else {
+                    px(0.0)
+                };
+                window.paint_quad(fill(rect, quad.color).corner_radii(Corners {
+                    top_left: left,
+                    bottom_left: left,
+                    top_right: right,
+                    bottom_right: right,
+                }));
             }
             for rect in selection {
                 window.paint_quad(fill(rect, theme.selection));

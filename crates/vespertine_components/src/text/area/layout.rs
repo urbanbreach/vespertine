@@ -160,6 +160,19 @@ pub struct LineLayout {
     pub top: Pixels,
 }
 
+/// The part of a display range on one visual row (content coordinates, one line tall).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangeSegment {
+    /// The segment's box.
+    pub bounds: Bounds<Pixels>,
+    /// The display range on this row.
+    pub range: Range<usize>,
+    /// Whether the segment holds the first character of the whole range.
+    pub starts: bool,
+    /// Whether the segment holds the last character of the whole range.
+    pub ends: bool,
+}
+
 /// A visual row of the document.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VisualRow {
@@ -365,6 +378,40 @@ impl AreaLayout {
             rects.push(rect(left, end_row.top, end.x));
         }
         rects
+    }
+
+    /// The per-row segments of a display range in content coordinates, one line-height tall: what
+    /// washes and pills are painted over. Rows without any character of the range produce
+    /// nothing; `starts`/`ends` tell whether a segment holds the range's first/last character.
+    pub fn range_segments(&self, range: Range<usize>) -> Vec<RangeSegment> {
+        let mut segments = Vec::new();
+        if range.start >= range.end {
+            return segments;
+        }
+        let mut cursor = Some(self.row_at(range.start, Affinity::Downstream));
+        while let Some(row) = cursor {
+            if row.start >= range.end {
+                break;
+            }
+            let start = range.start.max(row.start);
+            let end = range.end.min(row.end);
+            if start < end {
+                let line = &self.lines[row.line];
+                let left = line.shape.x_for(start - line.display_start, row.row);
+                let right = line.shape.x_for(end - line.display_start, row.row);
+                segments.push(RangeSegment {
+                    bounds: Bounds {
+                        origin: point(left, row.top),
+                        size: size((right - left).max(px(0.0)), self.line_height),
+                    },
+                    range: start..end,
+                    starts: start == range.start,
+                    ends: end == range.end,
+                });
+            }
+            cursor = self.row_below(row);
+        }
+        segments
     }
 }
 
