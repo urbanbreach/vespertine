@@ -67,9 +67,9 @@ pub mod motion;
 mod link;
 mod motion_clock;
 mod motion_policy;
+mod native_prompt;
 #[cfg(test)]
 mod outline_tests;
-mod native_prompt;
 mod paint_scope;
 #[cfg(test)]
 mod paint_scope_window_tests;
