@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::linux::settings_notify::deliver_setting_change;
 use anyhow::Context as _;
 use ashpd::WindowIdentifier;
 use calloop::{
@@ -90,7 +91,7 @@ use crate::linux::{
     keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
     open_uri_internal, read_fd_with_timeout, reveal_path_internal,
     wayland::{
-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+        clipboard::{AsyncRead, Clipboard, DataOffer, FILE_LIST_MIME_TYPE},
         cursor::Cursor,
         serial::{Serial, SerialKind, SerialTracker},
         to_shape,
@@ -657,6 +658,16 @@ impl WaylandClientStatePtr {
         self.0.upgrade().unwrap().borrow().serial_tracker.get(kind)
     }
 
+    /// The latest serial of the given kind, or `None` when none has been received.
+    pub fn get_tracked_serial(&self, kind: SerialKind) -> Option<Serial> {
+        self.0
+            .upgrade()
+            .unwrap()
+            .borrow()
+            .serial_tracker
+            .get_tracked(kind)
+    }
+
     pub fn start_external_drag(
         &self,
         surface: &wl_surface::WlSurface,
@@ -1155,13 +1166,12 @@ impl WaylandConnection {
                 move |event, _, _| match event {
                     XDPEvent::WindowAppearance(appearance) => {
                         if let Some(client) = client.0.upgrade() {
-                            let mut client = client.borrow_mut();
-
-                            client.common.borrow_mut().appearance = appearance;
-
-                            for window in client.windows.values_mut() {
-                                window.set_appearance(appearance);
-                            }
+                            deliver_setting_change(
+                                &client,
+                                |state| state.common.borrow_mut().appearance = appearance,
+                                |state| state.windows.values().cloned().collect(),
+                                |mut window| window.set_appearance(appearance),
+                            );
                         }
                     }
                     XDPEvent::ButtonLayout(layout_str) => {
@@ -1169,12 +1179,12 @@ impl WaylandConnection {
                             let layout = WindowButtonLayout::parse(&layout_str)
                                 .log_err()
                                 .unwrap_or_else(WindowButtonLayout::linux_default);
-                            let mut client = client.borrow_mut();
-                            client.common.borrow_mut().button_layout = layout;
-
-                            for window in client.windows.values_mut() {
-                                window.set_button_layout();
-                            }
+                            deliver_setting_change(
+                                &client,
+                                |state| state.common.borrow_mut().button_layout = layout,
+                                |state| state.windows.values().cloned().collect(),
+                                |window| window.set_button_layout(),
+                            );
                         }
                     }
                     XDPEvent::CursorTheme(theme) => {
@@ -1253,8 +1263,20 @@ impl WaylandConnection {
             .collect()
     }
 
+    /// Wayland has no primary output, so the one the compositor announced first stands in:
+    /// the output with the lowest object id.
     pub(crate) fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>> {
-        None
+        let state = self.0.borrow();
+        let (id, output) = state
+            .outputs
+            .iter()
+            .min_by_key(|(id, _)| id.protocol_id())?;
+        Some(Rc::new(WaylandDisplay {
+            id: id.clone(),
+            name: output.name.clone(),
+            bounds: output.bounds.to_pixels(output.scale as f32),
+            refresh_interval: output.refresh_interval,
+        }))
     }
 
     #[cfg(feature = "screen-capture")]
@@ -1439,15 +1461,15 @@ impl WaylandConnection {
             return;
         };
         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
-            state.clipboard.set_primary(item);
-            let Some(serial) = state.serial_tracker.selection_serial() else {
+            let serial = state.serial_tracker.selection_serial();
+            let Some((serial, targets)) = state.clipboard.begin_primary_write(item, serial) else {
                 log::warn!(
-                    "Skipping Wayland primary selection ownership request because no keyboard or pointer press serial has been received"
+                    "Skipping Wayland primary selection ownership request: no keyboard or pointer press serial has been received, or the item has no text"
                 );
                 return;
             };
             let data_source = primary_selection_manager.create_source(&state.globals.qh, ());
-            for mime_type in TEXT_MIME_TYPES {
+            for mime_type in targets {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -1464,16 +1486,16 @@ impl WaylandConnection {
             return;
         };
         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
-            state.clipboard.set(item);
-            let Some(serial) = state.serial_tracker.selection_serial() else {
+            let serial = state.serial_tracker.selection_serial();
+            let Some((serial, targets)) = state.clipboard.begin_write(item, serial) else {
                 log::warn!(
-                    "Skipping Wayland clipboard ownership request because no keyboard or pointer press serial has been received"
+                    "Skipping Wayland clipboard ownership request: no keyboard or pointer press serial has been received, or the item has nothing to offer"
                 );
                 return;
             };
             let data_source = data_device_manager
                 .create_data_source(&state.globals.qh, DataSourceKind::Clipboard);
-            for mime_type in TEXT_MIME_TYPES {
+            for mime_type in targets {
                 data_source.offer(mime_type.to_string());
             }
             data_source.offer(state.clipboard.self_mime());
@@ -1487,6 +1509,20 @@ impl WaylandConnection {
 
     pub(crate) fn read_from_clipboard(&self) -> Option<vespertine::ClipboardItem> {
         self.0.borrow_mut().clipboard.read()
+    }
+
+    pub(crate) fn read_from_clipboard_async(
+        &self,
+    ) -> vespertine::Task<Result<Option<vespertine::ClipboardItem>, vespertine::ClipboardReadError>>
+    {
+        let state = self.0.borrow();
+        match state.clipboard.begin_async_read() {
+            AsyncRead::Ready(result) => vespertine::Task::ready(result),
+            AsyncRead::Offer(pending) => {
+                let executor = state.common.borrow().background_executor.clone();
+                executor.spawn(async move { pending.run() })
+            }
+        }
     }
 
     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {

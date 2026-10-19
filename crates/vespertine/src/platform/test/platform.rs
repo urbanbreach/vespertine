@@ -8,8 +8,8 @@ use crate::{
     OwnedMenu, Platform, PlatformDisplay, PlatformHeadlessRenderer, PlatformKeyboardLayout,
     PlatformKeyboardMapper, PlatformTextSystem, PromptButton, ScreenCaptureFrame,
     ScreenCaptureSource, ScreenCaptureStream, SharedString, SourceMetadata, SystemNotification,
-    SystemNotificationResponse, Task, TestDisplay, TestWindow, ThermalState, WindowAppearance,
-    WindowParams, size,
+    SystemNotificationDelivery, SystemNotificationResponse, Task, TestDisplay, TestLifecycle,
+    TestWindow, ThermalState, WindowAppearance, WindowParams, size,
 };
 use anyhow::Result;
 use futures::channel::oneshot;
@@ -45,6 +45,7 @@ pub(crate) struct TestPlatform {
     pub(crate) prompts: RefCell<TestPrompts>,
     screen_capture_sources: RefCell<Vec<TestScreenCaptureSource>>,
     pub opened_url: RefCell<Option<String>>,
+    pub(crate) external: RefCell<TestExternalOpens>,
     pub(crate) system_notifications: RefCell<TestSystemNotifications>,
     pub text_system: Arc<dyn PlatformTextSystem>,
     pub expect_restart:
@@ -60,6 +61,9 @@ pub(crate) struct TestPlatform {
     pub(crate) app_lifecycle_callback: RefCell<Option<Box<dyn FnMut(AppLifecyclePhase)>>>,
     pub(crate) memory_warning_callback: RefCell<Option<Box<dyn FnMut()>>>,
     pub(crate) system_reduced_motion: Cell<bool>,
+    /// The desktop titlebar button layout reported by [`Platform::button_layout`].
+    pub(crate) button_layout: RefCell<Option<crate::WindowButtonLayout>>,
+    pub(crate) lifecycle: TestLifecycle,
 }
 
 #[derive(Clone)]
@@ -98,6 +102,15 @@ impl ScreenCaptureStream for TestScreenCaptureStream {
     }
 }
 
+/// Everything the application handed to the desktop through the external-opening APIs.
+#[derive(Default)]
+pub(crate) struct TestExternalOpens {
+    pub(crate) urls: Vec<String>,
+    pub(crate) opened_paths: Vec<PathBuf>,
+    pub(crate) revealed_paths: Vec<PathBuf>,
+    pub(crate) schemes: Vec<String>,
+}
+
 #[cfg(any(test, feature = "test-support"))]
 struct TestPrompt {
     msg: String,
@@ -112,6 +125,14 @@ pub(crate) struct TestSystemNotifications {
     pub(crate) shown: Vec<SystemNotification>,
     pub(crate) delivered: Vec<SystemNotification>,
     pub(crate) dismissed: Vec<SharedString>,
+    /// Every request passed to `post_system_notification`, in order,
+    /// whatever its scripted result.
+    pub(crate) posted: Vec<SystemNotification>,
+    /// Results the next posts resolve to; when empty a post is delivered if
+    /// an app identity is set and unavailable otherwise.
+    pub(crate) scripted_deliveries: std::collections::VecDeque<SystemNotificationDelivery>,
+    /// `Some(false)` simulates a service without activation support.
+    pub(crate) activation_supported: Option<bool>,
     response_callback: Option<Box<dyn FnMut(SystemNotificationResponse)>>,
 }
 
@@ -202,6 +223,63 @@ impl TestPlatform {
         }
     }
 
+    /// Connects a display with the given geometry and tells App.
+    pub(crate) fn simulate_display_connected(&self, display: TestDisplay) {
+        self.displays.borrow_mut().push(display);
+        self.report_displays_changed();
+    }
+
+    /// Replaces the display with the same id as `display` and tells App.
+    pub(crate) fn simulate_display_replaced(&self, display: TestDisplay) {
+        let mut displays = self.displays.borrow_mut();
+        if let Some(slot) = displays.iter_mut().find(|slot| slot.id() == display.id()) {
+            *slot = display;
+        }
+        drop(displays);
+        self.report_displays_changed();
+    }
+
+    /// Delivers an incoming URL list as the platform's activation mechanism would.
+    pub(crate) fn simulate_open_urls(&self, urls: Vec<String>) {
+        TestLifecycle::invoke(&self.lifecycle.open_urls, urls);
+    }
+
+    /// Delivers a reopen notification.
+    pub(crate) fn simulate_reopen(&self) {
+        let callback = self.lifecycle.reopen.borrow_mut().take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.lifecycle.reopen.borrow_mut().get_or_insert(callback);
+        }
+    }
+
+    /// Delivers an activation request (the token of an `Activate` call, if any).
+    pub(crate) fn simulate_activation_request(&self, request: crate::ActivationRequest) {
+        TestLifecycle::invoke(&self.lifecycle.activation_request, request);
+    }
+
+    /// Delivers an activated desktop action.
+    pub(crate) fn simulate_activate_action(&self, action: &str) {
+        TestLifecycle::invoke(&self.lifecycle.activate_action, action.to_owned());
+    }
+
+    /// Delivers a termination request, as Linux does for `SIGTERM`.
+    pub(crate) fn simulate_quit_request(&self) {
+        let callback = self.lifecycle.quit_requested.borrow_mut().take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.lifecycle
+                .quit_requested
+                .borrow_mut()
+                .get_or_insert(callback);
+        }
+    }
+
+    /// How many times the platform was asked to stop the event loop.
+    pub(crate) fn quit_count(&self) -> usize {
+        self.lifecycle.quit_count.get()
+    }
+
     pub fn with_platform(
         executor: BackgroundExecutor,
         foreground_executor: ForegroundExecutor,
@@ -231,6 +309,7 @@ impl TestPlatform {
             idle_sleep_prevention_fails: Cell::new(false),
             weak: weak.clone(),
             opened_url: Default::default(),
+            external: Default::default(),
             system_notifications: Default::default(),
             text_system,
             headless_renderer_factory,
@@ -239,6 +318,8 @@ impl TestPlatform {
             app_lifecycle_callback: Default::default(),
             memory_warning_callback: Default::default(),
             system_reduced_motion: Cell::new(false),
+            button_layout: Default::default(),
+            lifecycle: Default::default(),
         })
     }
 
@@ -427,10 +508,34 @@ impl TestPlatform {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn posted_system_notifications(&self) -> Vec<SystemNotification> {
+        self.system_notifications.borrow().posted.clone()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn script_system_notification_deliveries(
+        &self,
+        results: impl IntoIterator<Item = SystemNotificationDelivery>,
+    ) {
+        self.system_notifications
+            .borrow_mut()
+            .scripted_deliveries
+            .extend(results);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_system_notification_activation_supported(&self, supported: bool) {
+        self.system_notifications.borrow_mut().activation_supported = Some(supported);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn simulate_system_notification_response(
         &self,
         response: SystemNotificationResponse,
     ) {
+        if self.system_notifications.borrow().activation_supported == Some(false) {
+            return;
+        }
         let callback = self
             .system_notifications
             .borrow_mut()
@@ -511,6 +616,9 @@ impl Platform for TestPlatform {
 
     fn quit(&self) {
         self.quit_requests.set(self.quit_requests.get() + 1);
+        self.lifecycle
+            .quit_count
+            .set(self.lifecycle.quit_count.get() + 1);
     }
 
     fn restart(&self, path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
@@ -536,6 +644,7 @@ impl Platform for TestPlatform {
     }
 
     fn displays(&self) -> Vec<std::rc::Rc<dyn crate::PlatformDisplay>> {
+        self.lifecycle.assert_display_enumeration_allowed();
         self.displays
             .borrow()
             .iter()
@@ -544,6 +653,7 @@ impl Platform for TestPlatform {
     }
 
     fn primary_display(&self) -> Option<std::rc::Rc<dyn crate::PlatformDisplay>> {
+        self.lifecycle.assert_display_enumeration_allowed();
         self.displays
             .borrow()
             .first()
@@ -588,14 +698,18 @@ impl Platform for TestPlatform {
             Some(factory) => factory()?,
             None => None,
         };
-        let window = TestWindow::new(
-            handle,
-            params,
-            self.weak.clone(),
-            self.primary_display()
-                .unwrap_or_else(|| Rc::new(TestDisplay::new())),
-            renderer,
-        );
+        let display = params
+            .display_id
+            .and_then(|id| {
+                self.displays
+                    .borrow()
+                    .iter()
+                    .find(|display| display.id() == id)
+                    .map(|display| Rc::new(display.clone()) as Rc<dyn PlatformDisplay>)
+            })
+            .or_else(|| self.primary_display())
+            .unwrap_or_else(|| Rc::new(TestDisplay::new()));
+        let window = TestWindow::new(handle, params, self.weak.clone(), display, renderer);
         Ok(Box::new(window))
     }
 
@@ -607,12 +721,17 @@ impl Platform for TestPlatform {
         Task::ready(self.system_reduced_motion.get())
     }
 
+    fn button_layout(&self) -> Option<crate::WindowButtonLayout> {
+        *self.button_layout.borrow()
+    }
+
     fn open_url(&self, url: &str) {
+        self.external.borrow_mut().urls.push(url.to_string());
         *self.opened_url.borrow_mut() = Some(url.to_string())
     }
 
-    fn on_open_urls(&self, _callback: Box<dyn FnMut(Vec<String>)>) {
-        unimplemented!()
+    fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>)>) {
+        *self.lifecycle.open_urls.borrow_mut() = Some(callback);
     }
 
     /// Queues the prompt so a test can later answer it through
@@ -646,6 +765,7 @@ impl Platform for TestPlatform {
         &self,
         directory: &std::path::Path,
         _suggested_name: Option<&str>,
+        _filters: &[crate::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<std::path::PathBuf>>> {
         let (tx, rx) = oneshot::channel();
         self.prompts
@@ -664,6 +784,7 @@ impl Platform for TestPlatform {
         &self,
         _directory: &std::path::Path,
         _suggested_name: Option<&str>,
+        _filters: &[crate::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<std::path::PathBuf>>> {
         oneshot::channel().1
     }
@@ -672,14 +793,29 @@ impl Platform for TestPlatform {
         true
     }
 
-    fn reveal_path(&self, _path: &std::path::Path) {
-        unimplemented!()
+    fn reveal_path(&self, path: &std::path::Path) {
+        self.external
+            .borrow_mut()
+            .revealed_paths
+            .push(path.to_path_buf());
     }
 
     fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {}
 
-    fn on_reopen(&self, _callback: Box<dyn FnMut()>) {
-        unimplemented!()
+    fn on_reopen(&self, callback: Box<dyn FnMut()>) {
+        *self.lifecycle.reopen.borrow_mut() = Some(callback);
+    }
+
+    fn on_activation_request(&self, callback: Box<dyn FnMut(crate::ActivationRequest)>) {
+        *self.lifecycle.activation_request.borrow_mut() = Some(callback);
+    }
+
+    fn on_activate_action(&self, callback: Box<dyn FnMut(String)>) {
+        *self.lifecycle.activate_action.borrow_mut() = Some(callback);
+    }
+
+    fn on_quit_requested(&self, callback: Box<dyn FnMut()>) {
+        *self.lifecycle.quit_requested.borrow_mut() = Some(callback);
     }
 
     fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {}
@@ -715,6 +851,46 @@ impl Platform for TestPlatform {
             system_notifications.delivered.push(notification.clone());
         }
         system_notifications.shown.push(notification);
+    }
+
+    fn post_system_notification(
+        &self,
+        notification: SystemNotification,
+    ) -> Task<SystemNotificationDelivery> {
+        let scripted = {
+            let mut system_notifications = self.system_notifications.borrow_mut();
+            system_notifications.posted.push(notification.clone());
+            system_notifications.scripted_deliveries.pop_front()
+        };
+        let delivery = scripted.unwrap_or_else(|| {
+            if self.system_notifications.borrow().app_identity.is_some() {
+                SystemNotificationDelivery::Delivered
+            } else {
+                SystemNotificationDelivery::Unavailable
+            }
+        });
+        if delivery == SystemNotificationDelivery::Delivered {
+            let mut system_notifications = self.system_notifications.borrow_mut();
+            let delivered = system_notifications
+                .delivered
+                .iter_mut()
+                .find(|delivered| delivered.tag == notification.tag);
+            if let Some(delivered) = delivered {
+                *delivered = notification;
+            } else {
+                system_notifications.delivered.push(notification);
+            }
+        }
+        Task::ready(delivery)
+    }
+
+    fn system_notification_activation_supported(&self) -> Task<bool> {
+        let supported = self
+            .system_notifications
+            .borrow()
+            .activation_supported
+            .unwrap_or(true);
+        Task::ready(supported)
     }
 
     fn dismiss_system_notification(&self, tag: &str) {
@@ -814,12 +990,16 @@ impl Platform for TestPlatform {
         Task::ready(Ok(()))
     }
 
-    fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
-        unimplemented!()
+    fn register_url_scheme(&self, scheme: &str) -> Task<anyhow::Result<()>> {
+        self.external.borrow_mut().schemes.push(scheme.to_string());
+        Task::ready(Ok(()))
     }
 
-    fn open_with_system(&self, _path: &Path) {
-        unimplemented!()
+    fn open_with_system(&self, path: &Path) {
+        self.external
+            .borrow_mut()
+            .opened_paths
+            .push(path.to_path_buf());
     }
 }
 

@@ -799,6 +799,8 @@ impl Platform for WindowsPlatform {
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
+        // The Windows save dialog is shown unfiltered; extension filters are a Linux feature.
+        _filters: &[vespertine::PathPromptFilter],
     ) -> Receiver<Result<Option<PathBuf>>> {
         let directory = directory.to_owned();
         let suggested_name = suggested_name.map(|s| s.to_owned());

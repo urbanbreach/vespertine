@@ -16,6 +16,7 @@ mod asset_cache;
 mod assets;
 #[cfg(test)]
 mod bounds_tree;
+pub mod clipboard;
 mod color;
 mod color_css;
 /// The default colors used by VESPERTINE.
@@ -63,10 +64,12 @@ pub mod keyboard_activation;
 pub mod keyboard_menu;
 mod keymap;
 pub mod motion;
+mod link;
 mod motion_clock;
 mod motion_policy;
 #[cfg(test)]
 mod outline_tests;
+mod native_prompt;
 mod paint_scope;
 #[cfg(test)]
 mod paint_scope_window_tests;
@@ -115,9 +118,12 @@ pub mod test;
 #[cfg(any(test, feature = "test-support"))]
 mod text_paint_observer;
 mod text_system;
+mod url_scheme;
 mod util;
 mod view;
 mod window;
+mod window_chrome;
+mod window_geometry;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use proptest;
@@ -159,6 +165,14 @@ pub(crate) use arena::*;
 pub use aria::*;
 pub use asset_cache::*;
 pub use assets::*;
+pub use clipboard::{
+    edit::{EditAction, EditAvailability, EditOutcome, EditState, EditTarget},
+    image_tasks::{RequestGeneration, RequestToken},
+    policy::{PasteChoice, PasteContent, PastePolicy},
+    scope::{
+        InvalidProjectionRanges, Projection, SCOPED_METADATA_VERSION, ScopedContent, ScopedPaste,
+    },
+};
 pub use color::*;
 pub use color_css::{css_color_to_packed, css_color_to_rgba, oklch_to_rgba, parse_css_color};
 pub use ctor::ctor;
@@ -257,8 +271,10 @@ pub use inspector::*;
 pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
+pub use link::*;
 pub use motion_clock::MotionClock;
 pub use motion_policy::*;
+pub use native_prompt::*;
 pub use paint_scope::*;
 pub use path_builder::*;
 pub use platform::*;
@@ -291,6 +307,7 @@ pub use test::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use text_paint_observer::{PaintObserver, PaintedText};
 pub use text_system::*;
+pub use url_scheme::*;
 pub use util::{FutureExt, Timeout};
 pub use vespertine_http_client;
 pub use vespertine_refineable::*;
@@ -298,6 +315,8 @@ pub use vespertine_shared_string::*;
 pub use vespertine_util::arc_cow::ArcCow;
 pub use view::*;
 pub use window::*;
+pub use window_chrome::*;
+pub use window_geometry::*;
 
 pub use pollster::block_on;
 

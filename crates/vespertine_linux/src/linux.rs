@@ -1,8 +1,13 @@
+mod application_service;
 mod dispatcher;
 mod display_connection;
 mod headless;
 mod keyboard;
 mod platform;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod selection;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod settings_notify;
 mod system_notifications;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod text_system;
@@ -11,6 +16,12 @@ mod wayland;
 #[cfg(feature = "x11")]
 mod x11;
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod external_open;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod file_chooser;
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod scheme_handler;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod xdg_desktop_portal;
 

@@ -1909,6 +1909,11 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().background_appearance
     }
 
+    /// AppKit windows can be transparent and the system can blur what is behind them.
+    fn background_capabilities(&self) -> vespertine::WindowBackgroundCapabilities {
+        vespertine::WindowBackgroundCapabilities::ALL
+    }
+
     fn is_subpixel_rendering_supported(&self) -> bool {
         false
     }

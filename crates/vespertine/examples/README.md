@@ -61,8 +61,10 @@ cargo run -p vespertine --example hello_world
 
 ## Windows and application behavior
 
+- `custom_chrome` demonstrates client-side window chrome on Wayland and X11: a drag-region titlebar, caption controls in the desktop's button order, resize from all eight edges, and the opaque fallback when blur is unavailable. Run it with `cargo run -p vespertine --example custom_chrome`.
 - `move_entity_between_windows` shows moving an entity between windows.
 - `on_window_close_quit` demonstrates quitting when a window closes.
+- `native_prompts` opens native open/save file prompts with extension filters, checks that cancelling leaves the input, preview and focus unchanged, and reveals a chosen file in the file manager.
 - `set_menus` shows application menu setup.
 - `system_notifications` demonstrates posting, replacing, dismissing, and responding to operating-system notifications.
 - `window` demonstrates creating normal, dialog, popup, and floating windows.

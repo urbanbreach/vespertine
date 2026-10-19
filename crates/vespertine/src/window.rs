@@ -80,7 +80,10 @@ mod glyph_blur_tests;
 #[cfg(test)]
 mod key_tests;
 mod pointer;
+mod lifecycle;
+mod present;
 mod prompts;
+mod text_input_intent;
 
 pub use a11y::A11ySubtreeBuilder;
 
@@ -92,6 +95,7 @@ use crate::text_system::glyph_store::{
     GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
     quantize_emoji_origin, quantize_glyph_origin,
 };
+use self::present::PresentCallback;
 use crate::util::{
     atomic_incr_if_not_zero, ceil_to_device_pixel, floor_to_device_pixel, round_half_toward_zero,
     round_half_toward_zero_f64, round_stroke_to_device_pixel, round_to_device_pixel,
@@ -1095,6 +1099,8 @@ pub(crate) struct Frame {
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
     pub(crate) tooltip_requests: Vec<Option<TooltipRequest>>,
     pub(crate) cursor_styles: Vec<CursorStyleRequest>,
+    /// Repeatable callbacks registered during paint by [`Window::on_present`].
+    pub(crate) present_callbacks: Vec<PresentCallback>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
     #[cfg(any(test, feature = "test-support"))]
@@ -1125,6 +1131,7 @@ pub(crate) struct PaintIndex {
     mouse_listeners_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
+    present_callbacks_index: usize,
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
@@ -1214,6 +1221,7 @@ impl Frame {
             input_handlers: Vec::new(),
             tooltip_requests: Vec::new(),
             cursor_styles: Vec::new(),
+            present_callbacks: Vec::new(),
 
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds: FxHashMap::default(),
@@ -1238,6 +1246,7 @@ impl Frame {
         self.input_handlers.clear();
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
+        self.present_callbacks.clear();
         self.hitboxes.clear();
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
@@ -1330,6 +1339,7 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     pub(crate) display_id: Option<DisplayId>,
     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
+    pub(crate) close_decision: RefCell<Option<lifecycle::CloseDecision>>,
     is_resizable: bool,
     is_minimizable: bool,
     sprite_atlas: Arc<dyn PlatformAtlas>,
@@ -1378,7 +1388,7 @@ pub struct Window {
     focus_lost_path: SmallVec<[FocusId; 8]>,
     default_prevented: bool,
     mouse_position: Point<Pixels>,
-    mouse_hit_test: HitTest,
+    pub(crate) mouse_hit_test: HitTest,
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
@@ -1392,6 +1402,8 @@ pub struct Window {
         SubscriberSet<(), Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
+    /// True while [`Window::on_present`] callbacks run; drawing is forbidden then.
+    pub(crate) running_present_callbacks: bool,
     /// The drawable size (device pixels) of the most recently completed draw.
     last_drawn_drawable_size: Option<Size<DevicePixels>>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
@@ -1416,6 +1428,8 @@ pub struct Window {
     pub(crate) pending_input_observers: SubscriberSet<(), AnyObserver>,
     prompt: Option<RenderablePromptHandle>,
     pub(crate) client_inset: Option<Pixels>,
+    /// Client-side window chrome state (PLT-007).
+    pub(crate) chrome: crate::window_chrome::ChromeWindowState,
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
     captured_hitbox: Option<HitboxId>,
@@ -1884,6 +1898,7 @@ impl Window {
                 });
             }
         }));
+        lifecycle::install_close_request_handler(platform_window.as_mut(), handle, cx);
         platform_window.on_request_frame(Box::new({
             let mut cx = cx.to_async();
             let invalidator = invalidator.clone();
@@ -2001,6 +2016,9 @@ impl Window {
                     || needs_present.get()
                     || input_rate_tracker.borrow_mut().is_high_rate();
 
+                handle
+                    .update(&mut cx, |_, window, _| window.sync_chrome_state())
+                    .log_err();
                 let should_draw = invalidator.is_dirty() || force_render;
                 if should_draw {
                     measure("frame duration", || {
@@ -2016,14 +2034,14 @@ impl Window {
                                     window.refresh();
                                 }
                                 let arena_clear_needed = window.draw(cx);
-                                window.present();
+                                window.present(cx);
                                 arena_clear_needed.clear(cx);
                             })
                             .log_err();
                     })
                 } else if needs_present {
                     handle
-                        .update(&mut cx, |_, window, _| window.present())
+                        .update(&mut cx, |_, window, cx| window.present(cx))
                         .log_err();
                 }
 
@@ -2237,6 +2255,7 @@ impl Window {
             platform_window,
             display_id,
             display_observers: SubscriberSet::new(),
+            close_decision: RefCell::new(None),
             is_resizable,
             is_minimizable,
             sprite_atlas,
@@ -2287,6 +2306,7 @@ impl Window {
             visibility_observers: SubscriberSet::new(),
             hovered,
             needs_present,
+            running_present_callbacks: false,
             last_drawn_drawable_size: None,
             input_rate_tracker,
             #[cfg(feature = "profiler")]
@@ -2310,6 +2330,7 @@ impl Window {
             pending_input_observers: SubscriberSet::new(),
             prompt: None,
             client_inset: None,
+            chrome: Default::default(),
             image_cache_stack: Vec::new(),
             captured_hitbox: None,
             pointer: PointerState::default(),
@@ -2683,7 +2704,7 @@ impl Window {
 
     /// Start an interactive window resize operation if this window is resizable.
     pub fn start_window_resize(&self, edge: ResizeEdge) {
-        if self.is_resizable {
+        if self.is_resizable && self.begin_native_pointer_operation() {
             self.platform_window.start_window_resize(edge);
         }
     }
@@ -3066,6 +3087,21 @@ impl Window {
         self.platform_window.insets()
     }
 
+    /// Signals that the gesture currently being processed (for example inside a
+    /// pointer-down or click callback) targets editable text. The request is
+    /// forwarded to the platform window immediately, before this call returns, so
+    /// platforms whose software keyboard may only open from within a user gesture
+    /// can honor it.
+    ///
+    /// On Linux desktop, macOS and Windows this is a compatible no-op: it never
+    /// inserts text, changes focus, changes the text input configuration or state,
+    /// or fabricates keyboard visibility. It is orthogonal to
+    /// [`TextInputConfiguration`] and the text input state notifications, which
+    /// remain the way an editor describes itself to the platform.
+    pub fn request_text_input(&self) {
+        self.platform_window.request_text_input();
+    }
+
     /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
     /// This does not present the frame to screen - useful for visual testing where we want
     /// to capture what would be rendered without displaying it or requiring the window to be visible.
@@ -3130,6 +3166,7 @@ impl Window {
     }
 
     pub(crate) fn button_layout_changed(&mut self, cx: &mut App) {
+        self.refresh();
         self.button_layout_observers
             .clone()
             .retain(&(), |callback| callback(self, cx));
@@ -3211,22 +3248,35 @@ impl Window {
     }
 
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
+    ///
+    /// The platform ignores the request unless it follows a pointer-button press. As with
+    /// [`Self::start_window_move`], a held pointer button is released from the application's
+    /// point of view, because the compositor takes over the pointer.
     pub fn show_window_menu(&self, position: Point<Pixels>) {
+        self.release_pointer_for_native_menu();
         self.platform_window.show_window_menu(position)
     }
 
     /// Handle window movement for Linux and macOS.
     /// Tells the compositor to take control of window movement (Wayland and X11)
     ///
-    /// Events may not be received during a move operation.
+    /// Must be called while a pointer button is held down (typically from a mouse-down handler);
+    /// without a prior press this is a no-op. Because the compositor takes over the pointer, the
+    /// release is never delivered: the pointer-pressed, drag and active-button state is cleared
+    /// as if the button had been released, so no control stays stuck in a pressed state.
     pub fn start_window_move(&self) {
-        self.platform_window.start_window_move()
+        if self.begin_native_pointer_operation() {
+            self.platform_window.start_window_move()
+        }
     }
 
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
+    ///
+    /// The platform applies the inset per edge: tiled edges, and every edge of a maximized or
+    /// fullscreen window, have none. See [`Self::effective_client_inset`].
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
-        self.platform_window.set_client_inset(inset);
+        self.push_client_inset();
     }
 
     /// Returns the client_inset value by [`Self::set_client_inset`].
@@ -3271,10 +3321,12 @@ impl Window {
         self.platform_window.set_app_id(app_id);
     }
 
-    /// Sets the window background appearance.
+    /// Sets the window background appearance. The effect that results is
+    /// [`Self::effective_background_appearance`].
     pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         self.platform_window
             .set_background_appearance(background_appearance);
+        self.push_client_inset();
     }
 
     /// Mark the window as dirty at the platform level.
@@ -3289,11 +3341,13 @@ impl Window {
     }
 
     /// Determine the display on which the window is visible.
+    ///
+    /// Reads the display from the set that was known at the platform's last display change
+    /// notification and never enumerates the platform, so it is safe to call from a close
+    /// decision or any other platform callback.
     pub fn display(&self, cx: &App) -> Option<Rc<dyn PlatformDisplay>> {
-        cx.platform
-            .displays()
-            .into_iter()
-            .find(|display| Some(display.id()) == self.display_id)
+        cx.cached_display(self.display_id?)
+            .or_else(|| self.platform_window.display())
     }
 
     /// Show the platform character palette.
@@ -3669,6 +3723,10 @@ impl Window {
         #[cfg(any(test, feature = "test-support"))]
         crate::text_paint_observer::notify_frame_started(self, cx);
 
+        assert!(
+            !self.running_present_callbacks,
+            "a present callback must not draw the window; request a redraw instead"
+        );
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3892,7 +3950,9 @@ impl Window {
     /// instead and `false` is returned.
     pub fn present_cached_frame(&mut self) -> bool {
         if self.last_drawn_drawable_size == Some(self.drawable_size()) {
-            self.present();
+            // The scene and its geometry were already presented, so present callbacks
+            // (which only apply geometry) are not run again.
+            self.present_scene();
             true
         } else {
             self.refresh();
@@ -3940,8 +4000,18 @@ impl Window {
             || self.is_inspector_picking(cx)
     }
 
+    /// Presents the rendered frame: its [`Window::on_present`] callbacks run first, in
+    /// registration order, and then the platform draws the scene.
+    pub(crate) fn present(&mut self, cx: &mut App) {
+        self.run_present_callbacks(cx);
+        self.present_scene();
+    }
+
+    /// Hands the rendered frame's scene to the platform without running present
+    /// callbacks. Used to re-present an already presented scene whose geometry has
+    /// not changed (see [`Self::present_cached_frame`]).
     #[profiling::function]
-    fn present(&mut self) {
+    fn present_scene(&mut self) {
         #[cfg(feature = "profiler")]
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
@@ -3960,9 +4030,9 @@ impl Window {
 
     /// Presents the most recently drawn frame if it hasn't been presented yet.
     #[cfg(all(test, feature = "profiler"))]
-    pub fn present_if_needed(&mut self) {
+    pub fn present_if_needed(&mut self, cx: &mut App) {
         if self.needs_present.get() {
-            self.present();
+            self.present(cx);
         }
     }
 
@@ -4438,6 +4508,7 @@ impl Window {
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
+            present_callbacks_index: self.next_frame.present_callbacks.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
@@ -4456,6 +4527,14 @@ impl Window {
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
+                .iter()
+                .cloned(),
+        );
+        // Callbacks inside the reused range are copied, preserving their
+        // position relative to freshly registered callbacks.
+        self.next_frame.present_callbacks.extend(
+            self.rendered_frame.present_callbacks
+                [range.start.present_callbacks_index..range.end.present_callbacks_index]
                 .iter()
                 .cloned(),
         );
@@ -5563,7 +5642,7 @@ impl Window {
     }
 
     fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
-        if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
+        if self.effective_background_appearance() != WindowBackgroundAppearance::Opaque {
             return false;
         }
 
@@ -6805,6 +6884,7 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_input(event.kind_name());
         let update_count_before = self.invalidator.update_count();
+        self.chrome.note_input(&event);
         // Track input modality for focus-visible styling and hover suppression.
         // Hover is suppressed during keyboard modality so that keyboard navigation
         // doesn't show hover highlights on the item under the mouse cursor.
@@ -6993,10 +7073,12 @@ impl Window {
         #[cfg(feature = "profiler")]
         self.window_profiler.end_input(caused_invalidation);
 
-        DispatchEventResult {
+        let result = DispatchEventResult {
             propagate: cx.propagate_event,
             default_prevented: self.default_prevented,
-        }
+        };
+        self.flush_pointer_release(cx);
+        result
     }
 
     fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
@@ -8127,19 +8209,6 @@ impl Window {
         move |window: &mut Window, cx: &mut App| {
             entity.update(cx, |entity, cx| f(entity, window, cx)).ok();
         }
-    }
-
-    /// Register a callback that can interrupt the closing of the current window based the returned boolean.
-    /// If the callback returns false, the window won't be closed.
-    pub fn on_window_should_close(
-        &self,
-        cx: &App,
-        f: impl Fn(&mut Window, &mut App) -> bool + 'static,
-    ) {
-        let mut cx = self.to_async(cx);
-        self.platform_window.on_should_close(Box::new(move || {
-            cx.update(|window, cx| f(window, cx)).unwrap_or(true)
-        }))
     }
 
     /// Register an action listener on this node for the next frame. The type of action

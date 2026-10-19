@@ -1818,7 +1818,7 @@ mod tests {
     fn draw_window(cx: &mut VisualTestContext) {
         cx.update(|window, cx| {
             let arena_clear = window.draw(cx);
-            window.present_if_needed();
+            window.present_if_needed(cx);
             arena_clear.clear(cx);
         });
     }

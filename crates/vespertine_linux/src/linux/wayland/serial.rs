@@ -59,6 +59,13 @@ impl SerialTracker {
         self.serials.get(&kind).copied().unwrap_or(Serial(0))
     }
 
+    /// Returns the latest tracked serial of the provided [`SerialKind`], or `None` if the kind
+    /// has not been tracked. Requests that must be backed by a real input event (interactive
+    /// move and resize, the window menu) use this so they are ignored without one.
+    pub fn get_tracked(&self, kind: SerialKind) -> Option<Serial> {
+        self.serials.get(&kind).copied()
+    }
+
     pub fn selection_serial(&self) -> Option<SelectionSerial> {
         self.selection_serial
     }
@@ -72,6 +79,23 @@ mod tests {
         serial_tracker
             .selection_serial()
             .map(SelectionSerial::as_raw)
+    }
+
+    #[test]
+    fn test_get_tracked_is_none_until_a_serial_arrives() {
+        let mut serial_tracker = SerialTracker::new();
+        assert_eq!(serial_tracker.get_tracked(SerialKind::MousePress), None);
+
+        serial_tracker.update(SerialKind::MouseEnter, 10);
+        assert_eq!(serial_tracker.get_tracked(SerialKind::MousePress), None);
+
+        serial_tracker.update(SerialKind::MousePress, 0);
+        assert_eq!(
+            serial_tracker
+                .get_tracked(SerialKind::MousePress)
+                .map(Serial::as_raw),
+            Some(0)
+        );
     }
 
     #[test]

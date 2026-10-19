@@ -29,6 +29,7 @@ pub use context::*;
 pub use entity_map::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use headless_app_context::*;
+pub use lifecycle::*;
 use smallvec::SmallVec;
 #[cfg(any(test, feature = "test-support"))]
 pub use test_app::*;
@@ -55,9 +56,9 @@ use crate::{
     PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton,
     PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation,
     ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer,
-    SystemNotification, SystemNotificationResponse, Task, TextRenderingMode, TextSystem,
-    ThermalState, Window, WindowAppearance, WindowButtonLayout, WindowHandle, WindowId,
-    WindowInvalidator, WindowingRequest,
+    SystemNotification, SystemNotificationDelivery, SystemNotificationResponse, Task,
+    TextRenderingMode, TextSystem, ThermalState, Window, WindowAppearance, WindowButtonLayout,
+    WindowHandle, WindowId, WindowInvalidator, WindowingRequest,
     colors::{Colors, GlobalColors},
     hash, init_app_menus,
 };
@@ -71,10 +72,15 @@ mod entity_map;
 mod headless_app_context;
 #[cfg(any(test, feature = "test-support"))]
 mod headless_window_control;
+mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod test_app;
 #[cfg(any(test, feature = "test-support"))]
 mod test_context;
+#[cfg(any(test, feature = "test-support"))]
+mod test_lifecycle;
 #[cfg(all(target_os = "macos", any(test, feature = "test-support")))]
 mod visual_test_context;
 
@@ -260,6 +266,7 @@ impl Application {
             #[cfg(vespertine_hot_reload)]
             crate::hot_reload::init(cx);
             cx.install_motion_policy();
+            cx.queue_launch_urls();
             on_finish_launching(cx);
         }));
     }
@@ -286,33 +293,33 @@ impl Application {
             #[cfg(vespertine_hot_reload)]
             crate::hot_reload::init(cx);
             cx.install_motion_policy();
+            cx.queue_launch_urls();
             on_finish_launching(cx);
         }));
         ApplicationHandle { app: self.0 }
     }
 
     /// Register a handler to be invoked when the platform instructs the application
-    /// to open one or more URLs.
+    /// to open one or more URLs. URL lists that arrived earlier (such as those on the
+    /// command line of the first launch) are delivered when this is called. See
+    /// [`App::on_open_urls`], which this wraps.
     pub fn on_open_urls<F>(&self, mut callback: F) -> &Self
     where
         F: 'static + FnMut(Vec<String>),
     {
-        self.0.borrow().platform.on_open_urls(Box::new(callback));
+        self.0
+            .borrow_mut()
+            .update(|cx| cx.on_open_urls(move |urls, _| callback(urls)));
         self
     }
 
     /// Invokes a handler when an already-running application is launched.
     /// On macOS, this can occur when the application icon is double-clicked or the app is launched via the dock.
-    pub fn on_reopen<F>(&self, mut callback: F) -> &Self
+    pub fn on_reopen<F>(&self, callback: F) -> &Self
     where
         F: 'static + FnMut(&mut App),
     {
-        let this = Rc::downgrade(&self.0);
-        self.0.borrow_mut().platform.on_reopen(Box::new(move || {
-            if let Some(app) = this.upgrade() {
-                callback(&mut app.borrow_mut());
-            }
-        }));
+        self.0.borrow_mut().on_reopen(callback);
         self
     }
 
@@ -341,10 +348,14 @@ type Handler = Box<dyn FnMut(&mut App) -> bool + 'static>;
 type AppLifecycleHandler = Box<dyn FnMut(AppLifecyclePhase, &mut App) -> bool + 'static>;
 type DisplayHandler = Box<dyn FnMut(DisplayEvent, &mut App) -> bool + 'static>;
 
-/// The properties of a display that VESPERTINE reports changes to.
-#[derive(Clone, Copy, PartialEq)]
+/// The properties of a display that VESPERTINE reports changes to, with the handle that
+/// reported them. Window code reads displays from here rather than enumerating the platform,
+/// which is not allowed while a platform callback (such as a close request) is running.
+#[derive(Clone)]
 struct DisplayState {
+    display: Rc<dyn PlatformDisplay>,
     bounds: Bounds<Pixels>,
+    visible_bounds: Bounds<Pixels>,
     refresh_interval: Option<Duration>,
 }
 
@@ -352,6 +363,10 @@ impl DisplayState {
     fn changes_from(&self, previous: &DisplayState) -> DisplayChanges {
         let mut changes = DisplayChanges::empty();
         changes.set(DisplayChanges::BOUNDS, self.bounds != previous.bounds);
+        changes.set(
+            DisplayChanges::VISIBLE_BOUNDS,
+            self.visible_bounds != previous.visible_bounds,
+        );
         changes.set(
             DisplayChanges::REFRESH_INTERVAL,
             self.refresh_interval != previous.refresh_interval,
@@ -367,7 +382,9 @@ fn read_displays(platform: &dyn Platform) -> HashMap<DisplayId, DisplayState> {
         .map(|display| {
             let state = DisplayState {
                 bounds: display.bounds(),
+                visible_bounds: display.visible_bounds(),
                 refresh_interval: display.refresh_interval(),
+                display: display.clone(),
             };
             (display.id(), state)
         })
@@ -461,7 +478,10 @@ impl MissingGlyphCallbackSlot {
 /// Defines when the application should automatically quit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QuitMode {
-    /// Use [`QuitMode::Explicit`] on macOS and [`QuitMode::LastWindowClosed`] on other platforms.
+    /// Use [`QuitMode::Explicit`] on macOS and [`QuitMode::LastWindowClosed`] on other
+    /// platforms. On every platform an application that registered a reopen handler with
+    /// [`App::on_reopen`] is retained: it keeps running with no windows until it quits,
+    /// because it has said how it recreates its main window.
     #[default]
     Default,
     /// Quit automatically when the last window is closed.
@@ -864,6 +884,7 @@ pub struct App {
     pub(crate) quit_observers: SubscriberSet<(), QuitHandler>,
     pub(crate) restart_observers: SubscriberSet<(), Handler>,
     pub(crate) window_closed_observers: SubscriberSet<(), WindowClosedHandler>,
+    pub(crate) lifecycle: lifecycle::AppLifecycle,
 
     /// Per-App element arena. This isolates element allocations between different
     /// App instances (important for tests where multiple Apps run concurrently).
@@ -1005,6 +1026,7 @@ impl App {
                 restart_path: None,
                 restart_arguments: Vec::new(),
                 window_closed_observers: SubscriberSet::new(),
+                lifecycle: Default::default(),
                 layout_id_buffer: Default::default(),
                 propagate_event: true,
                 prompt_builder: Some(PromptBuilder::Default),
@@ -1127,7 +1149,9 @@ impl App {
                 };
                 match cx.try_borrow_mut() {
                     Ok(mut cx) => {
-                        cx.shutdown();
+                        if !cx.lifecycle.quit_completed.get() {
+                            cx.shutdown();
+                        }
                         true
                     }
                     Err(_) => {
@@ -1135,6 +1159,43 @@ impl App {
                         // The platform decides how to proceed.
                         false
                     }
+                }
+            }
+        }));
+
+        platform.on_open_urls(Box::new({
+            let app = Rc::downgrade(&app);
+            move |urls| {
+                if let Some(app) = app.upgrade() {
+                    app.borrow_mut().update(|cx| cx.deliver_open_urls(urls));
+                }
+            }
+        }));
+
+        platform.on_reopen(Box::new({
+            let app = Rc::downgrade(&app);
+            move || {
+                if let Some(app) = app.upgrade() {
+                    app.borrow_mut().update(|cx| cx.deliver_reopen());
+                }
+            }
+        }));
+
+        platform.on_activate_action(Box::new({
+            let app = Rc::downgrade(&app);
+            move |action| {
+                if let Some(app) = app.upgrade() {
+                    app.borrow_mut()
+                        .update(|cx| cx.deliver_activate_action(&action));
+                }
+            }
+        }));
+
+        platform.on_activation_request(Box::new({
+            let app = Rc::downgrade(&app);
+            move |request| {
+                if let Some(app) = app.upgrade() {
+                    app.borrow_mut().update(|cx| cx.activate_app(&request));
                 }
             }
         }));
@@ -1259,9 +1320,10 @@ impl App {
         subscription
     }
 
-    /// Gracefully quit the application via the platform's standard routine.
-    pub fn quit(&self) {
-        self.platform.quit();
+    /// The display's cached handle, as of the platform's last display change
+    /// notification. Unlike [`App::displays`] this never queries the platform.
+    pub(crate) fn cached_display(&self, id: DisplayId) -> Option<Rc<dyn PlatformDisplay>> {
+        Some(self.displays.get(&id)?.display.clone())
     }
 
     /// Switches the platform between headless and windowed modes.
@@ -1868,11 +1930,19 @@ impl App {
     /// Registers the given URL scheme (e.g. `zed` for `zed://` urls) to be
     /// opened by the current app.
     ///
+    /// The scheme must follow RFC 3986 (an ASCII letter followed by letters, digits, `+`, `-`
+    /// or `.`); it is lowercased before it reaches the platform, and an invalid name resolves
+    /// to a readable error without touching the platform. Incoming URLs are delivered through
+    /// [`App::on_open_urls`].
+    ///
     /// On some platforms (e.g. macOS) you may be able to register URL schemes
     /// as part of app distribution, but this method exists to let you register
     /// schemes at runtime.
     pub fn register_url_scheme(&self, scheme: &str) -> Task<Result<()>> {
-        self.platform.register_url_scheme(scheme)
+        match crate::normalize_url_scheme(scheme) {
+            Ok(scheme) => self.platform.register_url_scheme(&scheme),
+            Err(error) => Task::ready(Err(error)),
+        }
     }
 
     /// Sets the application's process-wide identity and user-visible name.
@@ -1893,6 +1963,31 @@ impl App {
     /// unavailable (e.g. authorization was denied).
     pub fn show_system_notification(&self, notification: SystemNotification) {
         self.platform.show_system_notification(notification);
+    }
+
+    /// Posts a notification and returns a task resolving to the outcome:
+    /// [`SystemNotificationDelivery::Delivered`] when the notification service
+    /// accepted it, [`SystemNotificationDelivery::Unavailable`] when there is
+    /// no service, or [`SystemNotificationDelivery::Failed`] with a reason.
+    ///
+    /// The call never blocks and a missing service never panics. Whether to
+    /// notify while the application is focused is the caller's decision; the
+    /// framework never suppresses a posted notification. Backends that cannot
+    /// report delivery (macOS, Windows) resolve to `Unavailable` without
+    /// posting; use [`App::show_system_notification`] there.
+    pub fn post_system_notification(
+        &self,
+        notification: SystemNotification,
+    ) -> Task<SystemNotificationDelivery> {
+        self.platform.post_system_notification(notification)
+    }
+
+    /// Resolves to whether activation of notifications is delivered to the
+    /// handler registered with [`App::on_system_notification_response`]. On
+    /// Linux this is whether the notification service advertises the `actions`
+    /// capability; when `false` the handler is never invoked.
+    pub fn system_notification_activation_supported(&self) -> Task<bool> {
+        self.platform.system_notification_activation_supported()
     }
 
     /// Removes the delivered or pending notification with this tag.
@@ -1960,8 +2055,10 @@ impl App {
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
+        filters: &[crate::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
-        self.platform.prompt_for_new_path(directory, suggested_name)
+        self.platform
+            .prompt_for_new_path(directory, suggested_name, filters)
     }
 
     /// Reveals the specified path at the platform level, such as in Finder on macOS.
@@ -3274,7 +3371,10 @@ impl App {
                     let quit_on_empty = match cx.quit_mode {
                         QuitMode::Explicit => false,
                         QuitMode::LastWindowClosed => true,
-                        QuitMode::Default => cfg!(not(target_os = "macos")),
+                        QuitMode::Default => {
+                            cfg!(not(target_os = "macos"))
+                                && !cx.lifecycle.retains_without_windows()
+                        }
                     };
 
                     if quit_on_empty && cx.windows.is_empty() {

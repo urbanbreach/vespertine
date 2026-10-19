@@ -13,7 +13,6 @@ use vespertine_collections::{FxHashMap, HashMap};
 
 use raw_window_handle as rwh;
 use wayland_backend::client::ObjectId;
-use wayland_client::WEnum;
 use wayland_client::{
     Proxy,
     protocol::{wl_callback, wl_output, wl_seat, wl_surface},
@@ -31,7 +30,11 @@ use wayland_protocols::{
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
-use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
+use crate::linux::wayland::{
+    decorations::{mode_after_request, mode_from_configure},
+    display::WaylandDisplay,
+    serial::SerialKind,
+};
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use vespertine::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, ExternalDragPayload,
@@ -654,9 +657,24 @@ impl WaylandWindowState {
         })
     }
 
+    /// The desktop effects the compositor provides: surfaces can always have alpha, blur needs
+    /// the KDE blur protocol.
+    pub fn background_capabilities(&self) -> vespertine::WindowBackgroundCapabilities {
+        vespertine::WindowBackgroundCapabilities {
+            transparency: true,
+            blur: self.globals.blur_manager.is_some(),
+        }
+    }
+
+    /// The requested background appearance after the opaque fallback.
+    fn effective_background_appearance(&self) -> WindowBackgroundAppearance {
+        self.background_capabilities()
+            .effective(self.background_appearance)
+    }
+
     pub fn is_transparent(&self) -> bool {
         self.decorations == WindowDecorations::Client
-            || self.background_appearance != WindowBackgroundAppearance::Opaque
+            || self.effective_background_appearance() != WindowBackgroundAppearance::Opaque
     }
 
     fn update_subpixel_layout(&mut self) {
@@ -1267,32 +1285,16 @@ impl WaylandWindowStatePtr {
 
     pub fn handle_toplevel_decoration_event(&self, event: zxdg_toplevel_decoration_v1::Event) {
         if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
-            match mode {
-                WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => {
-                    self.state.borrow_mut().decorations = WindowDecorations::Server;
-                    let callback = self.callbacks.borrow_mut().appearance_changed.take();
-                    if let Some(mut fun) = callback {
-                        fun();
-                        self.callbacks.borrow_mut().appearance_changed = Some(fun);
-                    }
-                }
-                WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ClientSide) => {
-                    self.state.borrow_mut().decorations = WindowDecorations::Client;
-                    // Update background to be transparent
-                    let callback = self.callbacks.borrow_mut().appearance_changed.take();
-                    if let Some(mut fun) = callback {
-                        fun();
-                        self.callbacks.borrow_mut().appearance_changed = Some(fun);
-                    }
-                }
-                WEnum::Value(_) => {
-                    log::warn!("Unknown decoration mode");
-                    return;
-                }
-                WEnum::Unknown(v) => {
-                    log::warn!("Unknown decoration mode: {}", v);
-                    return;
-                }
+            // The compositor's answer is authoritative, whatever was requested.
+            let Some(decorations) = mode_from_configure(mode) else {
+                log::warn!("Unknown decoration mode: {mode:?}");
+                return;
+            };
+            self.state.borrow_mut().decorations = decorations;
+            let callback = self.callbacks.borrow_mut().appearance_changed.take();
+            if let Some(mut fun) = callback {
+                fun();
+                self.callbacks.borrow_mut().appearance_changed = Some(fun);
             }
             update_window(self.state.borrow_mut());
             self.request_redraw();
@@ -1372,17 +1374,19 @@ impl WaylandWindowStatePtr {
                 false
             }
             xdg_toplevel::Event::Close => {
-                let mut cb = self.callbacks.borrow_mut();
-                if let Some(mut should_close) = cb.should_close.take() {
-                    let result = (should_close)();
-                    cb.should_close = Some(should_close);
-                    if result {
-                        drop(cb);
-                        self.close();
+                // The decision runs with the callbacks unborrowed, so it may use the window
+                // freely. The caller closes the window when it is allowed.
+                let should_close = self.callbacks.borrow_mut().should_close.take();
+                match should_close {
+                    Some(mut should_close) => {
+                        let result = (should_close)();
+                        self.callbacks
+                            .borrow_mut()
+                            .should_close
+                            .get_or_insert(should_close);
+                        result
                     }
-                    result
-                } else {
-                    true
+                    None => true,
                 }
             }
             xdg_toplevel::Event::WmCapabilities { capabilities } => {
@@ -1661,8 +1665,9 @@ impl WaylandWindowStatePtr {
                 }
             }
         }
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some(fun) = callbacks.close.take() {
+        // Runs with the callbacks unborrowed: removing the window calls back into it.
+        let close = self.callbacks.borrow_mut().close.take();
+        if let Some(fun) = close {
             fun()
         }
     }
@@ -1967,7 +1972,28 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
-    fn request_attention(&self) {}
+    fn activate_with_token(&self, token: &str) {
+        // xdg-activation: the compositor lets focus move because the token proves the user's
+        // request, which also restores a minimized window on compositors that support it.
+        let activation = {
+            let state = self.borrow();
+            state
+                .globals
+                .activation
+                .clone()
+                .map(|activation| (activation, state.surface.clone()))
+        };
+        match activation {
+            Some((activation, surface)) => activation.activate(token.to_owned(), &surface),
+            None => self.activate(),
+        }
+    }
+
+    /// Asks for activation without a valid token. The compositor rejects the focus change
+    /// and typically marks the window as demanding attention instead.
+    fn request_attention(&self) {
+        self.activate();
+    }
 
     fn is_active(&self) -> bool {
         self.borrow().active
@@ -2007,6 +2033,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
         self.borrow().background_appearance
+    }
+
+    fn background_capabilities(&self) -> vespertine::WindowBackgroundCapabilities {
+        self.borrow().background_capabilities()
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
@@ -2187,7 +2217,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn show_window_menu(&self, position: Point<Pixels>) {
         let state = self.borrow();
-        let serial = state.client.get_serial(SerialKind::MousePress);
+        // Without a pointer press there is no serial to give the compositor: ignore the request.
+        let Some(serial) = state.client.get_tracked_serial(SerialKind::MousePress) else {
+            return;
+        };
         if let Some(toplevel) = state.surface_state.toplevel() {
             toplevel.show_window_menu(
                 &state.globals.seat,
@@ -2200,7 +2233,9 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_move(&self) {
         let state = self.borrow();
-        let serial = state.client.get_serial(SerialKind::MousePress);
+        let Some(serial) = state.client.get_tracked_serial(SerialKind::MousePress) else {
+            return;
+        };
         if let Some(toplevel) = state.surface_state.toplevel() {
             toplevel._move(&state.globals.seat, serial.as_raw());
         }
@@ -2217,12 +2252,11 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_resize(&self, edge: vespertine::ResizeEdge) {
         let state = self.borrow();
+        let Some(serial) = state.client.get_tracked_serial(SerialKind::MousePress) else {
+            return;
+        };
         if let Some(toplevel) = state.surface_state.toplevel() {
-            toplevel.resize(
-                &state.globals.seat,
-                state.client.get_serial(SerialKind::MousePress).as_raw(),
-                edge.to_xdg(),
-            )
+            toplevel.resize(&state.globals.seat, serial.as_raw(), edge.to_xdg())
         }
     }
 
@@ -2291,22 +2325,16 @@ impl PlatformWindow for WaylandWindow {
 
     fn request_decorations(&self, decorations: WindowDecorations) {
         let mut state = self.borrow_mut();
-        match state.surface_state.decoration().as_ref() {
-            Some(decoration) => {
-                decoration.set_mode(decorations.to_xdg());
-                state.decorations = decorations;
-                update_window(state);
-            }
-            None => {
-                if matches!(decorations, WindowDecorations::Server) {
-                    log::info!(
-                        "Server-side decorations requested, but the Wayland server does not support them. Falling back to client-side decorations."
-                    );
-                }
-                state.decorations = WindowDecorations::Client;
-                update_window(state);
-            }
+        let protocol_available = state.surface_state.decoration().is_some();
+        if let Some(decoration) = state.surface_state.decoration() {
+            decoration.set_mode(decorations.to_xdg());
+        } else if matches!(decorations, WindowDecorations::Server) {
+            log::info!(
+                "Server-side decorations requested, but the Wayland server does not support them. Falling back to client-side decorations."
+            );
         }
+        state.decorations = mode_after_request(decorations, protocol_available);
+        update_window(state);
         self.0.request_redraw();
     }
 
@@ -2445,7 +2473,7 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
 
     // Note that rounded corners make this rectangle API hard to work with.
     // As this is common when using CSD, let's just disable this API.
-    if state.background_appearance == WindowBackgroundAppearance::Opaque
+    if state.effective_background_appearance() == WindowBackgroundAppearance::Opaque
         && state.decorations == WindowDecorations::Server
     {
         // Promise the compositor that this region of the window surface
@@ -2457,7 +2485,7 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     }
 
     if let Some(ref blur_manager) = state.globals.blur_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
+        if state.effective_background_appearance() == WindowBackgroundAppearance::Blurred {
             if state.blur.is_none() {
                 let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
                 state.blur = Some(blur);

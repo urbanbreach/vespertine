@@ -6,13 +6,7 @@ use std::{
     sync::Arc,
 };
 #[cfg(any(feature = "wayland", feature = "x11"))]
-use std::{
-    ffi::OsString,
-    fs::File,
-    io::Read as _,
-    os::fd::{AsFd, AsRawFd},
-    time::Duration,
-};
+use std::{ffi::OsString, io::Read as _, os::fd::AsRawFd, time::Duration};
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use anyhow::ensure;
@@ -56,15 +50,14 @@ pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 pub(crate) const DOUBLE_CLICK_DISTANCE: Pixels = px(5.0);
 pub(crate) const KEYRING_LABEL: &str = "zed-github-account";
 
-#[cfg(any(feature = "wayland", feature = "x11"))]
-const FILE_PICKER_PORTAL_MISSING: &str =
-    "Couldn't open file picker due to missing xdg-desktop-portal implementation.";
-
 #[derive(Default)]
 pub(crate) struct PlatformHandlers {
     pub(crate) open_urls: Option<Box<dyn FnMut(Vec<String>)>>,
     pub(crate) quit: Option<Box<dyn FnMut() -> bool>>,
     pub(crate) reopen: Option<Box<dyn FnMut()>>,
+    pub(crate) activation_request: Option<Box<dyn FnMut(vespertine::ActivationRequest)>>,
+    pub(crate) activate_action: Option<Box<dyn FnMut(String)>>,
+    pub(crate) quit_requested: Option<Box<dyn FnMut()>>,
     pub(crate) app_menu_action: Option<Box<dyn FnMut(&dyn Action)>>,
     pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
     pub(crate) validate_app_menu_command: Option<Box<dyn FnMut(&dyn Action) -> bool>>,
@@ -97,6 +90,13 @@ pub(crate) struct LinuxCommon {
     pub(crate) signal: LoopSignal,
     pub(crate) menus: Vec<OwnedMenu>,
     app_name: Option<String>,
+    /// The application id from [`Platform::set_app_identity`]: the desktop entry id and the
+    /// session-bus name of the application service.
+    pub(crate) app_id: Option<String>,
+    pub(crate) lifecycle_events:
+        Option<calloop::channel::Sender<crate::linux::application_service::LifecycleEvent>>,
+    pub(crate) application_service_started: bool,
+    pub(crate) termination_handlers_installed: bool,
     system_notifications: crate::linux::system_notifications::SystemNotificationState,
     #[cfg_attr(
         not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
@@ -144,6 +144,10 @@ impl LinuxCommon {
             signal,
             menus: Vec::new(),
             app_name: None,
+            app_id: None,
+            lifecycle_events: None,
+            application_service_started: false,
+            termination_handlers_installed: false,
             system_notifications: crate::linux::system_notifications::SystemNotificationState::new(
             ),
             power_sender,
@@ -320,6 +324,8 @@ impl LinuxPlatform {
         let loop_handle = event_loop.handle();
         LinuxCommon::register_sources(&common, &loop_handle, main_receiver, power_receiver)
             .expect("failed to register Linux event sources");
+        crate::linux::application_service::install(&common, &loop_handle)
+            .expect("failed to register the application lifecycle source");
         Self {
             common,
             event_loop: RefCell::new(Some(event_loop)),
@@ -772,58 +778,20 @@ impl Platform for LinuxPlatform {
         let _ = (done_tx.send(Ok(None)), options);
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
-        let identifier = self.connection.borrow().window_identifier();
-
-        #[cfg(any(feature = "wayland", feature = "x11"))]
-        self.foreground_executor()
-            .spawn(async move {
-                let title = if options.directories {
-                    "Open Folder"
-                } else {
-                    "Open File"
-                };
-
-                let request = match ashpd::desktop::file_chooser::OpenFileRequest::default()
-                    .identifier(identifier.await)
-                    .modal(true)
-                    .title(title)
-                    .accept_label(
-                        options
-                            .prompt
-                            .as_ref()
-                            .map(vespertine::SharedString::as_str),
+        {
+            let identifier = self.connection.borrow().window_identifier();
+            self.foreground_executor()
+                .spawn(async move {
+                    let result = super::file_chooser::prompt_for_paths(
+                        &super::file_chooser::DesktopPortal,
+                        identifier,
+                        &options,
                     )
-                    .multiple(options.multiple)
-                    .directory(options.directories)
-                    .send()
-                    .await
-                {
-                    Ok(request) => request,
-                    Err(err) => {
-                        let result = match err {
-                            ashpd::Error::PortalNotFound(_) => anyhow!(FILE_PICKER_PORTAL_MISSING),
-                            err => err.into(),
-                        };
-                        let _ = done_tx.send(Err(result));
-                        return;
-                    }
-                };
-
-                let result = match request.response() {
-                    Ok(response) => Ok(Some(
-                        response
-                            .uris()
-                            .iter()
-                            .filter_map(|uri: &ashpd::Uri| url::Url::parse(uri.as_str()).ok())
-                            .filter_map(|uri: url::Url| uri.to_file_path().ok())
-                            .collect::<Vec<_>>(),
-                    )),
-                    Err(ashpd::Error::Response(_)) => Ok(None),
-                    Err(e) => Err(e.into()),
-                };
-                let _ = done_tx.send(result);
-            })
-            .detach();
+                    .await;
+                    let _ = done_tx.send(result);
+                })
+                .detach();
+        }
         done_rx
     }
 
@@ -831,61 +799,33 @@ impl Platform for LinuxPlatform {
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
+        filters: &[vespertine::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (done_tx, done_rx) = oneshot::channel();
 
         #[cfg(not(any(feature = "wayland", feature = "x11")))]
-        let _ = (done_tx.send(Ok(None)), directory, suggested_name);
+        let _ = (done_tx.send(Ok(None)), directory, suggested_name, filters);
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
-        let identifier = self.connection.borrow().window_identifier();
-
-        #[cfg(any(feature = "wayland", feature = "x11"))]
-        self.foreground_executor()
-            .spawn({
-                let directory = directory.to_owned();
-                let suggested_name = suggested_name.map(|s| s.to_owned());
-
-                async move {
-                    let mut request_builder =
-                        ashpd::desktop::file_chooser::SaveFileRequest::default()
-                            .identifier(identifier.await)
-                            .modal(true)
-                            .title("Save File")
-                            .current_folder(directory)
-                            .expect("pathbuf should not be nul terminated");
-
-                    if let Some(suggested_name) = suggested_name {
-                        request_builder = request_builder.current_name(suggested_name.as_str());
-                    }
-
-                    let request = match request_builder.send().await {
-                        Ok(request) => request,
-                        Err(err) => {
-                            let result = match err {
-                                ashpd::Error::PortalNotFound(_) => {
-                                    anyhow!(FILE_PICKER_PORTAL_MISSING)
-                                }
-                                err => err.into(),
-                            };
-                            let _ = done_tx.send(Err(result));
-                            return;
-                        }
-                    };
-
-                    let result = match request.response() {
-                        Ok(response) => Ok(response
-                            .uris()
-                            .first()
-                            .and_then(|uri: &ashpd::Uri| url::Url::parse(uri.as_str()).ok())
-                            .and_then(|uri: url::Url| uri.to_file_path().ok())),
-                        Err(ashpd::Error::Response(_)) => Ok(None),
-                        Err(e) => Err(e.into()),
-                    };
+        {
+            let identifier = self.connection.borrow().window_identifier();
+            let directory = directory.to_owned();
+            let suggested_name = suggested_name.map(str::to_owned);
+            let filters = filters.to_vec();
+            self.foreground_executor()
+                .spawn(async move {
+                    let result = super::file_chooser::prompt_for_new_path(
+                        &super::file_chooser::DesktopPortal,
+                        identifier,
+                        &directory,
+                        suggested_name.as_deref(),
+                        &filters,
+                    )
+                    .await;
                     let _ = done_tx.send(result);
-                }
-            })
-            .detach();
+                })
+                .detach();
+        }
 
         done_rx
     }
@@ -900,22 +840,18 @@ impl Platform for LinuxPlatform {
     }
 
     fn open_with_system(&self, path: &Path) {
-        let path = path.to_owned();
-        let environment = self.connection.borrow().graphical_environment();
-        self.background_executor()
-            .spawn(async move {
-                let mut command = new_std_command("xdg-open");
-                command.arg(path);
-                if let Some(environment) = environment {
-                    environment.apply_to(&mut command);
-                }
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "running on a background thread, so blocking is fine"
-                )]
-                command.status().context("invoking xdg-open").log_err();
-            })
-            .detach();
+        #[cfg(any(feature = "wayland", feature = "x11"))]
+        if let Some(environment) = self.connection.borrow().graphical_environment() {
+            super::external_open::open_path_with_system(
+                &self.background_executor(),
+                path.to_owned(),
+                environment,
+            );
+        } else {
+            log::error!("Can't open {path:?}: no graphical environment to open it in");
+        }
+        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        log::error!("Can't open {path:?}: no graphical environment to open it in");
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
@@ -944,20 +880,63 @@ impl Platform for LinuxPlatform {
         });
     }
 
-    fn set_app_identity(&self, _identifier: &str, name: &str) {
-        self.with_common(|common| common.app_name = Some(name.to_string()));
-    }
-
-    fn show_system_notification(&self, notification: vespertine::SystemNotification) {
+    fn set_app_identity(&self, identifier: &str, name: &str) {
         self.with_common(|common| {
-            common
-                .system_notifications
-                .show(common.app_name.as_deref(), notification)
+            common.app_name = Some(name.to_string());
+            common.app_id = Some(identifier.to_string());
+            common.system_notifications.set_app_id(identifier);
+            common.start_application_service();
         });
     }
 
+    fn on_activation_request(&self, callback: Box<dyn FnMut(vespertine::ActivationRequest)>) {
+        self.with_common(|common| common.callbacks.activation_request = Some(callback));
+    }
+
+    fn on_activate_action(&self, callback: Box<dyn FnMut(String)>) {
+        self.with_common(|common| common.callbacks.activate_action = Some(callback));
+    }
+
+    fn on_quit_requested(&self, callback: Box<dyn FnMut()>) {
+        self.with_common(|common| {
+            common.callbacks.quit_requested = Some(callback);
+            common.install_termination_handlers();
+        });
+    }
+
+    fn show_system_notification(&self, notification: vespertine::SystemNotification) {
+        // Delivery results are only logged here (by the notification service);
+        // callers that need them use `post_system_notification`.
+        self.post_system_notification(notification).detach();
+    }
+
+    fn post_system_notification(
+        &self,
+        notification: vespertine::SystemNotification,
+    ) -> vespertine::Task<vespertine::SystemNotificationDelivery> {
+        self.with_common(|common| {
+            common.system_notifications.post(
+                &common.background_executor,
+                common.app_name.as_deref(),
+                notification,
+            )
+        })
+    }
+
+    fn system_notification_activation_supported(&self) -> vespertine::Task<bool> {
+        self.with_common(|common| {
+            common
+                .system_notifications
+                .activation_supported(&common.background_executor)
+        })
+    }
+
     fn dismiss_system_notification(&self, tag: &str) {
-        self.with_common(|common| common.system_notifications.dismiss(tag));
+        self.with_common(|common| {
+            common
+                .system_notifications
+                .dismiss(&common.background_executor, tag)
+        });
     }
 
     fn on_system_notification_response(
@@ -1117,8 +1096,29 @@ impl Platform for LinuxPlatform {
         }
     }
 
-    fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
-        Task::ready(Err(anyhow!("register_url_scheme unimplemented")))
+    fn register_url_scheme(&self, scheme: &str) -> Task<anyhow::Result<()>> {
+        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        {
+            let _ = scheme;
+            Task::ready(Err(anyhow!(
+                "URL scheme registration needs the Wayland or X11 backend"
+            )))
+        }
+        #[cfg(any(feature = "wayland", feature = "x11"))]
+        {
+            let scheme = match vespertine::normalize_url_scheme(scheme) {
+                Ok(scheme) => scheme,
+                Err(error) => return Task::ready(Err(error)),
+            };
+            let app_id = self.with_common(|common| common.app_id.clone());
+            self.background_executor().spawn(async move {
+                super::scheme_handler::register_scheme(
+                    &super::scheme_handler::SystemSchemeEnvironment::from_process_environment(),
+                    app_id.as_deref(),
+                    &scheme,
+                )
+            })
+        }
     }
 
     fn write_to_primary(&self, item: ClipboardItem) {
@@ -1137,103 +1137,17 @@ impl Platform for LinuxPlatform {
         self.connection.borrow().read_from_clipboard()
     }
 
+    fn read_from_clipboard_async(
+        &self,
+    ) -> Task<Result<Option<ClipboardItem>, vespertine::ClipboardReadError>> {
+        self.connection.borrow().read_from_clipboard_async()
+    }
+
     fn add_recent_document(&self, _path: &Path) {}
 }
 
-/// Opens `target` with the first of the desktop's launchers that succeeds. Returns whether one
-/// did.
 #[cfg(any(feature = "wayland", feature = "x11"))]
-async fn run_open_commands(
-    target: &std::ffi::OsStr,
-    activation_token: Option<&str>,
-    environment: &GraphicalEnvironment,
-) -> bool {
-    for mut command in open::commands(target) {
-        environment.apply_to(&mut command);
-        if let Some(token) = activation_token {
-            command.env("XDG_ACTIVATION_TOKEN", token);
-        }
-        let program = format!("{:?}", command.get_program());
-        match smol::process::Command::from(command).spawn() {
-            Ok(mut child) => match child.status().await {
-                Ok(status) if status.success() => return true,
-                Ok(status) => log::error!("Command {} exited with status: {}", program, status),
-                Err(error) => log::error!("Failed to get status from {}: {}", program, error),
-            },
-            Err(error) => log::error!("Failed to open with {}: {}", program, error),
-        }
-    }
-    false
-}
-
-#[cfg(any(feature = "wayland", feature = "x11"))]
-pub(super) fn open_uri_internal(
-    executor: BackgroundExecutor,
-    uri: &str,
-    activation_token: Option<String>,
-    environment: GraphicalEnvironment,
-) {
-    if let Some(uri) = ashpd::Uri::parse(uri).log_err() {
-        executor
-            .spawn(async move {
-                let opened = run_open_commands(
-                    uri.as_str().as_ref(),
-                    activation_token.as_deref(),
-                    &environment,
-                )
-                .await;
-                if !opened {
-                    match ashpd::desktop::open_uri::OpenFileRequest::default()
-                        .activation_token(activation_token.map(ashpd::ActivationToken::from))
-                        .send_uri(&uri)
-                        .await
-                        .and_then(|e| e.response())
-                    {
-                        Ok(()) => {}
-                        Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {}
-                        Err(e) => {
-                            log::error!("Failed to open with dbus: {}", e);
-                        }
-                    }
-                }
-            })
-            .detach();
-    }
-}
-
-#[cfg(any(feature = "x11", feature = "wayland"))]
-pub(super) fn reveal_path_internal(
-    executor: BackgroundExecutor,
-    path: PathBuf,
-    activation_token: Option<String>,
-    environment: GraphicalEnvironment,
-) {
-    executor
-        .spawn(async move {
-            if let Some(dir) = File::open(path.clone()).log_err() {
-                match ashpd::desktop::open_uri::OpenDirectoryRequest::default()
-                    .activation_token(activation_token.clone().map(ashpd::ActivationToken::from))
-                    .send(&dir.as_fd())
-                    .await
-                {
-                    Ok(_) => return,
-                    Err(e) => log::error!("Failed to open with dbus: {}", e),
-                }
-                let directory = if path.is_dir() {
-                    path.as_path()
-                } else {
-                    path.parent().unwrap_or(Path::new(""))
-                };
-                run_open_commands(
-                    directory.as_os_str(),
-                    activation_token.as_deref(),
-                    &environment,
-                )
-                .await;
-            }
-        })
-        .detach();
-}
+pub(super) use super::external_open::{open_uri_internal, reveal_path_internal};
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(super) fn is_within_click_distance(a: Point<Pixels>, b: Point<Pixels>) -> bool {
@@ -1308,7 +1222,11 @@ pub(super) fn read_fd_with_timeout(
             Err(err) => return Err(err.into()),
         };
         if ready == 0 {
-            anyhow::bail!("timed out waiting for data on pipe after {timeout:?}");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("timed out waiting for data on pipe after {timeout:?}"),
+            )
+            .into());
         }
         match fd.read(&mut chunk) {
             Ok(0) => return Ok(buffer),

@@ -19,7 +19,6 @@
 // https://freedesktop.org/wiki/ClipboardManager/
 
 use std::{
-    borrow::Cow,
     cell::RefCell,
     collections::{HashMap, hash_map::Entry},
     sync::{
@@ -34,7 +33,7 @@ use std::{
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, NONE,
-    connection::Connection,
+    connection::{Connection, RequestConnection},
     protocol::{
         Event,
         xproto::{
@@ -47,8 +46,11 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use strum::IntoEnumIterator;
-use vespertine::{ClipboardItem, Image, ImageFormat, hash};
+use crate::linux::selection::{
+    self, Offered, Protocol, ReadOptions, ReadReport, SelectionSource, TargetFailure, TargetReader,
+    read_item,
+};
+use vespertine::ClipboardItem;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -66,29 +68,6 @@ x11rb::atom_manager! {
         ATOM,
         INCR,
 
-        UTF8_STRING,
-        UTF8_MIME_0: b"text/plain;charset=utf-8",
-        UTF8_MIME_1: b"text/plain;charset=UTF-8",
-        // Text in ISO Latin-1 encoding
-        // See: https://tronche.com/gui/x/icccm/sec-2.html#s-2.6.2
-        STRING,
-        // Text in unknown encoding
-        // See: https://tronche.com/gui/x/icccm/sec-2.html#s-2.6.2
-        TEXT,
-        TEXT_MIME_UNKNOWN: b"text/plain",
-
-        // HTML: b"text/html",
-        // URI_LIST: b"text/uri-list",
-
-        PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
-        JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
-        WEBP_MIME: ImageFormat::mime_type(ImageFormat::Webp).as_bytes(),
-        GIF__MIME: ImageFormat::mime_type(ImageFormat::Gif ).as_bytes(),
-        SVG__MIME: ImageFormat::mime_type(ImageFormat::Svg ).as_bytes(),
-        BMP__MIME: ImageFormat::mime_type(ImageFormat::Bmp ).as_bytes(),
-        TIFF_MIME: ImageFormat::mime_type(ImageFormat::Tiff).as_bytes(),
-        ICO__MIME: ImageFormat::mime_type(ImageFormat::Ico ).as_bytes(),
-        PNM__MIME: ImageFormat::mime_type(ImageFormat::Pnm ).as_bytes(),
         // This is just some random name for the property on our window, into which
         // the clipboard owner writes the data we requested.
         ARBOARD_CLIPBOARD,
@@ -130,6 +109,8 @@ struct Inner {
     /// requests coming to us.
     server: XContext,
     atoms: Atoms,
+    /// The atoms of the targets this application offers and reads.
+    targets: Vec<(&'static str, Atom)>,
 
     clipboard: Selection,
     primary: Selection,
@@ -186,7 +167,7 @@ impl XContext {
 
 #[derive(Default)]
 struct Selection {
-    data: RwLock<Option<Vec<ClipboardData>>>,
+    data: RwLock<Option<SelectionSource>>,
     /// Mutex around nothing to use with the below condvar.
     mutex: Mutex<()>,
     /// A condvar that is notified when the contents of this clipboard are changed.
@@ -217,10 +198,25 @@ impl Inner {
             .reply()
             .map_err(into_unknown)?;
 
+        let target_cookies = selection::all_targets()
+            .map(|name| {
+                let cookie = server
+                    .conn
+                    .intern_atom(false, name.as_bytes())
+                    .map_err(into_unknown)?;
+                Ok((name, cookie))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let targets = target_cookies
+            .into_iter()
+            .map(|(name, cookie)| Ok((name, cookie.reply().map_err(into_unknown)?.atom)))
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(Self {
             display: display.to_owned(),
             server,
             atoms,
+            targets,
             clipboard: Selection::default(),
             primary: Selection::default(),
             secondary: Selection::default(),
@@ -232,7 +228,7 @@ impl Inner {
 
     fn write(
         &self,
-        data: Vec<ClipboardData>,
+        source: SelectionSource,
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
@@ -256,7 +252,7 @@ impl Inner {
         // Just setting the data, and the `serve_requests` will take care of the rest.
         let selection = self.selection_of(selection);
         let mut data_guard = selection.data.write();
-        *data_guard = Some(data);
+        *data_guard = Some(source);
 
         // Lock the mutex to both ensure that no wakers of `data_changed` can wake us between
         // dropping the `data_guard` and calling `wait[_for]` and that we don't we wake other
@@ -282,88 +278,76 @@ impl Inner {
         Ok(())
     }
 
-    /// `formats` must be a slice of atoms, where each atom represents a target format.
-    /// The first format from `formats`, which the clipboard owner supports will be the
-    /// format of the return value.
-    fn read(&self, formats: &[Atom], selection: ClipboardKind) -> Result<ClipboardData> {
-        // if we are the current owner, we can get the current clipboard ourselves
-        if self.is_owner(selection)? {
-            let data = self.selection_of(selection).data.read();
-            if let Some(data_list) = &*data {
-                for data in data_list {
-                    for format in formats {
-                        if *format == data.format {
-                            return Ok(data.clone());
-                        }
-                    }
-                }
+    /// Reads what the owner of `selection` offers, through a connection of its own.
+    fn read_selection(&self, selection: ClipboardKind) -> ReadReport {
+        match self.try_read_selection(selection) {
+            Ok(report) => report,
+            Err(error) => {
+                log::debug!("X11: failed to read the clipboard: {error}");
+                ReadReport::unavailable()
             }
-            return Err(Error::ContentNotAvailable);
         }
+    }
+
+    fn try_read_selection(&self, selection: ClipboardKind) -> Result<ReadReport> {
+        let owner = self
+            .server
+            .conn
+            .get_selection_owner(self.atom_of(selection))
+            .map_err(into_unknown)?
+            .reply()
+            .map_err(into_unknown)?
+            .owner;
+        if owner == NONE {
+            return Ok(ReadReport::default());
+        }
+
         let reader = XContext::new(&self.display)?;
-
-        let highest_precedence_format =
-            match self.read_single(&reader, selection, self.atoms.TARGETS) {
-                Err(err) => {
-                    log::trace!("Clipboard TARGETS query failed with {err:?}");
-                    None
+        let mut lookup = Vec::new();
+        let mut names = Vec::new();
+        let listed = match self.read_single(&reader, selection, self.atoms.TARGETS) {
+            Ok(ClipboardData { bytes, format }) if format == self.atoms.ATOM => {
+                for atom in Self::parse_formats(&bytes) {
+                    let name = match self.target_name(atom) {
+                        Some(name) => name.to_owned(),
+                        None => self.atom_name(atom).to_owned(),
+                    };
+                    lookup.push((name.clone(), atom));
+                    names.push(name);
                 }
-                Ok(ClipboardData { bytes, format }) => {
-                    if format == self.atoms.ATOM {
-                        let available_formats = Self::parse_formats(&bytes);
-                        formats
-                            .iter()
-                            .find(|format| available_formats.contains(format))
-                    } else {
-                        log::trace!(
-                            "Unexpected clipboard TARGETS format {}",
-                            self.atom_name(format)
-                        );
-                        None
-                    }
-                }
-            };
-
-        if let Some(&format) = highest_precedence_format {
-            let data = self.read_single(&reader, selection, format)?;
-            if !formats.contains(&data.format) {
-                // This shouldn't happen since the format is from the TARGETS list.
+                true
+            }
+            // The owner is not answering at all.
+            Err(Error::Timeout) => return Ok(ReadReport::unavailable()),
+            Ok(ClipboardData { format, .. }) => {
                 log::trace!(
-                    "Conversion to {} responded with {} which is not supported",
-                    self.atom_name(format),
-                    self.atom_name(data.format),
+                    "Unexpected clipboard TARGETS format {}",
+                    self.atom_name(format)
                 );
-                return Err(Error::ConversionFailure);
+                false
             }
-            return Ok(data);
-        }
+            Err(error) => {
+                log::trace!("Clipboard TARGETS query failed with {error:?}");
+                false
+            }
+        };
 
-        log::trace!("Falling back on attempting to convert clipboard to each format.");
-        for format in formats {
-            match self.read_single(&reader, selection, *format) {
-                Ok(data) => {
-                    if formats.contains(&data.format) {
-                        return Ok(data);
-                    } else {
-                        log::trace!(
-                            "Conversion to {} responded with {} which is not supported",
-                            self.atom_name(*format),
-                            self.atom_name(data.format),
-                        );
-                        continue;
-                    }
-                }
-                Err(Error::ContentNotAvailable) => {
-                    continue;
-                }
-                Err(e) => {
-                    log::trace!("Conversion to {} failed: {}", self.atom_name(*format), e);
-                    return Err(e);
-                }
-            }
-        }
-        log::trace!("All conversions to supported formats failed.");
-        Err(Error::ContentNotAvailable)
+        let options = ReadOptions {
+            legacy_text: true,
+            text_only: matches!(selection, ClipboardKind::Primary),
+        };
+        let mut target_reader = X11TargetReader {
+            inner: self,
+            reader: &reader,
+            selection,
+            lookup,
+        };
+        let offered = if listed {
+            Offered::Listed(&names)
+        } else {
+            Offered::Unknown
+        };
+        Ok(read_item(offered, options, &mut target_reader))
     }
 
     fn parse_formats(bytes: &[u8]) -> Vec<Atom> {
@@ -443,7 +427,6 @@ impl Inner {
                 Event::PropertyNotify(event) => {
                     let result = self.handle_read_property_notify(
                         reader,
-                        target_format,
                         using_incr,
                         &mut incr_data,
                         &mut timeout_end,
@@ -463,7 +446,7 @@ impl Inner {
             }
         }
         log::info!("Time-out hit while reading the clipboard.");
-        Err(Error::ContentNotAvailable)
+        Err(Error::Timeout)
     }
 
     fn atom_of(&self, selection: ClipboardKind) -> Atom {
@@ -489,6 +472,20 @@ impl Inner {
             a if a == self.atoms.SECONDARY => Some(ClipboardKind::Secondary),
             _ => None,
         }
+    }
+
+    /// The target name `atom` stands for, if it is one this application offers or reads.
+    fn target_name(&self, atom: Atom) -> Option<&'static str> {
+        self.targets
+            .iter()
+            .find_map(|&(name, candidate)| (candidate == atom).then_some(name))
+    }
+
+    /// The atom of the target `name`, if it is one this application offers or reads.
+    fn atom_for_target(&self, name: &str) -> Option<Atom> {
+        self.targets
+            .iter()
+            .find_map(|&(candidate, atom)| (candidate == name).then_some(atom))
     }
 
     fn is_owner(&self, selection: ClipboardKind) -> Result<bool> {
@@ -622,7 +619,6 @@ impl Inner {
     fn handle_read_property_notify(
         &self,
         reader: &XContext,
-        target_format: u32,
         using_incr: bool,
         incr_data: &mut Vec<u8>,
         timeout_end: &mut Instant,
@@ -642,11 +638,7 @@ impl Inner {
                 true,
                 event.window,
                 event.atom,
-                if target_format == self.atoms.TARGETS {
-                    self.atoms.ATOM
-                } else {
-                    target_format
-                },
+                AtomEnum::ANY,
                 0,
                 u32::MAX / 4,
             )
@@ -686,20 +678,14 @@ impl Inner {
                 "Handling TARGETS, dst property is {}",
                 self.atom_name(event.property)
             );
-            let mut targets = Vec::with_capacity(10);
-            targets.push(self.atoms.TARGETS);
-            targets.push(self.atoms.SAVE_TARGETS);
+            let mut targets = vec![self.atoms.TARGETS, self.atoms.SAVE_TARGETS];
             let data = self.selection_of(selection).data.read();
-            if let Some(data_list) = &*data {
-                for data in data_list {
-                    targets.push(data.format);
-                    if data.format == self.atoms.UTF8_STRING {
-                        // When we are storing a UTF8 string,
-                        // add all equivalent formats to the supported targets
-                        targets.push(self.atoms.UTF8_MIME_0);
-                        targets.push(self.atoms.UTF8_MIME_1);
-                    }
-                }
+            if let Some(source) = &*data {
+                targets.extend(
+                    source
+                        .targets()
+                        .filter_map(|target| self.atom_for_target(target)),
+                );
             }
             self.server
                 .conn
@@ -707,8 +693,7 @@ impl Inner {
                     PropMode::REPLACE,
                     event.requestor,
                     event.property,
-                    // TODO: change to `AtomEnum::ATOM`
-                    self.atoms.ATOM,
+                    AtomEnum::ATOM,
                     &targets,
                 )
                 .map_err(into_unknown)?;
@@ -717,30 +702,38 @@ impl Inner {
         } else {
             log::trace!("Handling request for (probably) the clipboard contents.");
             let data = self.selection_of(selection).data.read();
-            if let Some(data_list) = &*data {
-                success = match data_list.iter().find(|d| d.format == event.target) {
-                    Some(data) => {
-                        self.server
-                            .conn
-                            .change_property8(
-                                PropMode::REPLACE,
-                                event.requestor,
-                                event.property,
-                                event.target,
-                                &data.bytes,
-                            )
-                            .map_err(into_unknown)?;
-                        self.server.conn.flush().map_err(into_unknown)?;
-                        true
-                    }
-                    None => false,
-                };
-            } else {
-                // This must mean that we lost ownership of the data
-                // since the other side requested the selection.
-                // Let's respond with the property set to none.
-                success = false;
-            }
+            // `None` here means we lost ownership of the data since the other side requested
+            // the selection, or the target is not one we offer: respond with the property set
+            // to none.
+            let bytes = data
+                .as_ref()
+                .zip(self.target_name(event.target))
+                .and_then(|(source, target)| source.serve(target));
+            success = match bytes {
+                Some(bytes) if bytes.len() > self.server.conn.maximum_request_bytes() - 64 => {
+                    log::warn!(
+                        "Refusing to send {} bytes of clipboard data in one property; the X server's request size limit is {}",
+                        bytes.len(),
+                        self.server.conn.maximum_request_bytes()
+                    );
+                    false
+                }
+                Some(bytes) => {
+                    self.server
+                        .conn
+                        .change_property8(
+                            PropMode::REPLACE,
+                            event.requestor,
+                            event.property,
+                            event.target,
+                            bytes,
+                        )
+                        .map_err(into_unknown)?;
+                    self.server.conn.flush().map_err(into_unknown)?;
+                    true
+                }
+                None => false,
+            };
         }
         // on failure we notify the requester of it
         let property = if success {
@@ -948,6 +941,36 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
     }
 }
 
+/// Reads the targets of another client's selection through a connection of our own.
+struct X11TargetReader<'a> {
+    inner: &'a Inner,
+    reader: &'a XContext,
+    selection: ClipboardKind,
+    /// Target names with the atoms the owner listed them under; names the owner did not list
+    /// are resolved through the atoms this application knows.
+    lookup: Vec<(String, Atom)>,
+}
+
+impl TargetReader for X11TargetReader<'_> {
+    fn read(&mut self, target: &str) -> std::result::Result<Vec<u8>, TargetFailure> {
+        let atom = self
+            .lookup
+            .iter()
+            .find_map(|(name, atom)| (name == target).then_some(*atom))
+            .or_else(|| self.inner.atom_for_target(target))
+            .ok_or(TargetFailure::Refused)?;
+        self.inner
+            .read_single(self.reader, self.selection, atom)
+            .map(|data| data.bytes)
+            .map_err(|error| match error {
+                Error::Timeout => TargetFailure::Timeout,
+                Error::ContentNotAvailable => TargetFailure::Refused,
+                _ => TargetFailure::Other,
+            })
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct Clipboard {
     inner: Arc<Inner>,
 }
@@ -981,95 +1004,30 @@ impl Clipboard {
         Ok(Self { inner: ctx })
     }
 
-    pub(crate) fn set_text(
+    /// Offers `item` on `selection`: only the representations the item contains, under the
+    /// targets of [`SelectionSource`]. The primary selection is text-only.
+    pub(crate) fn write_item(
         &self,
-        message: Cow<'_, str>,
+        item: &ClipboardItem,
         selection: ClipboardKind,
         wait: WaitConfig,
     ) -> Result<()> {
-        let data = vec![ClipboardData {
-            bytes: message.into_owned().into_bytes(),
-            format: self.inner.atoms.UTF8_STRING,
-        }];
-        self.inner.write(data, selection, wait)
-    }
-
-    fn image_format_atom(&self, format: ImageFormat) -> Atom {
-        match format {
-            ImageFormat::Png => self.inner.atoms.PNG__MIME,
-            ImageFormat::Jpeg => self.inner.atoms.JPEG_MIME,
-            ImageFormat::Webp => self.inner.atoms.WEBP_MIME,
-            ImageFormat::Gif => self.inner.atoms.GIF__MIME,
-            ImageFormat::Svg => self.inner.atoms.SVG__MIME,
-            ImageFormat::Bmp => self.inner.atoms.BMP__MIME,
-            ImageFormat::Tiff => self.inner.atoms.TIFF_MIME,
-            ImageFormat::Ico => self.inner.atoms.ICO__MIME,
-            ImageFormat::Pnm => self.inner.atoms.PNM__MIME,
-        }
-    }
-
-    #[allow(unused)]
-    pub(crate) fn set_image(
-        &self,
-        image: Image,
-        selection: ClipboardKind,
-        wait: WaitConfig,
-    ) -> Result<()> {
-        let format = self.image_format_atom(image.format);
-        let data = vec![ClipboardData {
-            bytes: image.bytes,
-            format: self.inner.atoms.PNG__MIME,
-        }];
-        self.inner.write(data, selection, wait)
-    }
-
-    pub(crate) fn get_any(&self, selection: ClipboardKind) -> Result<ClipboardItem> {
-        let image_entries = ImageFormat::iter()
-            .map(|format| (self.image_format_atom(format), format))
-            .collect::<Vec<_>>();
-
-        let text_format_atoms: &[Atom] = &[
-            self.inner.atoms.UTF8_STRING,
-            self.inner.atoms.UTF8_MIME_0,
-            self.inner.atoms.UTF8_MIME_1,
-            self.inner.atoms.STRING,
-            self.inner.atoms.TEXT,
-            self.inner.atoms.TEXT_MIME_UNKNOWN,
-        ];
-
-        // image formats first, as they are more specific, and read will return the first
-        // format that the contents can be converted to
-        let mut format_atoms = Vec::with_capacity(image_entries.len() + text_format_atoms.len());
-        format_atoms.extend(image_entries.iter().map(|(atom, _)| *atom));
-        format_atoms.extend_from_slice(text_format_atoms);
-
-        let result = self.inner.read(&format_atoms, selection)?;
-
-        log::trace!(
-            "read clipboard as format {:?}",
-            self.inner.atom_name(result.format)
-        );
-
-        for (format_atom, image_format) in image_entries {
-            if result.format == format_atom {
-                let bytes = result.bytes;
-                let id = hash(&bytes);
-                return Ok(ClipboardItem::new_image(&Image {
-                    id,
-                    format: image_format,
-                    bytes,
-                }));
+        let source = match selection {
+            ClipboardKind::Primary => SelectionSource::text_only(item, Protocol::X11),
+            ClipboardKind::Clipboard | ClipboardKind::Secondary => {
+                Some(SelectionSource::from_item(item, Protocol::X11))
+                    .filter(|source| !source.is_empty())
             }
         }
+        .ok_or_else(|| Error::unknown("the item has no representation to offer"))?;
+        self.inner.write(source, selection, wait)
+    }
 
-        let text = if result.format == self.inner.atoms.STRING {
-            // ISO Latin-1
-            // See: https://stackoverflow.com/questions/28169745/what-are-the-options-to-convert-iso-8859-1-latin-1-to-a-string-utf-8
-            result.bytes.into_iter().map(|c| c as char).collect()
-        } else {
-            String::from_utf8(result.bytes).map_err(|_| Error::ConversionFailure)?
-        };
-        Ok(ClipboardItem::new_string(text))
+    /// Reads the selection of whichever client owns it, through the X server and a connection
+    /// of its own, never shortcutting to this process's own item. Blocks for up to four seconds
+    /// per target when the owner is unresponsive, so call it off the UI thread.
+    pub(crate) fn read_item(&self, selection: ClipboardKind) -> ReadReport {
+        self.inner.read_selection(selection)
     }
 
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
@@ -1222,6 +1180,9 @@ pub enum Error {
     /// an incompatible format to the requested one (eg when calling `get_image` on text)
     ContentNotAvailable,
 
+    /// The selection owner did not answer within the read timeout.
+    Timeout,
+
     /// The native clipboard is not accessible due to being held by an other party.
     ///
     /// This "other party" could be a different process or it could be within
@@ -1232,10 +1193,6 @@ pub enum Error {
     /// implementation will make sure that the native clipboard is only
     /// opened for transferring data and then closed as soon as possible.
     ClipboardOccupied,
-
-    /// The image or the text that was about the be transferred to/from the clipboard could not be
-    /// converted to the appropriate format.
-    ConversionFailure,
 
     /// Any error that doesn't fit the other error types.
     ///
@@ -1248,8 +1205,8 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
 			Error::ContentNotAvailable => f.write_str("The clipboard contents were not available in the requested format or the clipboard is empty."),
+			Error::Timeout => f.write_str("The selection owner did not answer within the read timeout."),
 			Error::ClipboardOccupied => f.write_str("The native clipboard is not accessible due to being held by an other party."),
-			Error::ConversionFailure => f.write_str("The image or the text that was about the be transferred to/from the clipboard could not be converted to the appropriate format."),
 			Error::Unknown { description } => f.write_fmt(format_args!("Unknown error while interacting with the clipboard: {description}")),
 		}
     }
@@ -1271,8 +1228,8 @@ impl std::fmt::Debug for Error {
 		}
         let name = kind_to_str!(
             ContentNotAvailable,
+            Timeout,
             ClipboardOccupied,
-            ConversionFailure,
             Unknown { .. }
         );
         f.write_fmt(format_args!("{name} - \"{self}\""))
@@ -1284,5 +1241,255 @@ impl Error {
         Error::Unknown {
             description: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use vespertine::{ClipboardEntry, ClipboardReadError, ClipboardString, Image, ImageFormat};
+
+    use super::*;
+    use crate::linux::selection::{
+        GNOME_COPIED_FILES_MIME, TargetFailure, TargetReader, URI_LIST_MIME,
+    };
+
+    /// Serializes the tests, which share the process-wide clipboard connection.
+    static SERIAL: Mutex<()> = parking_lot::const_mutex(());
+
+    /// A clipboard connected to the real X server named by `DISPLAY`, with the serving thread
+    /// of this process owning the private SECONDARY selection (nothing else uses it). The
+    /// reading side is a second X client: every read opens its own connection.
+    struct TestClipboard {
+        clipboard: Option<Clipboard>,
+        _serial: parking_lot::MutexGuard<'static, ()>,
+    }
+
+    impl TestClipboard {
+        /// `None` when no X server is reachable; the caller skips.
+        fn connect() -> Option<Self> {
+            let serial = SERIAL.lock();
+            let display = std::env::var("DISPLAY").ok()?;
+            let clipboard = match Clipboard::new(&display) {
+                Ok(clipboard) => clipboard,
+                Err(error) => {
+                    eprintln!("skipping: no X server reachable on {display}: {error}");
+                    return None;
+                }
+            };
+            Some(Self {
+                clipboard: Some(clipboard),
+                _serial: serial,
+            })
+        }
+
+        fn clipboard(&self) -> &Clipboard {
+            self.clipboard.as_ref().unwrap()
+        }
+
+        fn write(&self, item: &ClipboardItem) {
+            self.clipboard()
+                .write_item(item, ClipboardKind::Secondary, WaitConfig::None)
+                .unwrap();
+        }
+
+        fn read(&self) -> Result<Option<ClipboardItem>, ClipboardReadError> {
+            self.clipboard()
+                .read_item(ClipboardKind::Secondary)
+                .into_result()
+        }
+
+        /// Requests one target from the owner, as a second client would.
+        fn request(&self, target: &str) -> Result<Vec<u8>, TargetFailure> {
+            let inner = &self.clipboard().inner;
+            let reader = XContext::new(&inner.display).unwrap();
+            X11TargetReader {
+                inner,
+                reader: &reader,
+                selection: ClipboardKind::Secondary,
+                lookup: Vec::new(),
+            }
+            .read(target)
+        }
+    }
+
+    impl Drop for TestClipboard {
+        fn drop(&mut self) {
+            // Let the serving window go away so the next test starts without an owner.
+            self.clipboard = None;
+            wait_for_clipboard_handovers();
+        }
+    }
+
+    macro_rules! connect_or_skip {
+        () => {
+            match TestClipboard::connect() {
+                Some(clipboard) => clipboard,
+                None => return,
+            }
+        };
+    }
+
+    fn alpha_png() -> Image {
+        let mut pixels = Vec::new();
+        for index in 0..16u8 {
+            pixels.extend([index * 16, 255 - index * 8, index, index * 17]);
+        }
+        vespertine::clipboard::image_tasks::encode_rgba_png(4, 4, &pixels).unwrap()
+    }
+
+    fn straight_rgba(image: &Image) -> Vec<u8> {
+        let decoded = image
+            .to_image_data(vespertine::SvgRenderer::new(std::sync::Arc::new(())))
+            .unwrap();
+        let mut bytes = decoded.as_bytes(0).unwrap().to_vec();
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        bytes
+    }
+
+    #[test]
+    fn cross_process_target_read_timeout_is_four_seconds() {
+        assert_eq!(LONG_TIMEOUT_DUR, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn unicode_text_round_trips_through_the_x_server() {
+        let clipboard = connect_or_skip!();
+        let text = "astral 𝄞 😀, combining e\u{301}, 日本語\nsecond line";
+        clipboard.write(&ClipboardItem::new_string(text.into()));
+        assert_eq!(
+            clipboard.read().unwrap(),
+            Some(ClipboardItem::new_string(text.into()))
+        );
+        // Text targets answer with text bytes, UTF-8 exactly as given.
+        for target in ["UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
+            assert_eq!(
+                clipboard.request(target).unwrap(),
+                text.as_bytes(),
+                "{target}"
+            );
+        }
+        // Nothing else is offered.
+        assert_eq!(clipboard.request("image/png"), Err(TargetFailure::Refused));
+        assert_eq!(
+            clipboard.request(URI_LIST_MIME),
+            Err(TargetFailure::Refused)
+        );
+    }
+
+    #[test]
+    fn png_with_alpha_round_trips_through_the_x_server() {
+        let clipboard = connect_or_skip!();
+        let image = alpha_png();
+        clipboard.write(&ClipboardItem::new_image(&image));
+        let read = clipboard.read().unwrap().unwrap();
+        let read_image = read.images().next().unwrap();
+        assert_eq!(read_image.format, ImageFormat::Png);
+        assert_eq!(read_image.bytes, image.bytes);
+        assert_eq!(read_image.id, image.id);
+        assert_eq!(straight_rgba(read_image), straight_rgba(&image));
+        // An image target request is answered with image bytes; text targets are absent.
+        assert_eq!(clipboard.request("image/png").unwrap(), image.bytes);
+        assert_eq!(
+            clipboard.request("UTF8_STRING"),
+            Err(TargetFailure::Refused)
+        );
+        assert_eq!(read.text(), None);
+    }
+
+    #[test]
+    fn jpeg_stays_jpeg_through_the_x_server() {
+        let clipboard = connect_or_skip!();
+        let image = Image::from_bytes(
+            ImageFormat::Jpeg,
+            include_bytes!("../../../../vespertine/examples/image/exif-orientation-rotate-180.jpg")
+                .to_vec(),
+        );
+        clipboard.write(&ClipboardItem::new_image(&image));
+        let read = clipboard.read().unwrap().unwrap();
+        let read_image = read.images().next().unwrap();
+        assert_eq!(read_image.format, ImageFormat::Jpeg);
+        assert_eq!(read_image.bytes, image.bytes);
+        assert_eq!(clipboard.request("image/jpeg").unwrap(), image.bytes);
+        assert_eq!(clipboard.request("image/png"), Err(TargetFailure::Refused));
+    }
+
+    #[test]
+    fn image_with_text_answers_each_target_with_its_own_bytes() {
+        let clipboard = connect_or_skip!();
+        let image = alpha_png();
+        let item = ClipboardItem::from_entries([
+            ClipboardEntry::String(ClipboardString::new("alt text".into())),
+            ClipboardEntry::Image(image.clone()),
+        ]);
+        clipboard.write(&item);
+        assert_eq!(clipboard.request("text/plain").unwrap(), b"alt text");
+        assert_eq!(clipboard.request("image/png").unwrap(), image.bytes);
+        let read = clipboard.read().unwrap().unwrap();
+        assert_eq!(read, item);
+    }
+
+    #[test]
+    fn paths_are_offered_as_uri_list_gnome_form_and_text() {
+        let clipboard = connect_or_skip!();
+        let item = ClipboardItem::new_paths([
+            std::path::PathBuf::from("/tmp/a b"),
+            std::path::PathBuf::from("/tmp/c"),
+        ]);
+        clipboard.write(&item);
+        assert_eq!(
+            clipboard.request(URI_LIST_MIME).unwrap(),
+            b"file:///tmp/a%20b\r\nfile:///tmp/c\r\n"
+        );
+        assert_eq!(
+            clipboard.request(GNOME_COPIED_FILES_MIME).unwrap(),
+            b"copy\nfile:///tmp/a%20b\nfile:///tmp/c"
+        );
+        // A plain-text consumer receives the newline-joined paths.
+        assert_eq!(
+            clipboard.request("UTF8_STRING").unwrap(),
+            b"/tmp/a b\n/tmp/c"
+        );
+        let read = clipboard.read().unwrap().unwrap();
+        assert_eq!(
+            read.paths().collect::<Vec<_>>(),
+            [
+                std::path::Path::new("/tmp/a b"),
+                std::path::Path::new("/tmp/c")
+            ]
+        );
+        assert_eq!(read.text().as_deref(), Some("/tmp/a b\n/tmp/c"));
+    }
+
+    #[test]
+    fn metadata_travels_on_its_own_target_without_altering_text() {
+        let clipboard = connect_or_skip!();
+        let item = ClipboardItem::new_string_with_metadata("t".into(), "{\"v\":1}".into());
+        clipboard.write(&item);
+        assert_eq!(clipboard.request("UTF8_STRING").unwrap(), b"t");
+        assert_eq!(
+            clipboard
+                .request("application/x-vespertine-clipboard-metadata")
+                .unwrap(),
+            b"{\"v\":1}"
+        );
+        assert_eq!(clipboard.read().unwrap().unwrap(), item);
+    }
+
+    #[test]
+    fn unowned_selection_reads_as_none() {
+        let clipboard = connect_or_skip!();
+        assert_eq!(clipboard.read(), Ok(None));
+    }
+
+    #[test]
+    fn the_writing_process_is_detected_as_the_owner() {
+        let clipboard = connect_or_skip!();
+        assert!(!clipboard.clipboard().is_owner(ClipboardKind::Secondary));
+        clipboard.write(&ClipboardItem::new_string("mine".into()));
+        assert!(clipboard.clipboard().is_owner(ClipboardKind::Secondary));
     }
 }

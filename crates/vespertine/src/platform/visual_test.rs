@@ -158,6 +158,7 @@ impl Platform for VisualTestPlatform {
         &self,
         _directory: &Path,
         _suggested_name: Option<&str>,
+        _filters: &[crate::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (tx, rx) = oneshot::channel();
         tx.send(Ok(None)).ok();

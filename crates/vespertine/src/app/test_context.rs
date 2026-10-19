@@ -4,9 +4,10 @@ use crate::{
     Drawable, Element, Empty, EntityId, EventEmitter, ForegroundExecutor, Global, InputEvent,
     Keystroke, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Platform, PlatformTextSystem, Point, Render, Result, SharedString, Size,
-    SystemNotification, SystemNotificationResponse, Task, TestDispatcher, TestPlatform,
-    TestScreenCaptureSource, TestWindow, TextSystem, VisualContext, Window, WindowBounds,
-    WindowHandle, WindowOptions, WindowVisibility, app::GpuiMode, window::ElementArenaScope,
+    SystemNotification, SystemNotificationDelivery, SystemNotificationResponse, Task,
+    TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow, TextSystem, VisualContext,
+    Window, WindowBounds, WindowHandle, WindowOptions, WindowVisibility, app::GpuiMode,
+    window::ElementArenaScope,
 };
 use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
@@ -441,6 +442,26 @@ impl TestAppContext {
         self.test_platform.quit_requests()
     }
 
+    /// Every URL handed to `cx.open_url()` during this test, in order.
+    pub fn opened_urls(&self) -> Vec<String> {
+        self.test_platform.external.borrow().urls.clone()
+    }
+
+    /// Every path handed to `cx.open_with_system()` during this test, in order.
+    pub fn opened_paths(&self) -> Vec<std::path::PathBuf> {
+        self.test_platform.external.borrow().opened_paths.clone()
+    }
+
+    /// Every path handed to `cx.reveal_path()` during this test, in order.
+    pub fn revealed_paths(&self) -> Vec<std::path::PathBuf> {
+        self.test_platform.external.borrow().revealed_paths.clone()
+    }
+
+    /// Every URL scheme that reached the platform through `cx.register_url_scheme()`.
+    pub fn registered_url_schemes(&self) -> Vec<String> {
+        self.test_platform.external.borrow().schemes.clone()
+    }
+
     /// Returns the application identity configured during this test.
     pub fn app_identity(&self) -> Option<(SharedString, SharedString)> {
         self.test_platform.app_identity()
@@ -459,6 +480,31 @@ impl TestAppContext {
     /// Returns the tags of all system notifications dismissed during this test, in order.
     pub fn dismissed_system_notifications(&self) -> Vec<SharedString> {
         self.test_platform.dismissed_system_notifications()
+    }
+
+    /// Returns every request posted with [`App::post_system_notification`],
+    /// in order, including those whose scripted result was not `Delivered`.
+    pub fn posted_system_notifications(&self) -> Vec<SystemNotification> {
+        self.test_platform.posted_system_notifications()
+    }
+
+    /// Scripts the results the next [`App::post_system_notification`] calls
+    /// resolve to, consumed in order. Without a script a post is delivered
+    /// when an app identity is set and unavailable otherwise.
+    pub fn script_system_notification_deliveries(
+        &self,
+        results: impl IntoIterator<Item = SystemNotificationDelivery>,
+    ) {
+        self.test_platform
+            .script_system_notification_deliveries(results);
+    }
+
+    /// Sets whether the simulated notification service supports activation.
+    /// When `false`, [`TestAppContext::simulate_system_notification_response`]
+    /// does not invoke the handler. Defaults to `true`.
+    pub fn set_system_notification_activation_supported(&self, supported: bool) {
+        self.test_platform
+            .set_system_notification_activation_supported(supported);
     }
 
     /// Simulates the user activating a system notification.
@@ -492,7 +538,6 @@ impl TestAppContext {
             .simulate_display_added(display_id, refresh_interval);
     }
 
-    #[cfg(test)]
     pub(crate) fn test_platform(&self) -> &TestPlatform {
         &self.test_platform
     }
@@ -1086,33 +1131,11 @@ impl VisualTestContext {
         self.background_executor.run_until_parked();
     }
 
-    /// Simulates the user closing the window.
+    /// Simulates the user closing the window through the platform's close request: the
+    /// window's close decision runs first and the window is removed only if it allows it.
     /// Returns true if the window was closed.
     pub fn simulate_close(&mut self) -> bool {
-        let handler = self
-            .cx
-            .update_window(self.window, |_, window, _| {
-                window
-                    .platform_window
-                    .as_test()
-                    .unwrap()
-                    .0
-                    .lock()
-                    .should_close_handler
-                    .take()
-            })
-            .unwrap();
-        if let Some(mut handler) = handler {
-            let should_close = handler();
-            self.cx
-                .update_window(self.window, |_, window, _| {
-                    window.platform_window.on_should_close(handler);
-                })
-                .unwrap();
-            should_close
-        } else {
-            false
-        }
+        self.cx.simulate_window_close_request(self.window)
     }
 
     /// Get an &mut VisualTestContext (which is mostly what you need to pass to other methods).
@@ -1294,7 +1317,7 @@ impl AnyWindowHandle {
 mod tests {
     use crate::{
         PathPromptOptions, SystemNotification, SystemNotificationAction,
-        SystemNotificationResponse, TestAppContext,
+        SystemNotificationDelivery, SystemNotificationResponse, TestAppContext,
     };
     use std::cell::RefCell;
     use std::path::PathBuf;
@@ -1378,6 +1401,7 @@ mod tests {
                 title: "Task started".into(),
                 body: "Running tests".into(),
                 actions: Vec::new(),
+                destination: None,
             });
         });
         assert!(cx.shown_system_notifications().is_empty());
@@ -1390,6 +1414,7 @@ mod tests {
                 title: "Task started".into(),
                 body: "Running tests".into(),
                 actions: Vec::new(),
+                destination: None,
             });
             cx.show_system_notification(SystemNotification {
                 tag: "thread-1".into(),
@@ -1399,6 +1424,7 @@ mod tests {
                     id: "open".into(),
                     label: "Open".into(),
                 }],
+                destination: None,
             });
         });
 
@@ -1417,6 +1443,7 @@ mod tests {
                     id: "open".into(),
                     label: "Open".into(),
                 }],
+                destination: None,
             }]
         );
 
@@ -1438,10 +1465,14 @@ mod tests {
         cx.simulate_system_notification_response(SystemNotificationResponse {
             tag: "thread-1".into(),
             action_id: None,
+            destination: None,
+            activation_token: None,
         });
         cx.simulate_system_notification_response(SystemNotificationResponse {
             tag: "thread-1".into(),
             action_id: Some("default".into()),
+            destination: None,
+            activation_token: None,
         });
 
         assert_eq!(
@@ -1450,10 +1481,14 @@ mod tests {
                 SystemNotificationResponse {
                     tag: "thread-1".into(),
                     action_id: None,
+                    destination: None,
+                    activation_token: None,
                 },
                 SystemNotificationResponse {
                     tag: "thread-1".into(),
                     action_id: Some("default".into()),
+                    destination: None,
+                    activation_token: None,
                 },
             ]
         );
@@ -1477,6 +1512,8 @@ mod tests {
         let response = SystemNotificationResponse {
             tag: "thread-1".into(),
             action_id: None,
+            destination: None,
+            activation_token: None,
         };
         cx.simulate_system_notification_response(response.clone());
 
@@ -1493,6 +1530,7 @@ mod tests {
                 title: "Task finished".into(),
                 body: "All tests passed".into(),
                 actions: Vec::new(),
+                destination: None,
             });
             cx.on_system_notification_response(|response, cx| {
                 cx.dismiss_system_notification(&response.tag);
@@ -1502,10 +1540,116 @@ mod tests {
         cx.simulate_system_notification_response(SystemNotificationResponse {
             tag: "thread-1".into(),
             action_id: None,
+            destination: None,
+            activation_token: None,
         });
 
         assert!(cx.delivered_system_notifications().is_empty());
         assert_eq!(cx.dismissed_system_notifications(), ["thread-1"]);
+    }
+
+    #[vespertine::test]
+    async fn test_post_system_notification_records_requests_and_scripted_results(
+        cx: &mut TestAppContext,
+    ) {
+        let notification = |tag: &str| SystemNotification {
+            tag: tag.to_string().into(),
+            title: "Title".into(),
+            body: "Body".into(),
+            actions: Vec::new(),
+            destination: Some("route/1".into()),
+        };
+
+        // Without an identity or a script the test service is unavailable.
+        let delivery = cx.update(|cx| cx.post_system_notification(notification("a")));
+        assert_eq!(delivery.await, SystemNotificationDelivery::Unavailable);
+
+        cx.script_system_notification_deliveries([
+            SystemNotificationDelivery::Failed("boom".into()),
+            SystemNotificationDelivery::Delivered,
+        ]);
+        let failed = cx.update(|cx| cx.post_system_notification(notification("b")));
+        assert_eq!(
+            failed.await,
+            SystemNotificationDelivery::Failed("boom".into())
+        );
+        let delivered = cx.update(|cx| cx.post_system_notification(notification("c")));
+        assert_eq!(delivered.await, SystemNotificationDelivery::Delivered);
+
+        let posted = cx.posted_system_notifications();
+        assert_eq!(
+            posted.iter().map(|n| n.tag.as_ref()).collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert_eq!(posted[2].destination.as_deref(), Some("route/1"));
+        assert_eq!(cx.delivered_system_notifications(), [notification("c")]);
+    }
+
+    #[vespertine::test]
+    async fn test_post_system_notification_is_not_suppressed_by_focus(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_app_identity("com.example.tasks", "Tasks"));
+        let window = cx.add_empty_window();
+        window.update(|window, cx| {
+            window.activate_window();
+            cx.activate(true);
+        });
+        window.run_until_parked();
+        window.update(|window, _| assert!(window.is_window_active()));
+
+        let delivery = cx.update(|cx| {
+            cx.post_system_notification(SystemNotification {
+                tag: "focused".into(),
+                title: "Done".into(),
+                body: "While focused".into(),
+                actions: Vec::new(),
+                destination: None,
+            })
+        });
+        assert_eq!(delivery.await, SystemNotificationDelivery::Delivered);
+        assert_eq!(cx.delivered_system_notifications().len(), 1);
+    }
+
+    #[vespertine::test]
+    async fn test_system_notification_responses_skipped_without_activation_support(
+        cx: &mut TestAppContext,
+    ) {
+        let responses = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            cx.on_system_notification_response({
+                let responses = responses.clone();
+                move |response, _cx| responses.borrow_mut().push(response)
+            });
+        });
+        cx.set_system_notification_activation_supported(false);
+        assert!(
+            !cx.update(|cx| cx.system_notification_activation_supported())
+                .await
+        );
+        cx.simulate_system_notification_response(SystemNotificationResponse {
+            tag: "t".into(),
+            action_id: None,
+            destination: Some("route".into()),
+            activation_token: Some("token".into()),
+        });
+        assert!(responses.borrow().is_empty());
+
+        cx.set_system_notification_activation_supported(true);
+        assert!(
+            cx.update(|cx| cx.system_notification_activation_supported())
+                .await
+        );
+        cx.simulate_system_notification_response(SystemNotificationResponse {
+            tag: "t".into(),
+            action_id: Some("open".into()),
+            destination: Some("route".into()),
+            activation_token: Some("token".into()),
+        });
+        assert_eq!(responses.borrow().len(), 1);
+        assert_eq!(responses.borrow()[0].destination.as_deref(), Some("route"));
+        assert_eq!(
+            responses.borrow()[0].activation_token.as_deref(),
+            Some("token")
+        );
     }
 
     #[vespertine::test]
@@ -1518,6 +1662,7 @@ mod tests {
                 directories: true,
                 multiple: true,
                 prompt: None,
+                filters: Vec::new(),
             })
         });
         assert!(cx.did_prompt_for_paths());
@@ -1544,6 +1689,7 @@ mod tests {
                 directories: false,
                 multiple: false,
                 prompt: None,
+                filters: Vec::new(),
             })
         });
 

@@ -280,6 +280,10 @@ define_class!(
                 .unbounded_send(SystemNotificationResponse {
                     tag: SharedString::from(tag),
                     action_id,
+                    // The user notification center does not round-trip a
+                    // destination or activation token through this callback.
+                    destination: None,
+                    activation_token: None,
                 })
                 .ok();
             completion_handler.call(());

@@ -1,14 +1,18 @@
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
-use crate::linux::X11ClientStatePtr;
+use super::compositing::frame_extents;
+use super::moveresize::{
+    MOVERESIZE_MOVE, moveresize_data, resize_edge_to_moveresize, x_button_number,
+};
+use crate::linux::{X11ClientStatePtr, X11Compositing};
 use vespertine::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
     Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowKind, WindowParams, WindowVisibility, popup::PopupNotSupportedError,
-    px,
+    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowBoundsTracker,
+    WindowControlArea, WindowDecorations, WindowKind, WindowMode, WindowParams, WindowVisibility,
+    popup::PopupNotSupportedError, px,
 };
 use vespertine_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
@@ -84,6 +88,9 @@ x11rb::atom_manager! {
         _GTK_FRAME_EXTENTS,
         _GTK_EDGE_CONSTRAINTS,
         _NET_CLIENT_LIST_STACKING,
+        _NET_WORKAREA,
+        _NET_CURRENT_DESKTOP,
+        _NET_STARTUP_ID,
     }
 }
 
@@ -96,19 +103,6 @@ fn query_render_extent(
         width: DevicePixels(reply.width as i32),
         height: DevicePixels(reply.height as i32),
     })
-}
-
-fn resize_edge_to_moveresize(edge: ResizeEdge) -> u32 {
-    match edge {
-        ResizeEdge::TopLeft => 0,
-        ResizeEdge::Top => 1,
-        ResizeEdge::TopRight => 2,
-        ResizeEdge::Right => 3,
-        ResizeEdge::BottomRight => 4,
-        ResizeEdge::Bottom => 5,
-        ResizeEdge::BottomLeft => 6,
-        ResizeEdge::Left => 7,
-    }
 }
 
 #[derive(Debug)]
@@ -268,6 +262,8 @@ pub struct X11WindowState {
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
     bounds: Bounds<Pixels>,
+    /// The ordinary bounds, kept unchanged while maximized or fullscreen.
+    bounds_tracker: WindowBoundsTracker,
     scale_factor: f32,
     /// Taken when the window is dropped. Its GPU objects use the X connection, so they mustn't
     /// outlive the window, which a display mode switch relies on.
@@ -286,17 +282,45 @@ pub struct X11WindowState {
     hovered: bool,
     force_render_after_recovery: bool,
     fullscreen: bool,
-    client_side_decorations_supported: bool,
+    compositing: X11Compositing,
     decorations: WindowDecorations,
     edge_constraints: Option<EdgeConstraints>,
     pub handle: AnyWindowHandle,
     last_insets: [u32; 4],
     accesskit_adapter: Option<accesskit_unix::Adapter>,
+    /// The X button number of the pointer button currently held down in this window.
+    pressed_button: Option<u32>,
+    /// The shadow inset requested through `set_client_inset`, reapplied whenever the tiling or
+    /// maximized state changes.
+    client_inset: Option<Pixels>,
 }
 
 impl X11WindowState {
     fn is_transparent(&self) -> bool {
-        self.background_appearance != WindowBackgroundAppearance::Opaque
+        let capabilities = self.compositing.background_capabilities();
+        capabilities.transparency
+            && (self.decorations == WindowDecorations::Client
+                || capabilities.effective(self.background_appearance)
+                    != WindowBackgroundAppearance::Opaque)
+    }
+
+    /// Which edges are tiled: all of them when fullscreen; else the edge constraints the window
+    /// manager publishes in `_GTK_EDGE_CONSTRAINTS`; else the maximized state (vertical for top
+    /// and bottom, horizontal for left and right).
+    fn tiling(&self) -> Tiling {
+        if self.fullscreen {
+            Tiling::tiled()
+        } else if let Some(edge_constraints) = &self.edge_constraints {
+            edge_constraints.to_tiling()
+        } else {
+            // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
+            Tiling {
+                top: self.maximized_vertical,
+                bottom: self.maximized_vertical,
+                left: self.maximized_horizontal,
+                right: self.maximized_horizontal,
+            }
+        }
     }
 
     fn update_transparency(&mut self) {
@@ -464,7 +488,7 @@ impl X11WindowState {
         compositor_gpu: Option<CompositorGpuHint>,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
-        client_side_decorations_supported: bool,
+        compositing: X11Compositing,
         x_main_screen_index: usize,
         x_window: xproto::Window,
         atoms: &XcbAtoms,
@@ -835,6 +859,7 @@ impl X11WindowState {
                 x_screen_index,
                 visual_id: visual.id,
                 bounds: bounds.to_pixels(scale_factor),
+                bounds_tracker: WindowBoundsTracker::new(bounds.to_pixels(scale_factor)),
                 scale_factor,
                 renderer: Some(renderer),
                 atoms: *atoms,
@@ -851,11 +876,13 @@ impl X11WindowState {
                 appearance,
                 handle,
                 background_appearance: WindowBackgroundAppearance::Opaque,
-                client_side_decorations_supported,
+                compositing,
                 decorations: WindowDecorations::Server,
                 last_insets: [0, 0, 0, 0],
                 edge_constraints: None,
                 accesskit_adapter: None,
+                pressed_button: None,
+                client_inset: None,
                 counter_id: sync_request_counter,
                 last_sync_counter: None,
             })
@@ -917,6 +944,52 @@ enum WmHintPropertyState {
     Toggle = 2,
 }
 
+/// Whether the window manager has the window fullscreen, maximized, or neither. A maximized
+/// window that gets minimized counts as windowed, as `PlatformWindow::is_maximized` does.
+fn window_mode(state: &X11WindowState) -> WindowMode {
+    if state.fullscreen {
+        WindowMode::Fullscreen
+    } else if !state.hidden && state.maximized_vertical && state.maximized_horizontal {
+        WindowMode::Maximized
+    } else {
+        WindowMode::Windowed
+    }
+}
+
+impl X11Window {
+    /// Asks the window manager to activate the window (`_NET_ACTIVE_WINDOW`, source
+    /// indication 1: an application), after mapping it again when it is minimized.
+    fn send_active_window_request(&self, timestamp: u32) {
+        let (hidden, active_window_atom, root) = {
+            let state = self.0.state.borrow();
+            (
+                state.hidden,
+                state.atoms._NET_ACTIVE_WINDOW,
+                state.x_root_window,
+            )
+        };
+        if hidden {
+            self.0.xcb.map_window(self.0.x_window).log_err();
+        }
+        let message = xproto::ClientMessageEvent::new(
+            32,
+            self.0.x_window,
+            active_window_atom,
+            [1, timestamp, 0, 0, 0],
+        );
+        self.0
+            .xcb
+            .send_event(
+                false,
+                root,
+                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+                message,
+            )
+            .log_err();
+        xcb_flush(&self.0.xcb);
+    }
+}
+
 impl X11Window {
     pub fn new(
         handle: AnyWindowHandle,
@@ -926,7 +999,7 @@ impl X11Window {
         compositor_gpu: Option<CompositorGpuHint>,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
-        client_side_decorations_supported: bool,
+        compositing: X11Compositing,
         x_main_screen_index: usize,
         x_window: xproto::Window,
         atoms: &XcbAtoms,
@@ -945,7 +1018,7 @@ impl X11Window {
                 compositor_gpu,
                 params,
                 xcb,
-                client_side_decorations_supported,
+                compositing,
                 x_main_screen_index,
                 x_window,
                 atoms,
@@ -1009,8 +1082,13 @@ impl X11Window {
         )
     }
 
-    fn send_moveresize(&self, flag: u32) -> anyhow::Result<()> {
+    /// Hands a move or resize to the window manager. Needs a held pointer button: without one
+    /// the request is ignored.
+    fn send_moveresize(&self, direction: u32) -> anyhow::Result<()> {
         let state = self.0.state.borrow();
+        let Some(button) = state.pressed_button else {
+            return Ok(());
+        };
 
         check_reply(
             || "X11 UngrabPointer before move/resize of window failed.",
@@ -1025,13 +1103,12 @@ impl X11Window {
             32,
             self.0.x_window,
             state.atoms._NET_WM_MOVERESIZE,
-            [
-                pointer.root_x as u32,
-                pointer.root_y as u32,
-                flag,
-                0, // Left mouse button
-                0,
-            ],
+            moveresize_data(
+                pointer.root_x as i32,
+                pointer.root_y as i32,
+                direction,
+                button,
+            ),
         );
         check_reply(
             || "X11 SendEvent to move/resize window failed.",
@@ -1044,20 +1121,26 @@ impl X11Window {
         )?;
 
         xcb_flush(&self.0.xcb);
+        // The window manager now owns the pointer, so the release will never reach us.
+        drop(state);
+        self.0.state.borrow_mut().pressed_button = None;
         Ok(())
     }
 }
 
 impl X11WindowStatePtr {
     pub fn should_close(&self) -> bool {
-        let mut cb = self.callbacks.borrow_mut();
-        if let Some(mut should_close) = cb.should_close.take() {
-            let result = (should_close)();
-            cb.should_close = Some(should_close);
-            result
-        } else {
-            true
-        }
+        // The decision runs with the callbacks unborrowed, so it may use the window freely.
+        let should_close = self.callbacks.borrow_mut().should_close.take();
+        let Some(mut should_close) = should_close else {
+            return true;
+        };
+        let result = (should_close)();
+        self.callbacks
+            .borrow_mut()
+            .should_close
+            .get_or_insert(should_close);
+        result
     }
 
     pub fn property_notify(&self, event: xproto::PropertyNotifyEvent) -> anyhow::Result<()> {
@@ -1095,6 +1178,7 @@ impl X11WindowStatePtr {
                 log::error!("Failed to parse GTK_EDGE_CONSTRAINTS");
             }
         }
+        self.apply_client_inset(&mut state);
 
         Ok(())
     }
@@ -1147,7 +1231,36 @@ impl X11WindowStatePtr {
             set_wm_hints_urgency(&self.xcb, self.x_window, false);
         }
 
+        // Tiling or maximized state may have changed: the frame extents follow it.
+        self.apply_client_inset(&mut state);
+
         Ok(())
+    }
+
+    /// Publishes `_GTK_FRAME_EXTENTS` for the requested client inset given the current tiling
+    /// state. Tiled edges, and every edge of a maximized or fullscreen window, get no extent.
+    fn apply_client_inset(&self, state: &mut X11WindowState) {
+        let Some(inset) = state.client_inset else {
+            return;
+        };
+        let insets = frame_extents(inset, state.scale_factor, state.tiling());
+        if state.last_insets == insets {
+            return;
+        }
+        state.last_insets = insets;
+        check_reply(
+            || "X11 ChangeProperty for _GTK_FRAME_EXTENTS failed.",
+            self.xcb.change_property(
+                xproto::PropMode::REPLACE,
+                self.x_window,
+                state.atoms._GTK_FRAME_EXTENTS,
+                xproto::AtomEnum::CARDINAL,
+                size_of::<u32>() as u8 * 8,
+                4,
+                bytemuck::cast_slice::<u32, u8>(&insets),
+            ),
+        )
+        .log_err();
     }
 
     pub fn add_child(&self, child: xproto::Window) {
@@ -1175,8 +1288,9 @@ impl X11WindowStatePtr {
             }
         }
 
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some(fun) = callbacks.close.take() {
+        // Runs with the callbacks unborrowed: removing the window calls back into it.
+        let close = self.callbacks.borrow_mut().close.take();
+        if let Some(fun) = close {
             fun()
         }
     }
@@ -1196,6 +1310,15 @@ impl X11WindowStatePtr {
     pub fn handle_input(&self, input: PlatformInput) {
         if self.is_blocked() {
             return;
+        }
+        // A native move/resize needs to know which button is held.
+        if let PlatformInput::MouseDown(event) = &input {
+            self.state.borrow_mut().pressed_button = Some(x_button_number(event.button));
+        } else if let PlatformInput::MouseUp(event) = &input {
+            let mut state = self.state.borrow_mut();
+            if state.pressed_button == Some(x_button_number(event.button)) {
+                state.pressed_button = None;
+            }
         }
         let callback = self.callbacks.borrow_mut().input.take();
         if let Some(mut fun) = callback {
@@ -1305,6 +1428,9 @@ impl X11WindowStatePtr {
             } else {
                 state.bounds = bounds;
             }
+            // Only observations made while windowed replace the ordinary bounds.
+            let (mode, current) = (window_mode(&state), state.bounds);
+            state.bounds_tracker.observe(mode, current);
 
             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
             if let Some(renderer) = &mut state.renderer {
@@ -1398,35 +1524,32 @@ impl PlatformWindow for X11Window {
 
     fn window_bounds(&self) -> WindowBounds {
         let state = self.0.state.borrow();
-        if self.is_maximized() {
-            WindowBounds::Maximized(state.bounds)
-        } else {
-            WindowBounds::Windowed(state.bounds)
-        }
+        state.bounds_tracker.window_bounds(window_mode(&state))
     }
 
     fn inner_window_bounds(&self) -> WindowBounds {
         let state = self.0.state.borrow();
-        if self.is_maximized() {
-            WindowBounds::Maximized(state.bounds)
-        } else {
-            let mut bounds = state.bounds;
-            let [left, right, top, bottom] = state.last_insets;
-
-            let [left, right, top, bottom] = [
-                px((left as f32) / state.scale_factor),
-                px((right as f32) / state.scale_factor),
-                px((top as f32) / state.scale_factor),
-                px((bottom as f32) / state.scale_factor),
-            ];
-
-            bounds.origin.x += left;
-            bounds.origin.y += top;
-            bounds.size.width -= left + right;
-            bounds.size.height -= top + bottom;
-
-            WindowBounds::Windowed(bounds)
+        let mode = window_mode(&state);
+        let mut bounds = state.bounds_tracker.ordinary_bounds();
+        if mode != WindowMode::Windowed {
+            // The restore bounds of a maximized or fullscreen window are reported as stored.
+            return mode.with_bounds(bounds);
         }
+        let [left, right, top, bottom] = state.last_insets;
+
+        let [left, right, top, bottom] = [
+            px((left as f32) / state.scale_factor),
+            px((right as f32) / state.scale_factor),
+            px((top as f32) / state.scale_factor),
+            px((bottom as f32) / state.scale_factor),
+        ];
+
+        bounds.origin.x += left;
+        bounds.origin.y += top;
+        bounds.size.width -= left + right;
+        bounds.size.height -= top + bottom;
+
+        WindowBounds::Windowed(bounds)
     }
 
     fn content_size(&self) -> Size<Pixels> {
@@ -1528,23 +1651,27 @@ impl PlatformWindow for X11Window {
     }
 
     fn activate(&self) {
-        let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
-        let message = xproto::ClientMessageEvent::new(
-            32,
-            self.0.x_window,
-            self.0.state.borrow().atoms._NET_ACTIVE_WINDOW,
-            data,
-        );
+        self.send_active_window_request(xproto::Time::CURRENT_TIME.into());
+    }
+
+    fn activate_with_token(&self, token: &str) {
+        // Startup notification: the id is set on the window before it is activated, and the
+        // time it encodes lets the window manager move focus to the window.
+        let startup_id_atom = self.0.state.borrow().atoms._NET_STARTUP_ID;
+        let utf8_string = self.0.state.borrow().atoms.UTF8_STRING;
         self.0
             .xcb
-            .send_event(
-                false,
-                self.0.state.borrow().x_root_window,
-                xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
-                message,
+            .change_property8(
+                xproto::PropMode::REPLACE,
+                self.0.x_window,
+                startup_id_atom,
+                utf8_string,
+                token.as_bytes(),
             )
             .log_err();
-        xcb_flush(&self.0.xcb);
+        let timestamp =
+            super::startup_id_timestamp(token).unwrap_or_else(|| xproto::Time::CURRENT_TIME.into());
+        self.send_active_window_request(timestamp);
     }
 
     fn request_attention(&self) {
@@ -1630,6 +1757,10 @@ impl PlatformWindow for X11Window {
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
         self.0.state.borrow().background_appearance
+    }
+
+    fn background_capabilities(&self) -> vespertine::WindowBackgroundCapabilities {
+        self.0.state.borrow().compositing.background_capabilities()
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
@@ -1857,7 +1988,6 @@ impl PlatformWindow for X11Window {
     }
 
     fn start_window_move(&self) {
-        const MOVERESIZE_MOVE: u32 = 8;
         self.send_moveresize(MOVERESIZE_MOVE).log_err();
     }
 
@@ -1869,89 +1999,34 @@ impl PlatformWindow for X11Window {
     fn window_decorations(&self) -> vespertine::Decorations {
         let state = self.0.state.borrow();
 
-        // Client window decorations require compositor support
-        if !state.client_side_decorations_supported {
+        // Client window decorations require a compositing manager and frame-extents support.
+        if !state.compositing.client_decorations_supported() {
             return Decorations::Server;
         }
 
         match state.decorations {
             WindowDecorations::Server => Decorations::Server,
-            WindowDecorations::Client => {
-                let tiling = if state.fullscreen {
-                    Tiling::tiled()
-                } else if let Some(edge_constraints) = &state.edge_constraints {
-                    edge_constraints.to_tiling()
-                } else {
-                    // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
-                    Tiling {
-                        top: state.maximized_vertical,
-                        bottom: state.maximized_vertical,
-                        left: state.maximized_horizontal,
-                        right: state.maximized_horizontal,
-                    }
-                };
-                Decorations::Client { tiling }
-            }
+            WindowDecorations::Client => Decorations::Client {
+                tiling: state.tiling(),
+            },
         }
     }
 
     fn set_client_inset(&self, inset: Pixels) {
         let mut state = self.0.state.borrow_mut();
-
-        let dp = (f32::from(inset) * state.scale_factor) as u32;
-
-        let insets = if state.fullscreen {
-            [0, 0, 0, 0]
-        } else if let Some(edge_constraints) = &state.edge_constraints {
-            let left = if edge_constraints.left_tiled { 0 } else { dp };
-            let top = if edge_constraints.top_tiled { 0 } else { dp };
-            let right = if edge_constraints.right_tiled { 0 } else { dp };
-            let bottom = if edge_constraints.bottom_tiled { 0 } else { dp };
-
-            [left, right, top, bottom]
-        } else {
-            let (left, right) = if state.maximized_horizontal {
-                (0, 0)
-            } else {
-                (dp, dp)
-            };
-            let (top, bottom) = if state.maximized_vertical {
-                (0, 0)
-            } else {
-                (dp, dp)
-            };
-            [left, right, top, bottom]
-        };
-
-        if state.last_insets != insets {
-            state.last_insets = insets;
-
-            check_reply(
-                || "X11 ChangeProperty for _GTK_FRAME_EXTENTS failed.",
-                self.0.xcb.change_property(
-                    xproto::PropMode::REPLACE,
-                    self.0.x_window,
-                    state.atoms._GTK_FRAME_EXTENTS,
-                    xproto::AtomEnum::CARDINAL,
-                    size_of::<u32>() as u8 * 8,
-                    4,
-                    bytemuck::cast_slice::<u32, u8>(&insets),
-                ),
-            )
-            .log_err();
-        }
+        state.client_inset = Some(inset);
+        self.0.apply_client_inset(&mut state);
     }
 
     fn request_decorations(&self, mut decorations: vespertine::WindowDecorations) {
         let mut state = self.0.state.borrow_mut();
 
-        if matches!(decorations, vespertine::WindowDecorations::Client)
-            && !state.client_side_decorations_supported
-        {
+        let requested = decorations;
+        decorations = state.compositing.effective_decorations(requested);
+        if decorations != requested {
             log::info!(
-                "x11: no compositor present, falling back to server-side window decorations"
+                "x11: client-side decorations need a compositing manager and _GTK_FRAME_EXTENTS support, falling back to server-side window decorations"
             );
-            decorations = vespertine::WindowDecorations::Server;
         }
 
         // https://github.com/rust-windowing/winit/blob/master/src/platform_impl/linux/x11/util/hint.rs#L53-L87

@@ -904,6 +904,12 @@ impl PlatformWindow for WindowsWindow {
         self.state.background_appearance.get()
     }
 
+    /// Windows can be transparent and offers blur and backdrop materials (where the OS
+    /// version provides them).
+    fn background_capabilities(&self) -> vespertine::WindowBackgroundCapabilities {
+        vespertine::WindowBackgroundCapabilities::ALL
+    }
+
     fn is_subpixel_rendering_supported(&self) -> bool {
         true
     }

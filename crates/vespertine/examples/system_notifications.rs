@@ -54,6 +54,7 @@ impl Render for SystemNotificationExample {
                                         label: "Snooze".into(),
                                     },
                                 ],
+                                destination: None,
                             });
                             this.status = format!("Posted notification revision {revision}").into();
                             cx.notify();
@@ -113,7 +114,7 @@ fn run_example() {
         cx.on_system_notification_response({
             let view = view.clone();
             move |response, cx| {
-                let SystemNotificationResponse { tag, action_id } = response;
+                let SystemNotificationResponse { tag, action_id, .. } = response;
                 view.update(cx, |this, cx| {
                     this.status = match action_id {
                         Some(action_id) => {

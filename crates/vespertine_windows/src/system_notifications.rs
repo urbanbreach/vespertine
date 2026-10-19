@@ -64,6 +64,7 @@ impl SystemNotificationState {
 
         let sender = self.response_sender.clone();
         let response_tag = notification.tag.clone();
+        let response_destination = notification.destination.clone();
         toast.Activated(&TypedEventHandler::<ToastNotification, IInspectable>::new(
             move |_sender, arguments| {
                 let action_id = arguments
@@ -76,6 +77,8 @@ impl SystemNotificationState {
                     .unbounded_send(SystemNotificationResponse {
                         tag: response_tag.clone(),
                         action_id,
+                        destination: response_destination.clone(),
+                        activation_token: None,
                     })
                     .ok();
                 Ok(())

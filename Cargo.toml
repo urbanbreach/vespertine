@@ -6,6 +6,7 @@ members = [
     "crates/vespertine_bench_metrics",
     "crates/vespertine_collections",
     "crates/vespertine_components",
+    "crates/vespertine_desktop",
     "crates/vespertine_derive_refineable",
     "crates/vespertine_host_tree",
     "crates/vespertine_http_client",
@@ -85,7 +86,6 @@ libc = "0.2"
 mach2 = "0.6"
 metal = "0.33"
 nix = "0.30"
-notify-rust = "4"
 objc = "0.2"
 objc2 = "0.6"
 parking_lot = "0.12.1"
@@ -120,6 +120,7 @@ tracing-subscriber = "0.3"
 unicase = "2.6"
 unicode-segmentation = "1.10"
 url = "2.2"
+zbus = { version = "5", default-features = false, features = ["async-io"] }
 walkdir = "2.5"
 webpki-roots = "1.0.8"
 which = "8"
@@ -141,6 +142,8 @@ features = [
     "open_uri",
     "file_chooser",
     "settings",
+    "screenshot",
+    "global_shortcuts",
 ]
 
 [workspace.dependencies.async-channel]
@@ -586,6 +589,9 @@ path = "crates/vespertine_host_tree"
 
 [workspace.dependencies.vespertine_macros]
 path = "crates/vespertine_macros"
+
+[workspace.dependencies.vespertine_desktop]
+path = "crates/vespertine_desktop"
 
 [workspace.dependencies.vespertine_path]
 path = "crates/vespertine_path"

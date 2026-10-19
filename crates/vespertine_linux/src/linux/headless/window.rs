@@ -206,3 +206,44 @@ impl PlatformWindow for HeadlessWindow {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vespertine::{WindowInsets, WindowKind, point, px, size};
+
+    fn window() -> HeadlessWindow {
+        HeadlessWindow::new(
+            WindowParams {
+                bounds: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+                titlebar: None,
+                kind: WindowKind::Normal,
+                is_movable: true,
+                app_owns_titlebar_drag: false,
+                is_resizable: true,
+                is_minimizable: true,
+                focus: true,
+                show: true,
+                icon: None,
+                display_id: None,
+                app_id: None,
+                window_min_size: None,
+            },
+            Rc::new(()),
+        )
+    }
+
+    /// PLT-006: the default text-input signal is a no-op on a platform that does
+    /// not override it: ordinary input handling and insets are untouched.
+    #[test]
+    fn default_text_input_request_is_a_no_op() {
+        let mut window = window();
+        let decorations = window.window_decorations();
+        window.request_text_input();
+        window.request_text_input();
+        assert!(window.take_input_handler().is_none());
+        assert_eq!(window.insets(), WindowInsets::default());
+        assert_eq!(window.window_decorations(), decorations);
+        assert!(!window.is_active());
+    }
+}

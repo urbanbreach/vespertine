@@ -1,10 +1,11 @@
 use crate::{
-    AnyWindowHandle, Bounds, DevicePixels, DispatchEventResult, DisplayId, GpuSpecs, HeadlessAtlas,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
-    TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
-    WindowVisibility,
+    AnyWindowHandle, Bounds, DevicePixels, DispatchEventResult, DisplayEnumerationForbidden,
+    DisplayId, GpuSpecs, HeadlessAtlas, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformHeadlessRenderer, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PromptButton, RequestFrameOptions, Scene, Size, TestActivation, TestDisplay, TestPlatform,
+    TestWindowLifecycle, TextInputConfiguration, TextInputStateChange, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowMode,
+    WindowParams, WindowVisibility,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -57,7 +58,7 @@ pub(crate) struct TestWindowState {
     pub(crate) title: Option<String>,
     pub(crate) edited: bool,
     pub(crate) document_path: Option<std::path::PathBuf>,
-    platform: Weak<TestPlatform>,
+    pub(crate) platform: Weak<TestPlatform>,
     // TODO: Replace with `Rc`
     sprite_atlas: Arc<dyn PlatformAtlas>,
     renderer: Option<Box<dyn PlatformHeadlessRenderer>>,
@@ -75,6 +76,8 @@ pub(crate) struct TestWindowState {
     insets_callback: Option<Box<dyn FnMut(WindowInsets)>>,
     virtual_keyboard_requests: usize,
     virtual_keyboard_dismissals: usize,
+    text_input_requests: usize,
+    draw_count: usize,
     moved_callback: Option<Box<dyn FnMut()>>,
     display_changed_callback: Option<Box<dyn FnMut()>>,
     appearance_change_callback: Option<Box<dyn FnMut()>>,
@@ -93,6 +96,8 @@ pub(crate) struct TestWindowState {
     subpixel_rendering_supported: bool,
     a11y_callbacks: Option<crate::A11yCallbacks>,
     last_a11y_tree_update: Option<accesskit::TreeUpdate>,
+    pub(crate) chrome: crate::TestChromeState,
+    pub(crate) lifecycle: TestWindowLifecycle,
 }
 
 #[derive(Clone)]
@@ -152,6 +157,8 @@ impl TestWindow {
             insets_callback: None,
             virtual_keyboard_requests: 0,
             virtual_keyboard_dismissals: 0,
+            text_input_requests: 0,
+            draw_count: 0,
             moved_callback: None,
             display_changed_callback: None,
             appearance_change_callback: None,
@@ -171,6 +178,8 @@ impl TestWindow {
             subpixel_rendering_supported: false,
             a11y_callbacks: None,
             last_a11y_tree_update: None,
+            chrome: Default::default(),
+            lifecycle: TestWindowLifecycle::new(params.bounds),
         })))
     }
 
@@ -263,6 +272,16 @@ impl TestWindow {
         self.0.lock().virtual_keyboard_requests
     }
 
+    /// The number of [`PlatformWindow::request_text_input`] calls received.
+    pub fn text_input_request_count(&self) -> usize {
+        self.0.lock().text_input_requests
+    }
+
+    /// The number of completed [`PlatformWindow::draw`] calls.
+    pub fn draw_count(&self) -> usize {
+        self.0.lock().draw_count
+    }
+
     pub fn virtual_keyboard_dismissals(&self) -> usize {
         self.0.lock().virtual_keyboard_dismissals
     }
@@ -281,12 +300,116 @@ impl TestWindow {
         let mut lock = self.0.lock();
         // Always update bounds, even if no callback is registered
         lock.bounds.size = size;
+        let (mode, bounds) = (lock.lifecycle.mode, lock.bounds);
+        lock.lifecycle.tracker.observe(mode, bounds);
         let Some(mut callback) = lock.resize_callback.take() else {
             return;
         };
         drop(lock);
         callback(size, scale_factor);
         self.0.lock().resize_callback = Some(callback);
+    }
+
+    /// Simulates the user or compositor moving the window to `origin`.
+    pub fn simulate_move(&self, origin: Point<Pixels>) {
+        let callback = {
+            let mut lock = self.0.lock();
+            lock.bounds.origin = origin;
+            let (mode, bounds) = (lock.lifecycle.mode, lock.bounds);
+            lock.lifecycle.tracker.observe(mode, bounds);
+            lock.moved_callback.take()
+        };
+        if let Some(mut callback) = callback {
+            callback();
+            self.0.lock().moved_callback.get_or_insert(callback);
+        }
+    }
+
+    /// Simulates the window manager maximizing the window to its display's work area, or
+    /// restoring it to its ordinary bounds.
+    pub fn simulate_maximize(&self, maximized: bool) {
+        let target = if maximized {
+            WindowMode::Maximized
+        } else {
+            WindowMode::Windowed
+        };
+        self.enter_mode(target);
+    }
+
+    /// Simulates the window manager making the window fullscreen on its display, or
+    /// restoring it to its ordinary bounds.
+    pub fn simulate_fullscreen(&self, fullscreen: bool) {
+        let target = if fullscreen {
+            WindowMode::Fullscreen
+        } else {
+            WindowMode::Windowed
+        };
+        self.enter_mode(target);
+    }
+
+    fn enter_mode(&self, mode: WindowMode) {
+        let (callback, size, scale_factor) = {
+            let mut lock = self.0.lock();
+            lock.lifecycle.mode = mode;
+            lock.is_fullscreen = mode == WindowMode::Fullscreen;
+            lock.bounds = match mode {
+                WindowMode::Windowed => lock.lifecycle.tracker.ordinary_bounds(),
+                WindowMode::Maximized => lock.display.visible_bounds(),
+                WindowMode::Fullscreen => lock.display.bounds(),
+            };
+            let bounds = lock.bounds;
+            lock.lifecycle.tracker.observe(mode, bounds);
+            (lock.resize_callback.take(), bounds.size, lock.scale_factor)
+        };
+        if let Some(mut callback) = callback {
+            callback(size, scale_factor);
+            self.0.lock().resize_callback.get_or_insert(callback);
+        }
+    }
+
+    /// The mode the window is in.
+    pub(crate) fn mode(&self) -> WindowMode {
+        self.0.lock().lifecycle.mode
+    }
+
+    /// The ordinary bounds the window returns to when it leaves maximized or fullscreen.
+    pub(crate) fn ordinary_bounds(&self) -> Bounds<Pixels> {
+        self.0.lock().lifecycle.tracker.ordinary_bounds()
+    }
+
+    /// Whether the window is minimized.
+    pub(crate) fn is_minimized(&self) -> bool {
+        self.0.lock().lifecycle.minimized
+    }
+
+    /// How the window was asked to come forward, in order.
+    pub(crate) fn activations(&self) -> Vec<TestActivation> {
+        self.0.lock().lifecycle.activations.clone()
+    }
+
+    /// Simulates a request to close the window from the compositor or the window manager:
+    /// the close decision runs first and the window is removed only when it allows it.
+    /// Returns whether the window was closed. Enumerating displays while the request is
+    /// handled fails the test.
+    pub(crate) fn simulate_close_request(&self) -> bool {
+        let platform = self.0.lock().platform.upgrade();
+        let _forbidden = DisplayEnumerationForbidden::new(platform);
+        let handler = self.0.lock().should_close_handler.take();
+        let allowed = match handler {
+            Some(mut handler) => {
+                let allowed = handler();
+                self.0.lock().should_close_handler.get_or_insert(handler);
+                allowed
+            }
+            None => true,
+        };
+        if allowed {
+            let close = self.0.lock().lifecycle.close_callback.take();
+            if let Some(close) = close {
+                close();
+            }
+        }
+        allowed
     }
 
     /// Simulates a display scale change through the resize callback, preserving logical bounds.
@@ -444,16 +567,21 @@ impl PlatformWindow for TestWindow {
         self.0.lock().virtual_keyboard_dismissals += 1;
     }
 
+    fn request_text_input(&self) {
+        self.0.lock().text_input_requests += 1;
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         self.0.lock().bounds
     }
 
     fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(self.bounds())
+        let lock = self.0.lock();
+        lock.lifecycle.tracker.window_bounds(lock.lifecycle.mode)
     }
 
     fn is_maximized(&self) -> bool {
-        false
+        self.0.lock().lifecycle.mode == WindowMode::Maximized
     }
 
     fn content_size(&self) -> Size<Pixels> {
@@ -463,6 +591,8 @@ impl PlatformWindow for TestWindow {
     fn resize(&mut self, size: Size<Pixels>) {
         let mut lock = self.0.lock();
         lock.bounds.size = size;
+        let (mode, bounds) = (lock.lifecycle.mode, lock.bounds);
+        lock.lifecycle.tracker.observe(mode, bounds);
     }
 
     fn scale_factor(&self) -> f32 {
@@ -523,12 +653,41 @@ impl PlatformWindow for TestWindow {
     }
 
     fn activate(&self) {
+        {
+            let mut lock = self.0.lock();
+            lock.lifecycle.minimized = false;
+            lock.lifecycle.activations.push(TestActivation::Activate);
+        }
         self.0
             .lock()
             .platform
             .upgrade()
             .unwrap()
             .set_active_window(Some(self.clone()))
+    }
+
+    fn activate_with_token(&self, token: &str) {
+        {
+            let mut lock = self.0.lock();
+            lock.lifecycle.minimized = false;
+            lock.lifecycle
+                .activations
+                .push(TestActivation::WithToken(token.to_owned()));
+        }
+        self.0
+            .lock()
+            .platform
+            .upgrade()
+            .unwrap()
+            .set_active_window(Some(self.clone()))
+    }
+
+    fn request_attention(&self) {
+        self.0
+            .lock()
+            .lifecycle
+            .activations
+            .push(TestActivation::Attention);
     }
 
     fn is_active(&self) -> bool {
@@ -544,7 +703,31 @@ impl PlatformWindow for TestWindow {
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
-        self.0.lock().background_appearance
+        self.0.lock().chrome.background
+    }
+
+    fn background_capabilities(&self) -> crate::WindowBackgroundCapabilities {
+        self.0.lock().chrome.capabilities
+    }
+
+    fn window_decorations(&self) -> crate::Decorations {
+        self.0.lock().chrome.decorations
+    }
+
+    fn window_controls(&self) -> crate::WindowControls {
+        self.0.lock().chrome.controls
+    }
+
+    fn request_decorations(&self, decorations: crate::WindowDecorations) {
+        self.record_chrome_request(crate::TestChromeRequest::RequestDecorations(decorations));
+    }
+
+    fn set_client_inset(&self, inset: Pixels) {
+        self.record_chrome_request(crate::TestChromeRequest::ClientInset(inset));
+    }
+
+    fn on_button_layout_changed(&self, callback: Box<dyn FnMut()>) {
+        self.0.lock().chrome.button_layout_callback = Some(callback);
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
@@ -561,6 +744,7 @@ impl PlatformWindow for TestWindow {
         let mut state = self.0.lock();
         state.background_appearance = background;
         state.background_appearance_sets += 1;
+        state.chrome.background = background;
     }
 
     fn set_edited(&mut self, edited: bool) {
@@ -576,16 +760,19 @@ impl PlatformWindow for TestWindow {
     }
 
     fn minimize(&self) {
-        unimplemented!()
+        self.record_chrome_request(crate::TestChromeRequest::Minimize);
+        self.0.lock().lifecycle.minimized = true;
     }
 
     fn zoom(&self) {
-        unimplemented!()
+        let maximized = self.0.lock().lifecycle.mode == WindowMode::Maximized;
+        self.record_chrome_request(crate::TestChromeRequest::ToggleMaximize);
+        self.simulate_maximize(!maximized);
     }
 
     fn toggle_fullscreen(&self) {
-        let mut lock = self.0.lock();
-        lock.is_fullscreen = !lock.is_fullscreen;
+        let fullscreen = self.0.lock().lifecycle.mode == WindowMode::Fullscreen;
+        self.simulate_fullscreen(!fullscreen);
     }
 
     fn is_fullscreen(&self) -> bool {
@@ -644,7 +831,9 @@ impl PlatformWindow for TestWindow {
         self.0.lock().should_close_handler = Some(callback);
     }
 
-    fn on_close(&self, _callback: Box<dyn FnOnce()>) {}
+    fn on_close(&self, callback: Box<dyn FnOnce()>) {
+        self.0.lock().lifecycle.close_callback = Some(callback);
+    }
 
     fn on_hit_test_window_control(&self, callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
         self.0.lock().hit_test_window_control_callback = Some(callback);
@@ -657,6 +846,7 @@ impl PlatformWindow for TestWindow {
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
+        state.draw_count += 1;
         let device_size: Size<DevicePixels> = state.bounds.size.to_device_pixels(scale_factor);
         if let Some(renderer) = &mut state.renderer {
             renderer.render_scene(scene, device_size).warn_on_err();
@@ -697,12 +887,16 @@ impl PlatformWindow for TestWindow {
         unimplemented!()
     }
 
-    fn show_window_menu(&self, _position: Point<Pixels>) {
-        unimplemented!()
+    fn show_window_menu(&self, position: Point<Pixels>) {
+        self.record_chrome_request(crate::TestChromeRequest::WindowMenu(position));
     }
 
     fn start_window_move(&self) {
-        unimplemented!()
+        self.record_chrome_request(crate::TestChromeRequest::Move);
+    }
+
+    fn start_window_resize(&self, edge: crate::ResizeEdge) {
+        self.record_chrome_request(crate::TestChromeRequest::Resize(edge));
     }
 
     fn can_start_external_drag(&self) -> bool {

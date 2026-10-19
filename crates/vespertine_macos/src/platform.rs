@@ -948,6 +948,8 @@ impl Platform for MacPlatform {
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
+        // The macOS save panel is shown unfiltered; extension filters are a Linux feature.
+        _filters: &[vespertine::PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         use objc2_foundation::{NSString, NSURL};
 

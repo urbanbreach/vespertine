@@ -41,6 +41,7 @@ impl PromptConfig {
             directories,
             multiple: self.multiple.unwrap_or(false),
             prompt: self.prompt.clone().map(Into::into),
+            filters: Vec::new(),
         })
     }
 }

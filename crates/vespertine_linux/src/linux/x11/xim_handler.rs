@@ -15,6 +15,14 @@ pub struct XimHandler {
     pub connected: bool,
     pub window: xproto::Window,
     pub last_callback_event: Option<XimCallbackEvent>,
+    /// The server's open reply has assigned `im_id`. Input contexts may only be
+    /// created once this is true: before it, `im_id` holds its default value and
+    /// a create request using it makes the server reject the connection.
+    open_completed: bool,
+    /// A focus-in has been seen; `window` is the most recently focused window.
+    focused: bool,
+    /// A context-creation request has been issued since the handshake began.
+    ic_requested: bool,
 }
 
 impl XimHandler {
@@ -25,7 +33,44 @@ impl XimHandler {
             connected: false,
             window: Default::default(),
             last_callback_event: None,
+            open_completed: false,
+            focused: false,
+            ic_requested: false,
         }
+    }
+
+    /// Records the latest focused window without creating a context.
+    pub fn note_focus(&mut self, window: xproto::Window) {
+        self.window = window;
+        self.focused = true;
+    }
+
+    /// Whether the handshake has completed far enough to create contexts.
+    pub fn can_create_ic(&self) -> bool {
+        self.open_completed
+    }
+
+    /// The server's open reply assigned `input_method_id`.
+    fn on_open_reply(&mut self, input_method_id: u16) {
+        self.im_id = input_method_id;
+        self.open_completed = true;
+    }
+
+    /// The window to create the handshake's context for, once the input-style
+    /// query has been answered: the latest focused window. `None` when no window
+    /// has been focused (the first focus-in creates the context) or when a
+    /// focus-in already created one, so exactly one request is issued.
+    fn handshake_ic_window(&mut self) -> Option<xproto::Window> {
+        if !self.focused || self.ic_requested {
+            return None;
+        }
+        self.ic_requested = true;
+        Some(self.window)
+    }
+
+    /// Records that a context-creation request is being issued.
+    pub fn note_ic_requested(&mut self) {
+        self.ic_requested = true;
     }
 }
 
@@ -35,7 +80,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
     }
 
     fn handle_open(&mut self, client: &mut C, input_method_id: u16) -> Result<(), ClientError> {
-        self.im_id = input_method_id;
+        self.on_open_reply(input_method_id);
 
         client.get_im_values(input_method_id, &[AttributeName::QueryInputStyle])
     }
@@ -46,11 +91,14 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
         input_method_id: u16,
         _attributes: AHashMap<AttributeName, Vec<u8>>,
     ) -> Result<(), ClientError> {
+        let Some(window) = self.handshake_ic_window() else {
+            return Ok(());
+        };
         let ic_attributes = client
             .build_ic_attributes()
             .push(AttributeName::InputStyle, InputStyle::PREEDIT_CALLBACKS)
-            .push(AttributeName::ClientWindow, self.window)
-            .push(AttributeName::FocusWindow, self.window)
+            .push(AttributeName::ClientWindow, window)
+            .push(AttributeName::FocusWindow, window)
             .build();
         client.create_ic(input_method_id, ic_attributes)
     }
@@ -129,5 +177,76 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
             String::from(preedit_string),
         ));
         Ok(())
+    }
+}
+
+/// Whether a context may be created now: the handler exists (it is absent when
+/// no input method is available or while it is taken during event processing)
+/// and its handshake has completed.
+pub(crate) fn ime_ready(handler: Option<&XimHandler>) -> bool {
+    handler.is_some_and(XimHandler::can_create_ic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Models the focus-in path: returns the window a context is created for.
+    fn focus_in(handler: &mut XimHandler, window: xproto::Window) -> Option<xproto::Window> {
+        handler.note_focus(window);
+        if handler.can_create_ic() {
+            handler.note_ic_requested();
+            Some(window)
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn focus_during_handshake_creates_one_context_for_latest_window() {
+        let mut handler = XimHandler::new();
+        assert_eq!(focus_in(&mut handler, 10), None);
+        assert_eq!(focus_in(&mut handler, 20), None);
+        assert!(!handler.can_create_ic());
+
+        handler.on_open_reply(7);
+        assert_eq!(handler.im_id, 7);
+        assert!(handler.can_create_ic());
+        assert_eq!(handler.handshake_ic_window(), Some(20));
+        assert_eq!(handler.handshake_ic_window(), None);
+    }
+
+    #[test]
+    fn no_context_without_focus_until_first_focus_in() {
+        let mut handler = XimHandler::new();
+        handler.on_open_reply(3);
+        assert_eq!(handler.handshake_ic_window(), None);
+        assert_eq!(focus_in(&mut handler, 5), Some(5));
+    }
+
+    #[test]
+    fn focus_after_handshake_uses_normal_path() {
+        let mut handler = XimHandler::new();
+        handler.on_open_reply(3);
+        assert_eq!(handler.handshake_ic_window(), None);
+        assert_eq!(focus_in(&mut handler, 5), Some(5));
+        assert_eq!(focus_in(&mut handler, 6), Some(6));
+    }
+
+    #[test]
+    fn focus_between_open_and_input_style_reply_is_not_duplicated() {
+        let mut handler = XimHandler::new();
+        handler.on_open_reply(3);
+        assert_eq!(focus_in(&mut handler, 5), Some(5));
+        assert_eq!(handler.handshake_ic_window(), None);
+    }
+
+    #[test]
+    fn absent_handler_is_not_ready() {
+        assert!(!ime_ready(None));
+        let mut handler = XimHandler::new();
+        assert!(!ime_ready(Some(&handler)));
+        handler.on_open_reply(1);
+        assert!(ime_ready(Some(&handler)));
     }
 }

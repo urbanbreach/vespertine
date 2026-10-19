@@ -190,6 +190,16 @@ impl DisplayConnection {
         dispatch!(self, connection => connection.read_from_clipboard(), headless => None)
     }
 
+    pub(crate) fn read_from_clipboard_async(
+        &self,
+    ) -> vespertine::Task<Result<Option<ClipboardItem>, vespertine::ClipboardReadError>> {
+        dispatch!(
+            self,
+            connection => connection.read_from_clipboard_async(),
+            headless => vespertine::Task::ready(Err(vespertine::ClipboardReadError::Unavailable))
+        )
+    }
+
     #[cfg(any(feature = "wayland", feature = "x11"))]
     pub(crate) fn window_identifier(
         &self,

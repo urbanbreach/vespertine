@@ -41,13 +41,16 @@ use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSIO
 use xkbcommon::xkb::{self as xkbc, STATE_LAYOUT_EFFECTIVE};
 
 use super::refresh::{Defer, RefreshTimer, TimerAction, arm_or_defer};
+use super::scale::{ScaleOverride, ScaleSource, select_scale_factor};
+use super::xim_handler::ime_ready;
 use super::{
     ButtonOrScroll, ScrollDirection, X11Display, X11WindowStatePtr, XcbAtoms, XimCallbackEvent,
     XimHandler, button_or_scroll_from_event_detail, check_reply,
     clipboard::{self, Clipboard},
     get_reply, get_valuator_axis_index, handle_connection_error, modifiers_from_state,
-    pressed_button_from_mask, xcb_flush,
+    pressed_button_from_mask, watch_root_properties, xcb_flush,
 };
+use crate::linux::settings_notify::deliver_setting_change;
 
 use crate::linux::{
     DEFAULT_CURSOR_ICON_NAME, capslock_from_xkb, cursor_style_to_icon_names, get_xkb_compose_state,
@@ -57,7 +60,9 @@ use crate::linux::{
     reveal_path_internal,
     xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
 };
-use crate::linux::{LinuxCommon, LinuxKeyboardLayout, X11Window, modifiers_from_xinput_info};
+use crate::linux::{
+    LinuxCommon, LinuxKeyboardLayout, X11Compositing, X11Window, modifiers_from_xinput_info,
+};
 
 use vespertine::{
     AnyWindowHandle, Bounds, ClipboardItem, CursorStyle, FileDropEvent, FrameRequestSource,
@@ -194,7 +199,7 @@ pub struct X11ClientState {
     xkb_context: xkbc::Context,
     pub(crate) xcb_connection: Rc<XCBConnection>,
     xkb_device_id: i32,
-    client_side_decorations_supported: bool,
+    compositing: X11Compositing,
     pub(crate) x_root_index: usize,
     pub(crate) resource_database: Database,
     pub(crate) atoms: XcbAtoms,
@@ -431,15 +436,19 @@ impl X11Connection {
             .reply()
             .context("Failed to get XCB atoms")?;
 
-        let root = xcb_connection.setup().roots[0].root;
-        let compositor_present = check_compositor_present(&xcb_connection, root);
-        let gtk_frame_extents_supported =
-            check_gtk_frame_extents_supported(&xcb_connection, &atoms, root);
-        let client_side_decorations_supported = compositor_present && gtk_frame_extents_supported;
+        let root = xcb_connection.setup().roots[x_root_index].root;
+        let compositing = X11Compositing {
+            compositor_present: check_compositor_present(&xcb_connection, root, x_root_index),
+            frame_extents_supported: check_gtk_frame_extents_supported(
+                &xcb_connection,
+                &atoms,
+                root,
+            ),
+        };
         log::info!(
             "x11: compositor present: {}, gtk_frame_extents_supported: {}",
-            compositor_present,
-            gtk_frame_extents_supported
+            compositing.compositor_present,
+            compositing.frame_extents_supported
         );
 
         let xkb = get_reply(
@@ -540,7 +549,7 @@ impl X11Connection {
                 xkb_context,
                 xcb_connection,
                 xkb_device_id,
-                client_side_decorations_supported,
+                compositing,
                 x_root_index,
                 resource_database,
                 atoms,
@@ -575,6 +584,10 @@ impl X11Connection {
         // From here on, `Drop` removes whatever was registered if a later step fails.
         connection.register_sources(&handle, background_executor)?;
         let xcb_connection = connection.0.0.borrow().xcb_connection.clone();
+        watch_root_properties(
+            &xcb_connection,
+            xcb_connection.setup().roots[x_root_index].root,
+        );
         xcb_flush(&xcb_connection);
         Ok(connection)
     }
@@ -624,19 +637,35 @@ impl X11Client {
                     };
                     match event {
                         XDPEvent::WindowAppearance(appearance) => {
-                            client.with_common(|common| common.appearance = appearance);
-                            for window in client.0.borrow_mut().windows.values_mut() {
-                                window.window.set_appearance(appearance);
-                            }
+                            deliver_setting_change(
+                                &client.0,
+                                |state| state.common.borrow_mut().appearance = appearance,
+                                |state| {
+                                    state
+                                        .windows
+                                        .values()
+                                        .map(|window| window.window.clone())
+                                        .collect()
+                                },
+                                |mut window| window.set_appearance(appearance),
+                            );
                         }
                         XDPEvent::ButtonLayout(layout_str) => {
                             let layout = WindowButtonLayout::parse(&layout_str)
                                 .log_err()
                                 .unwrap_or_else(WindowButtonLayout::linux_default);
-                            client.with_common(|common| common.button_layout = layout);
-                            for window in client.0.borrow_mut().windows.values_mut() {
-                                window.window.set_button_layout();
-                            }
+                            deliver_setting_change(
+                                &client.0,
+                                |state| state.common.borrow_mut().button_layout = layout,
+                                |state| {
+                                    state
+                                        .windows
+                                        .values()
+                                        .map(|window| window.window.clone())
+                                        .collect()
+                                },
+                                |window| window.set_button_layout(),
+                            );
                         }
                         XDPEvent::CursorTheme(_) | XDPEvent::CursorSize(_) => {
                             // noop, X11 manages this for us.
@@ -832,7 +861,10 @@ impl X11Client {
 
     pub fn enable_ime(&self) {
         let mut state = self.0.borrow_mut();
-        if !state.has_xim() {
+        // Focus-ins during the unfinished handshake are remembered by the
+        // handler and served by `handle_get_im_values` once the open reply has
+        // assigned an input-method id (PLT-005). An absent handler is "not ready".
+        if !state.has_xim() || !ime_ready(state.xim_handler.as_ref()) {
             return;
         }
 
@@ -868,6 +900,8 @@ impl X11Client {
                     });
             }
         }
+        let mut xim_handler = xim_handler;
+        xim_handler.note_ic_requested();
         ximc.create_ic(xim_handler.im_id, ic_attributes.build())
             .ok();
         let mut state = self.0.borrow_mut();
@@ -1067,6 +1101,10 @@ impl X11Client {
                     .log_err();
             }
             Event::PropertyNotify(event) => {
+                if self.is_work_area_change(&event) {
+                    self.report_displays_changed();
+                    return Some(());
+                }
                 let window = self.get_window(event.window)?;
                 window
                     .property_notify(event)
@@ -1079,7 +1117,7 @@ impl X11Client {
                 let mut state = self.0.borrow_mut();
                 state.keyboard_focused_window = Some(event.event);
                 if let Some(handler) = state.xim_handler.as_mut() {
-                    handler.window = event.event;
+                    handler.note_focus(event.event);
                 }
                 drop(state);
                 self.enable_ime();
@@ -1641,6 +1679,30 @@ impl X11Client {
             }
         }
     }
+
+    /// Whether `event` reports a change of the work area or of the current desktop on the
+    /// root window.
+    fn is_work_area_change(&self, event: &xproto::PropertyNotifyEvent) -> bool {
+        let state = self.0.borrow();
+        let root = state.xcb_connection.setup().roots[state.x_root_index].root;
+        event.window == root
+            && (event.atom == state.atoms._NET_WORKAREA
+                || event.atom == state.atoms._NET_CURRENT_DESKTOP)
+    }
+
+    /// Tells the application that displays changed, without holding any client state.
+    fn report_displays_changed(&self) {
+        let common = self.0.borrow().common.clone();
+        let callback = common.borrow_mut().callbacks.displays_changed.take();
+        if let Some(mut callback) = callback {
+            callback();
+            common
+                .borrow_mut()
+                .callbacks
+                .displays_changed
+                .get_or_insert(callback);
+        }
+    }
 }
 
 impl X11Client {
@@ -1715,7 +1777,7 @@ impl X11Client {
             .context("X11: Failed to generate window ID")?;
 
         let xcb_connection = state.xcb_connection.clone();
-        let client_side_decorations_supported = state.client_side_decorations_supported;
+        let compositing = state.compositing;
         let x_root_index = state.x_root_index;
         let atoms = state.atoms;
         let scale_factor = state.scale_factor;
@@ -1734,7 +1796,7 @@ impl X11Client {
             compositor_gpu,
             params,
             &xcb_connection,
-            client_side_decorations_supported,
+            compositing,
             x_root_index,
             x_window,
             &atoms,
@@ -1844,8 +1906,8 @@ impl X11Client {
         let state = self.0.borrow_mut();
         state
             .clipboard
-            .set_text(
-                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+            .write_item(
+                &item,
                 clipboard::ClipboardKind::Primary,
                 clipboard::WaitConfig::None,
             )
@@ -1855,25 +1917,28 @@ impl X11Client {
 
     pub(crate) fn write_to_clipboard(&self, item: vespertine::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        state
+        let written = state
             .clipboard
-            .set_text(
-                std::borrow::Cow::Owned(item.text().unwrap_or_default()),
+            .write_item(
+                &item,
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
             )
             .context("X11: Failed to write to clipboard (clipboard)")
             .log_with_level(log::Level::Debug);
-        state.clipboard_item.replace(item);
+        // Keep the item in-process so reads while we own the selection return it exactly,
+        // with its metadata.
+        if written.is_some() {
+            state.clipboard_item.replace(item);
+        }
     }
 
     pub(crate) fn read_from_primary(&self) -> Option<vespertine::ClipboardItem> {
         let state = self.0.borrow_mut();
         state
             .clipboard
-            .get_any(clipboard::ClipboardKind::Primary)
-            .context("X11: Failed to read from clipboard (primary)")
-            .log_with_level(log::Level::Debug)
+            .read_item(clipboard::ClipboardKind::Primary)
+            .into_item()
     }
 
     pub(crate) fn read_from_clipboard(&self) -> Option<vespertine::ClipboardItem> {
@@ -1888,9 +1953,28 @@ impl X11Client {
         }
         state
             .clipboard
-            .get_any(clipboard::ClipboardKind::Clipboard)
-            .context("X11: Failed to read from clipboard (clipboard)")
-            .log_with_level(log::Level::Debug)
+            .read_item(clipboard::ClipboardKind::Clipboard)
+            .into_item()
+    }
+
+    pub(crate) fn read_from_clipboard_async(
+        &self,
+    ) -> vespertine::Task<Result<Option<vespertine::ClipboardItem>, vespertine::ClipboardReadError>>
+    {
+        let state = self.0.borrow();
+        if state
+            .clipboard
+            .is_owner(clipboard::ClipboardKind::Clipboard)
+        {
+            return vespertine::Task::ready(Ok(state.clipboard_item.clone()));
+        }
+        let clipboard = state.clipboard.clone();
+        let executor = state.common.borrow().background_executor.clone();
+        executor.spawn(async move {
+            clipboard
+                .read_item(clipboard::ClipboardKind::Clipboard)
+                .into_result()
+        })
     }
 
     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
@@ -2320,73 +2404,49 @@ fn detect_compositor_gpu(
     crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
 }
 
-fn check_compositor_present(xcb_connection: &XCBConnection, root: xproto::Window) -> bool {
-    // Method 1: Check for _NET_WM_CM_S{root}
-    let atom_name = format!("_NET_WM_CM_S{}", root);
-    let atom1 = get_reply(
-        || format!("Failed to intern {atom_name}"),
-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
-    );
-    let method1 = match atom1.log_with_level(Level::Debug) {
-        Some(reply) if reply.atom != x11rb::NONE => {
-            let atom = reply.atom;
-            get_reply(
-                || format!("Failed to get {atom_name} owner"),
-                xcb_connection.get_selection_owner(atom),
-            )
-            .map(|reply| reply.owner != 0)
-            .log_with_level(Level::Debug)
-            .unwrap_or(false)
-        }
-        _ => false,
+/// Whether a compositing manager owns the screen: it owns the `_NET_WM_CM_S<n>` selection of
+/// screen `n`, or the root window carries the `_NET_WM_CM_OWNER` property. A bare window manager
+/// is not a compositing manager.
+fn check_compositor_present(
+    xcb_connection: &XCBConnection,
+    root: xproto::Window,
+    screen: usize,
+) -> bool {
+    let intern = |name: &str| {
+        get_reply(
+            || format!("Failed to intern {name}"),
+            xcb_connection.intern_atom(false, name.as_bytes()),
+        )
+        .log_with_level(Level::Debug)
+        .map(|reply| reply.atom)
+        .filter(|atom| *atom != x11rb::NONE)
     };
 
-    // Method 2: Check for _NET_WM_CM_OWNER
-    let atom_name = "_NET_WM_CM_OWNER";
-    let atom2 = get_reply(
-        || format!("Failed to intern {atom_name}"),
-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
-    );
-    let method2 = match atom2.log_with_level(Level::Debug) {
-        Some(reply) if reply.atom != x11rb::NONE => {
-            let atom = reply.atom;
-            get_reply(
-                || format!("Failed to get {atom_name}"),
-                xcb_connection.get_property(false, root, atom, xproto::AtomEnum::WINDOW, 0, 1),
-            )
-            .map(|reply| reply.value_len > 0)
-            .unwrap_or(false)
-        }
-        _ => return false,
-    };
+    let selection = format!("_NET_WM_CM_S{screen}");
+    let selection_owned = intern(&selection).is_some_and(|atom| {
+        get_reply(
+            || format!("Failed to get {selection} owner"),
+            xcb_connection.get_selection_owner(atom),
+        )
+        .map(|reply| reply.owner != x11rb::NONE)
+        .log_with_level(Level::Debug)
+        .unwrap_or(false)
+    });
 
-    // Method 3: Check for _NET_SUPPORTING_WM_CHECK
-    let atom_name = "_NET_SUPPORTING_WM_CHECK";
-    let atom3 = get_reply(
-        || format!("Failed to intern {atom_name}"),
-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
-    );
-    let method3 = match atom3.log_with_level(Level::Debug) {
-        Some(reply) if reply.atom != x11rb::NONE => {
-            let atom = reply.atom;
-            get_reply(
-                || format!("Failed to get {atom_name}"),
-                xcb_connection.get_property(false, root, atom, xproto::AtomEnum::WINDOW, 0, 1),
-            )
-            .map(|reply| reply.value_len > 0)
-            .unwrap_or(false)
-        }
-        _ => return false,
-    };
+    let owner_property = intern("_NET_WM_CM_OWNER").is_some_and(|atom| {
+        get_reply(
+            || "Failed to get _NET_WM_CM_OWNER",
+            xcb_connection.get_property(false, root, atom, xproto::AtomEnum::WINDOW, 0, 1),
+        )
+        .map(|reply| reply.value_len > 0)
+        .unwrap_or(false)
+    });
 
     log::debug!(
-        "Compositor detection: _NET_WM_CM_S?={}, _NET_WM_CM_OWNER={}, _NET_SUPPORTING_WM_CHECK={}",
-        method1,
-        method2,
-        method3
+        "Compositor detection: {selection} owned={selection_owned}, _NET_WM_CM_OWNER set={owner_property}"
     );
 
-    method1 || method2 || method3
+    selection_owned || owner_property
 }
 
 fn check_gtk_frame_extents_supported(
@@ -2655,25 +2715,19 @@ fn create_invisible_cursor(
     Ok(cursor)
 }
 
-enum DpiMode {
-    Randr,
-    Scale(f32),
-    NotSet,
-}
-
 fn get_scale_factor(
     connection: &XCBConnection,
     resource_database: &Database,
     screen_index: usize,
 ) -> f32 {
-    let env_dpi = std::env::var(VESPERTINE_X11_SCALE_FACTOR_ENV)
+    let scale_override = std::env::var(VESPERTINE_X11_SCALE_FACTOR_ENV)
         .ok()
         .map(|var| {
             if var.to_lowercase() == "randr" {
-                DpiMode::Randr
+                ScaleOverride::Randr
             } else if let Ok(scale) = var.parse::<f32>() {
                 if valid_scale_factor(scale) {
-                    DpiMode::Scale(scale)
+                    ScaleOverride::Scale(scale)
                 } else {
                     panic!(
                         "`{}` must be a positive normal number or `randr`. Got `{}`",
@@ -2681,7 +2735,7 @@ fn get_scale_factor(
                     );
                 }
             } else if var.is_empty() {
-                DpiMode::NotSet
+                ScaleOverride::NotSet
             } else {
                 panic!(
                     "`{}` must be a positive number or `randr`. Got `{}`",
@@ -2689,51 +2743,40 @@ fn get_scale_factor(
                 );
             }
         })
-        .unwrap_or(DpiMode::NotSet);
-
-    match env_dpi {
-        DpiMode::Scale(scale) => {
-            log::info!(
-                "Using scale factor from {}: {}",
-                VESPERTINE_X11_SCALE_FACTOR_ENV,
-                scale
-            );
-            return scale;
-        }
-        DpiMode::Randr => {
-            if let Some(scale) = get_randr_scale_factor(connection, screen_index) {
-                log::info!(
-                    "Using RandR scale factor from {}=randr: {}",
-                    VESPERTINE_X11_SCALE_FACTOR_ENV,
-                    scale
-                );
-                return scale;
-            }
-            log::warn!("Failed to calculate RandR scale factor, falling back to default");
-            return 1.0;
-        }
-        DpiMode::NotSet => {}
-    }
+        .unwrap_or(ScaleOverride::NotSet);
 
     // TODO: Use scale factor from XSettings here
 
-    if let Some(dpi) = resource_database
+    let xft_dpi = resource_database
         .get_value::<f32>("Xft.dpi", "Xft.dpi")
         .ok()
-        .flatten()
-    {
-        let scale = dpi / 96.0; // base dpi
-        log::info!("Using scale factor from Xft.dpi: {}", scale);
-        return scale;
-    }
+        .flatten();
+    let gdk_scale = std::env::var("GDK_SCALE").ok();
 
-    if let Some(scale) = get_randr_scale_factor(connection, screen_index) {
-        log::info!("Using RandR scale factor: {}", scale);
-        return scale;
+    let (scale, source) =
+        select_scale_factor(scale_override, xft_dpi, gdk_scale.as_deref(), || {
+            get_randr_scale_factor(connection, screen_index)
+        });
+    match source {
+        ScaleSource::Override => log::info!(
+            "Using scale factor from {}: {}",
+            VESPERTINE_X11_SCALE_FACTOR_ENV,
+            scale
+        ),
+        ScaleSource::RandrOverride => log::info!(
+            "Using RandR scale factor from {}=randr: {}",
+            VESPERTINE_X11_SCALE_FACTOR_ENV,
+            scale
+        ),
+        ScaleSource::RandrOverrideFailed => {
+            log::warn!("Failed to calculate RandR scale factor, falling back to default")
+        }
+        ScaleSource::XftDpi => log::info!("Using scale factor from Xft.dpi: {}", scale),
+        ScaleSource::GdkScale => log::info!("Using scale factor from GDK_SCALE: {}", scale),
+        ScaleSource::Randr => log::info!("Using RandR scale factor: {}", scale),
+        ScaleSource::Default => log::info!("Using default scale factor: 1.0"),
     }
-
-    log::info!("Using default scale factor: 1.0");
-    1.0
+    scale
 }
 
 fn get_randr_scale_factor(connection: &XCBConnection, screen_index: usize) -> Option<f32> {

@@ -36,10 +36,10 @@ pub(crate) type PlatformScreenCaptureFrame =
     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
 
 use crate::{
-    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
-    DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
-    FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
-    LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
+    Action, ActivationRequest, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor,
+    Bounds, DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload,
+    Font, FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource,
+    Keymap, LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
     RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Scene, ShapedGlyph,
     ShapedRun, SharedString, Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea,
     hash, point, px, size,
@@ -146,6 +146,8 @@ bitflags::bitflags! {
         const BOUNDS = 1 << 0;
         /// [`PlatformDisplay::refresh_interval`] changed.
         const REFRESH_INTERVAL = 1 << 1;
+        /// [`PlatformDisplay::visible_bounds`] (the work area) changed.
+        const VISIBLE_BOUNDS = 1 << 2;
     }
 }
 
@@ -454,10 +456,14 @@ pub trait Platform: 'static {
         &self,
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>>;
+    /// Shows a save-path prompt. `filters` are ordered extension filters (first is the default;
+    /// empty means all files). Backends without filter support (macOS, Windows) show an
+    /// unfiltered prompt.
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
+        filters: &[PathPromptFilter],
     ) -> oneshot::Receiver<Result<Option<PathBuf>>>;
     fn can_select_mixed_files_and_dirs(&self) -> bool;
     fn reveal_path(&self, path: &Path);
@@ -465,6 +471,23 @@ pub trait Platform: 'static {
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
+    /// Registers the callback invoked when the system asks the application to terminate,
+    /// for example Linux session shutdown (`SIGTERM`, `SIGHUP`). The application answers it
+    /// with [`App::quit`]. The platform only installs its termination handlers once this
+    /// is registered. Does nothing on platforms that route termination through
+    /// [`Platform::on_quit`].
+    fn on_quit_requested(&self, _callback: Box<dyn FnMut()>) {}
+    /// Registers the callback invoked when a desktop action is activated through the
+    /// platform's application-activation mechanism (on Linux `ActivateAction` of
+    /// `org.freedesktop.Application`), with the action name. Does nothing on platforms
+    /// without such a mechanism.
+    fn on_activate_action(&self, _callback: Box<dyn FnMut(String)>) {}
+    /// Registers the callback invoked when the platform's application-activation mechanism
+    /// asks the running application to bring a window forward (on Linux the `Activate`,
+    /// `Open` and `ActivateAction` calls of `org.freedesktop.Application`), after the
+    /// matching reopen, open-URLs or activate-action callback ran. Does nothing on
+    /// platforms without such a mechanism.
+    fn on_activation_request(&self, _callback: Box<dyn FnMut(ActivationRequest)>) {}
     /// Registers the callback invoked when the system is about to sleep.
     fn on_system_sleep(&self, callback: Box<dyn FnMut()>);
     /// Registers the callback invoked when the system resumes from sleep.
@@ -535,6 +558,36 @@ pub trait Platform: 'static {
     /// unavailable (e.g. authorization was denied).
     fn show_system_notification(&self, notification: SystemNotification) {
         _ = notification;
+    }
+
+    /// Posts a notification and reports what happened to it.
+    ///
+    /// The returned task resolves once the notification service has accepted
+    /// or refused the notification; connecting to the service and calling it
+    /// never happen on the calling thread. Backends that cannot report a
+    /// delivery result (macOS and Windows, which only implement
+    /// [`Platform::show_system_notification`]) use this default, which does
+    /// not post anything and resolves to
+    /// [`SystemNotificationDelivery::Unavailable`]; use
+    /// [`Platform::show_system_notification`] there. Implementations must not
+    /// suppress the notification based on window focus or application state.
+    fn post_system_notification(
+        &self,
+        notification: SystemNotification,
+    ) -> Task<SystemNotificationDelivery> {
+        _ = notification;
+        Task::ready(SystemNotificationDelivery::Unavailable)
+    }
+
+    /// Whether activation of posted notifications (clicks on the body or on
+    /// action buttons) is delivered to the handler registered with
+    /// [`Platform::on_system_notification_response`].
+    ///
+    /// On Linux this is whether the notification service advertises the
+    /// `actions` capability. Backends that cannot answer (the default) resolve
+    /// to `false`.
+    fn system_notification_activation_supported(&self) -> Task<bool> {
+        Task::ready(false)
     }
 
     /// Removes the delivered or pending notification with this tag.
@@ -635,6 +688,11 @@ pub trait PlatformDisplay: Debug {
     /// Get the visible bounds for this display, excluding taskbar/dock areas.
     /// This is the usable area where windows can be placed without being obscured.
     /// Defaults to the full display bounds if not overridden.
+    ///
+    /// * X11: the `_NET_WORKAREA` of the current desktop intersected with the display
+    ///   bounds, or the display bounds when the window manager sets no such property.
+    /// * Wayland: the display bounds. Wayland offers clients no work-area protocol, so
+    ///   applications must not assume panel space is excluded.
     fn visible_bounds(&self) -> Bounds<Pixels> {
         self.bounds()
     }
@@ -666,6 +724,25 @@ pub struct SystemNotification {
     /// Buttons offered on the notification. Platforms that cannot display
     /// action buttons show the notification without them.
     pub actions: Vec<SystemNotificationAction>,
+    /// An opaque string the application uses to route a click, echoed back
+    /// verbatim in [`SystemNotificationResponse::destination`]. The platform
+    /// never interprets it. Echoed on Linux and Windows; macOS responses
+    /// always carry `None`.
+    pub destination: Option<SharedString>,
+}
+
+/// The outcome of [`Platform::post_system_notification`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SystemNotificationDelivery {
+    /// The notification service accepted the notification.
+    Delivered,
+    /// There is no notification service to post to (no session bus, or
+    /// nothing owns the notification service's name), or the backend cannot
+    /// report delivery results.
+    Unavailable,
+    /// The service was reachable but the post failed; carries a readable
+    /// reason.
+    Failed(SharedString),
 }
 
 /// A button offered on a [`SystemNotification`].
@@ -686,6 +763,15 @@ pub struct SystemNotificationResponse {
     /// The pressed action button's [`SystemNotificationAction::id`], or
     /// `None` when the user activated the notification body itself.
     pub action_id: Option<SharedString>,
+    /// The [`SystemNotification::destination`] of the activated
+    /// notification, if it had one.
+    pub destination: Option<SharedString>,
+    /// An activation token supplied by the notification service for this
+    /// activation (notification specification 1.3 `ActivationToken`), which
+    /// the handler can use to raise its window through the platform's
+    /// activation mechanism (xdg-activation on Wayland). `None` when the
+    /// service did not send one or the platform has no such mechanism.
+    pub activation_token: Option<SharedString>,
 }
 
 /// Thermal state of the system
@@ -1250,6 +1336,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    /// Raises the window with a platform activation token, so that the compositor or window
+    /// manager lets focus move to it (xdg-activation on Wayland, `_NET_STARTUP_ID` on X11).
+    /// Platforms without activation tokens activate the window as [`Self::activate`] does.
+    fn activate_with_token(&self, _token: &str) {
+        self.activate();
+    }
     /// Requests that the operating system draw attention to this window.
     fn request_attention(&self) {}
     fn is_active(&self) -> bool;
@@ -1380,6 +1472,14 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         WindowControls::default()
     }
     fn set_client_inset(&self, _inset: Pixels) {}
+    /// Which window background effects (transparency, desktop blur) this window can have.
+    ///
+    /// Platforms that do not implement the query report no support, so a requested
+    /// transparent or blurred background resolves to an opaque window. See
+    /// [`WindowBackgroundCapabilities`] and [`Window::effective_background_appearance`].
+    fn background_capabilities(&self) -> crate::WindowBackgroundCapabilities {
+        crate::WindowBackgroundCapabilities::UNSUPPORTED
+    }
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 
     /// The shared GPU device and queue this window's renderer uses, type-erased.
@@ -1429,6 +1529,18 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     /// Requests that the soft keyboard be hidden.
     fn hide_soft_keyboard(&self) {}
+
+    /// Signals that the user gesture being processed (for example a pointer
+    /// press or click) targets editable text. Called synchronously, before the
+    /// invoking call returns, so platforms that open a software keyboard only
+    /// from within a user gesture can do so.
+    ///
+    /// The default is a no-op: desktop platforms (Wayland, X11, macOS, Windows)
+    /// learn about text input through the input handler and the text input
+    /// configuration and state contracts, which this signal neither replaces nor
+    /// changes. It never inserts text, moves focus or fabricates keyboard
+    /// visibility.
+    fn request_text_input(&self) {}
 
     /// Inform the operating system that the text input state has changed
     fn text_input_state_changed(&self, _change: TextInputStateChange) {}
@@ -3044,6 +3156,61 @@ pub struct PathPromptOptions {
     pub multiple: bool,
     /// The prompt to show to a user when selecting a path
     pub prompt: Option<SharedString>,
+    /// Ordered extension filters. The first filter is the default; empty means all files.
+    pub filters: Vec<PathPromptFilter>,
+}
+
+/// A named group of file extensions offered by a path prompt.
+///
+/// Extensions are bare (`"png"`, not `"*.png"`); a leading dot is tolerated and removed.
+/// Matching is case-insensitive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathPromptFilter {
+    /// The name shown to the user.
+    pub name: SharedString,
+    /// The extensions this filter accepts.
+    pub extensions: Vec<SharedString>,
+}
+
+impl PathPromptFilter {
+    /// Creates a filter from a display name and bare extensions.
+    pub fn new<E: Into<SharedString>>(
+        name: impl Into<SharedString>,
+        extensions: impl IntoIterator<Item = E>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            extensions: extensions.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The case-insensitive glob for one extension: the leading dot is removed and every ASCII
+    /// letter becomes a two-letter class, so `"png"` becomes `*.[pP][nN][gG]`. Other characters
+    /// stay literal.
+    pub fn extension_glob(extension: &str) -> String {
+        let extension = extension.strip_prefix('.').unwrap_or(extension);
+        let mut glob = String::with_capacity(2 + extension.len() * 4);
+        glob.push_str("*.");
+        for character in extension.chars() {
+            if character.is_ascii_alphabetic() {
+                glob.push('[');
+                glob.push(character.to_ascii_lowercase());
+                glob.push(character.to_ascii_uppercase());
+                glob.push(']');
+            } else {
+                glob.push(character);
+            }
+        }
+        glob
+    }
+
+    /// The globs for every extension of this filter, in order.
+    pub fn globs(&self) -> Vec<String> {
+        self.extensions
+            .iter()
+            .map(|extension| Self::extension_glob(extension))
+            .collect()
+    }
 }
 
 /// What kind of prompt styling to show
@@ -3287,7 +3454,8 @@ impl ClipboardItem {
     }
 
     /// Concatenates together all the ClipboardString entries in the item.
-    /// Returns None if there were no ClipboardString entries.
+    /// An item without string entries but with external paths yields the absolute paths
+    /// joined by line feeds. Returns None if the item has no text.
     pub fn text(&self) -> Option<String> {
         let mut answer = String::new();
 
@@ -3298,13 +3466,15 @@ impl ClipboardItem {
         }
 
         if answer.is_empty() {
-            for entry in self.entries.iter() {
-                if let ClipboardEntry::ExternalPaths(paths) = entry {
-                    for path in &paths.0 {
-                        use std::fmt::Write as _;
-                        _ = write!(answer, "{}", path.display());
-                    }
+            for path in self.entries.iter().flat_map(|entry| match entry {
+                ClipboardEntry::ExternalPaths(paths) => paths.0.as_slice(),
+                _ => &[],
+            }) {
+                if !answer.is_empty() {
+                    answer.push('\n');
                 }
+                let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+                answer.push_str(&path.to_string_lossy());
             }
         }
 
@@ -3412,7 +3582,7 @@ impl ImageFormat {
             ImageFormat::Svg => "image/svg+xml",
             ImageFormat::Bmp => "image/bmp",
             ImageFormat::Tiff => "image/tiff",
-            ImageFormat::Ico => "image/ico",
+            ImageFormat::Ico => "image/x-icon",
             ImageFormat::Pnm => "image/x-portable-anymap",
         }
     }
@@ -3444,11 +3614,27 @@ impl ImageFormat {
     /// Unlike `mime_type()` which returns the single canonical form,
     /// these are legacy or shortened variants we still need to recognize.
     fn from_mime_type_alias(mime_type: &str) -> Option<Self> {
-        match mime_type {
-            "image/jpg" => Some(Self::Jpeg),
-            "image/tif" => Some(Self::Tiff),
-            _ => None,
-        }
+        Self::iter_aliases().find_map(|(format, alias)| (alias == mime_type).then_some(format))
+    }
+
+    fn iter_aliases() -> impl Iterator<Item = (Self, &'static str)> {
+        [
+            (Self::Jpeg, "image/jpg"),
+            (Self::Tiff, "image/tif"),
+            (Self::Ico, "image/ico"),
+            (Self::Ico, "image/vnd.microsoft.icon"),
+        ]
+        .into_iter()
+    }
+
+    /// Every mime type this format is known by: the canonical
+    /// [`mime_type`](Self::mime_type) first, then non-canonical aliases that other
+    /// applications are known to use.
+    pub fn mime_types(self) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.mime_type()).chain(
+            Self::iter_aliases()
+                .filter_map(move |(format, alias)| (format == self).then_some(alias)),
+        )
     }
 }
 

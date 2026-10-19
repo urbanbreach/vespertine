@@ -4,10 +4,14 @@ use x11rb::{connection::Connection as _, xcb_ffi::XCBConnection};
 
 use vespertine::{Bounds, DisplayId, Pixels, PlatformDisplay, Size, px};
 
+use super::read_work_area;
+
 #[derive(Debug)]
 pub(crate) struct X11Display {
     x_screen_index: usize,
     bounds: Bounds<Pixels>,
+    /// The work area: `_NET_WORKAREA` of the current desktop within `bounds`.
+    visible_bounds: Bounds<Pixels>,
     uuid: Uuid,
 }
 
@@ -22,16 +26,19 @@ impl X11Display {
             .roots
             .get(x_screen_index)
             .with_context(|| format!("No screen found with index {x_screen_index}"))?;
+        let bounds = Bounds {
+            origin: Default::default(),
+            size: Size {
+                width: px(screen.width_in_pixels as f32 / scale_factor),
+                height: px(screen.height_in_pixels as f32 / scale_factor),
+            },
+        };
         Ok(Self {
             x_screen_index,
-            bounds: Bounds {
-                origin: Default::default(),
-                size: Size {
-                    width: px(screen.width_in_pixels as f32 / scale_factor),
-                    height: px(screen.height_in_pixels as f32 / scale_factor),
-                },
-            },
-            uuid: Uuid::from_bytes([0; 16]),
+            bounds,
+            visible_bounds: read_work_area(xcb, screen.root, scale_factor, bounds),
+            // Stable across restarts and distinct per screen; screen 0 keeps the nil uuid.
+            uuid: Uuid::from_u128(x_screen_index as u128),
         })
     }
 }
@@ -52,5 +59,9 @@ impl PlatformDisplay for X11Display {
 
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
+    }
+
+    fn visible_bounds(&self) -> Bounds<Pixels> {
+        self.visible_bounds
     }
 }

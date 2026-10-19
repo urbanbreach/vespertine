@@ -146,6 +146,9 @@ objc2-metal = { version = "0.3", optional = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 scap = { workspace = true, optional = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
+x11rb = "0.13.1"
+
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 libc.workspace = true
 
@@ -168,6 +171,7 @@ vespertine_collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 futures-concurrency.workspace = true
 postage = { workspace = true, features = ["blocking"] }
+vespertine_desktop.workspace = true
 vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 vespertine_wgpu = { workspace = true, features = ["test-support"] }
 vespertine_util.workspace = true
@@ -212,6 +216,14 @@ path = "examples/motion_retarget.rs"
 [[example]]
 name = "presence_list"
 path = "examples/presence_list.rs"
+
+[[example]]
+name = "present_sync"
+path = "examples/present_sync.rs"
+
+[[example]]
+name = "x11_toolkit_scale"
+path = "examples/x11_toolkit_scale.rs"
 
 [[example]]
 name = "move_entity_between_windows"
@@ -260,6 +272,10 @@ path = "examples/set_menus.rs"
 [[example]]
 name = "system_notifications"
 path = "examples/system_notifications.rs"
+
+[[example]]
+name = "notifications_and_sounds"
+path = "examples/notifications_and_sounds.rs"
 
 
 [[example]]

@@ -1,14 +1,22 @@
+mod activation;
 mod client;
 mod clipboard;
+mod compositing;
 mod display;
 mod event;
 mod refresh;
+mod moveresize;
+mod scale;
 mod window;
+mod workarea;
 mod xim_handler;
 
+pub(crate) use activation::*;
 pub(crate) use client::*;
 pub(crate) use clipboard::wait_for_clipboard_handovers;
+pub(crate) use compositing::X11Compositing;
 pub(crate) use display::*;
 pub(crate) use event::*;
 pub(crate) use window::*;
+pub(crate) use workarea::*;
 pub(crate) use xim_handler::*;
