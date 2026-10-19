@@ -286,49 +286,141 @@ fn controls_button_exposes_selected_as_toggled_and_icon_only_label() {
     assert!(save.disabled());
 }
 
-#[test]
-fn controls_icon_only_button_shows_its_label_as_the_tooltip() {
-    require_backend!();
-    let mut host = host(300.0, 200.0, |_, _| {
+/// Two icon-only buttons: `save` (label is the tooltip) at (20, 20) and `find` (explicit
+/// tooltip text) at (20, 68), each 36 x 36.
+fn icon_column(
+    clicks: Rc<[Cell<u32>; 2]>,
+) -> impl Fn(&mut vespertine::Window, &mut vespertine::App) -> vespertine::AnyElement {
+    move |_, _| {
+        let (save, find) = (clicks.clone(), clicks.clone());
         div()
             .p(px(20.))
             .flex()
             .flex_col()
             .items_start()
             .gap(px(12.))
-            .child(Button::icon_only(
-                "save",
-                "Save document",
-                div().size(px(14.)).bg(rgb(0xffffff)),
-            ))
+            .child(
+                Button::icon_only(
+                    "save",
+                    "Save document",
+                    div().size(px(14.)).bg(rgb(0xffffff)),
+                )
+                .on_click(move |_, window, _| {
+                    save[0].set(save[0].get() + 1);
+                    window.refresh();
+                }),
+            )
             .child(
                 Button::icon_only("find", "Find", div().size(px(14.)).bg(rgb(0xffffff)))
-                    .tooltip_text("Find in file (Ctrl+F)"),
+                    .tooltip_text("Find in file (Ctrl+F)")
+                    .on_click(move |_, window, _| {
+                        find[1].set(find[1].get() + 1);
+                        window.refresh();
+                    }),
             )
             .into_any_element()
-    });
+    }
+}
+
+fn shows(host: &vespertine_test_host::TestHost, text: &str) -> bool {
+    host.painted_text().iter().any(|painted| painted == text)
+}
+
+/// Focus listeners run when the window's effects flush, after the frame that moved focus; the
+/// state they change draws in the next frame.
+fn settle(host: &mut vespertine_test_host::TestHost) {
+    host.flush();
+    host.app().update(|_| ());
+    host.flush();
+}
+
+#[test]
+fn controls_icon_only_button_shows_its_label_as_the_tooltip_after_500_ms_of_hover() {
+    require_backend!();
+    let mut host = host(300.0, 200.0, icon_column(counts()));
     assert!(!host.painted_text().iter().any(|text| text.contains("Save")));
     host.mouse_move(38.0, 38.0, None, "").unwrap();
-    host.advance_executor_time(1000.0).unwrap();
+    host.advance_executor_time(499.0).unwrap();
+    assert!(!shows(&host, "Save document"), "not yet at 499 ms");
+    host.advance_executor_time(1.0).unwrap();
     assert!(
-        host.painted_text()
-            .iter()
-            .any(|text| text == "Save document"),
+        shows(&host, "Save document"),
         "the label is the tooltip text: {:?}",
         host.painted_text()
     );
+    // Leaving hides it as soon as the pointer is off the control.
+    host.mouse_move(250.0, 180.0, None, "").unwrap();
+    host.flush();
+    assert!(!shows(&host, "Save document"));
     // An explicit tooltip text wins over the label.
     host.mouse_move(38.0, 86.0, None, "").unwrap();
     host.advance_executor_time(1000.0).unwrap();
     assert!(
-        host.painted_text()
-            .iter()
-            .any(|text| text == "Find in file (Ctrl+F)"),
+        shows(&host, "Find in file (Ctrl+F)"),
         "{:?}",
         host.painted_text()
     );
     // The accessible name is the label either way.
     node(&mut host, "button", Some("Find"));
+}
+
+#[test]
+fn controls_icon_only_tooltip_opens_at_once_for_keyboard_focus_and_never_takes_focus() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(300.0, 200.0, icon_column(clicks.clone()));
+    // Tab: keyboard modality, so the tooltip opens with no delay and no time passing.
+    tab(&mut host);
+    settle(&mut host);
+    assert!(
+        shows(&host, "Save document"),
+        "Tab opens the label tooltip at once: {:?}",
+        host.painted_text()
+    );
+    // The surface holds no focus: Enter still activates the focused button.
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(clicks[0].get(), 1, "focus stayed on the button");
+    // Escape closes it (through the dismissal stack) without moving focus.
+    host.simulate_keystrokes("escape", None).unwrap();
+    settle(&mut host);
+    assert!(!shows(&host, "Save document"), "Escape closes it");
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(clicks[0].get(), 2, "closing did not move focus");
+    // Tab on to the next button: the first closes (blur), the second opens its own text.
+    tab(&mut host);
+    settle(&mut host);
+    assert!(shows(&host, "Find in file (Ctrl+F)"));
+    assert!(!shows(&host, "Save document"));
+    // Blur closes it.
+    host.blur().unwrap();
+    settle(&mut host);
+    assert!(!shows(&host, "Find in file (Ctrl+F)"), "blur closes it");
+}
+
+#[test]
+fn controls_icon_only_tooltip_does_not_open_for_a_mouse_press_and_a_press_closes_it() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(300.0, 200.0, icon_column(clicks.clone()));
+    // A press focuses the button by pointer: no tooltip stays open (the pointer then rests
+    // elsewhere so the hover tooltip is not involved).
+    host.click(38.0, 38.0, 0, "").unwrap();
+    host.mouse_move(250.0, 180.0, None, "").unwrap();
+    settle(&mut host);
+    assert_eq!(clicks[0].get(), 1);
+    assert!(
+        !shows(&host, "Save document"),
+        "pointer-initiated focus leaves nothing open"
+    );
+    // Keyboard focus opens the second button's tooltip; a press on it closes it.
+    tab(&mut host);
+    settle(&mut host);
+    assert!(shows(&host, "Find in file (Ctrl+F)"));
+    host.mouse_down(38.0, 86.0, 0, "").unwrap();
+    settle(&mut host);
+    assert!(!shows(&host, "Find in file (Ctrl+F)"), "a press closes it");
 }
 
 /// The fill sampled inside the button box at (30, 38), clear of the label.

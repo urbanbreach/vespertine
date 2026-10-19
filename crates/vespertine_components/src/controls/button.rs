@@ -23,7 +23,10 @@
 //!   non-held key-down and Space on key-up, exactly once per physical press.
 //! * **Icon-only** actions are created with [`Button::icon_only`], which requires the
 //!   accessible label; the label is also the tooltip text unless [`Button::tooltip_text`] gives
-//!   another one. Tooltips never take keyboard focus.
+//!   another one. The tooltip is the CMP-004 text tooltip: hover shows it above the pointer after
+//!   the default 500 ms ([`TooltipSpec`]), and keyboard focus (keyboard modality) shows it at once
+//!   through the button's own [`FocusTooltip`]; it closes on blur, Escape or a press and never
+//!   takes keyboard focus.
 //! * **Disabled context**: a button inside a [`disabled_group`](super::disabled_group) is
 //!   disabled whatever its own flag says.
 
@@ -31,15 +34,14 @@ use std::{cell::Cell, rc::Rc};
 
 use vespertine::{
     ActivityIndicator, AnyElement, App, Bounds, ClickEvent, Context, ElementId, FocusHandle, Hsla,
-    InteractiveElement, IntoElement, KeyDownEvent, KeyboardButton, KeyboardClickEvent,
+    InteractiveElement, IntoElement, KeyDownEvent, KeyboardButton, KeyboardClickEvent, MouseButton,
     ParentElement, Pixels, Refineable, RenderOnce, Role, SharedString, StatefulInteractiveElement,
     StyleRefinement, Styled, Subscription, Toggled, Window, div, hsla, prelude::FluentBuilder, px,
 };
 
-use super::{
-    ActivationKey, ActivationLatch, effective_disabled, text_tooltip, track_bounds, with_opacity,
-};
+use super::{ActivationKey, ActivationLatch, effective_disabled, track_bounds, with_opacity};
 use crate::tokens::ComponentTokens;
+use crate::tooltip::{text::TooltipSpec, trigger::FocusTooltip};
 
 /// Default button height.
 pub const BUTTON_HEIGHT: Pixels = px(36.);
@@ -118,6 +120,11 @@ impl ControlState {
             _blur: blur,
         }
     }
+}
+
+/// The focus-opened tooltip a button with tooltip text keeps across frames.
+struct TooltipState {
+    tip: FocusTooltip,
 }
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -362,6 +369,25 @@ impl RenderOnce for Button {
                 .flatten()
         });
 
+        // The tooltip: hover through the CMP-004 text tooltip (above the pointer, so the control
+        // under it stays uncovered), keyboard focus through the button's own focus-opened surface.
+        let tip = tooltip.as_ref().map(|_| {
+            window.use_keyed_state((self.id.clone(), "tooltip"), cx, |window, cx| {
+                TooltipState {
+                    tip: FocusTooltip::new(&focus, window, cx, |state: &mut TooltipState| {
+                        &mut state.tip
+                    }),
+                }
+            })
+        });
+        let tip_parts = tip.as_ref().zip(tooltip.as_ref()).map(|(state, text)| {
+            let state = state.read(cx);
+            (
+                state.tip.probe().into_any_element(),
+                state.tip.surface(text.clone(), tokens.clone()),
+            )
+        });
+
         // The busy indicator draws from the shared activity-indicator clock (ANM-004): it
         // renews a lease only while painted, parks otherwise and honors reduced motion.
         let show_indicator = busy && !disabled;
@@ -426,10 +452,22 @@ impl RenderOnce for Button {
                 })
             })
             .when_some(tooltip, |button, text| {
-                button.tooltip(text_tooltip(text, tokens.clone()))
+                TooltipSpec::new(text)
+                    .above_pointer()
+                    .tokens(tokens.clone())
+                    .apply(button)
+            })
+            .when_some(tip, |button, state| {
+                // A pointer press closes the focus-opened surface (R3).
+                button.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    state.update(cx, |state, cx| state.tip.hide(window, cx));
+                })
             })
             .child(content)
-            .child(track_bounds(bounds));
+            .child(track_bounds(bounds))
+            .when_some(tip_parts, |button, (probe, surface)| {
+                button.child(probe).children(surface)
+            });
 
         if let Some(frame) = indicator {
             button = button.child(

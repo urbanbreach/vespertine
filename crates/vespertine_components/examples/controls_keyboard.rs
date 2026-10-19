@@ -7,6 +7,8 @@
 //! disabled and busy flags. The disabled button is skipped by Tab; the busy one is reachable but
 //! starts nothing.
 //!
+//! The icon-only button's tooltip opens with Tab, with no delay.
+//!
 //! Without arguments the script runs offscreen on the production test host and the process exits 0
 //! when every check holds (1 otherwise). With `--interactive` the same controls open in a window.
 
@@ -142,6 +144,16 @@ fn main() {
     press(&mut host, "enter");
     checks.check(state.saves.get() == 1, "Tab, Enter: the button activates");
     host.simulate_keystrokes("tab", None).unwrap();
+    // Focus listeners run when the effects flush; the state they change draws in the next frame.
+    host.flush();
+    host.app().update(|_| ());
+    host.flush();
+    checks.check(
+        host.painted_text()
+            .iter()
+            .any(|text| text == "Find in files"),
+        "Tab: the icon-only button's CMP-004 tooltip opens at once and takes no focus",
+    );
     press(&mut host, "space");
     checks.check(
         state.searches.get() == 1,

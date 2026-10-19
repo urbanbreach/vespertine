@@ -89,6 +89,7 @@ pub struct TooltipSpec {
     placement: Placement,
     hoverable: bool,
     show_delay: Option<Duration>,
+    tokens: Option<ComponentTokens>,
 }
 
 impl TooltipSpec {
@@ -99,6 +100,7 @@ impl TooltipSpec {
             placement: Placement::AtPointer,
             hoverable: false,
             show_delay: None,
+            tokens: None,
         }
     }
 
@@ -120,12 +122,22 @@ impl TooltipSpec {
         self
     }
 
+    /// Uses these token roles instead of [`ComponentTokens::current`] (a control that carries its
+    /// own tokens shows its tooltip in them).
+    pub fn tokens(mut self, tokens: ComponentTokens) -> Self {
+        self.tokens = Some(tokens);
+        self
+    }
+
     fn builder(&self) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
         let text = self.text.clone();
         let placement = self.placement;
+        let tokens = self.tokens.clone();
         move |window, cx| {
             let above = (placement == Placement::AbovePointer).then(|| window.mouse_position());
-            let tokens = ComponentTokens::current(cx);
+            let tokens = tokens
+                .clone()
+                .unwrap_or_else(|| ComponentTokens::current(cx));
             let text = text.clone();
             cx.new(|_| TextTooltip {
                 text,

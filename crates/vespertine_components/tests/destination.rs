@@ -259,11 +259,10 @@ fn a_long_unicode_destination_card_stays_inside_the_window_wraps_scrolls_and_cop
     host.flush();
     host.advance_executor_time(550.).unwrap();
     host.flush();
-    let bounds = {
-        let cards = cards.clone();
-        host.app().update(|cx| cards.read(cx).card_bounds())
-    }
-    .expect("the card is painted");
+    let bounds = host
+        .app()
+        .update(|cx| cards.read(cx).card_bounds())
+        .expect("the card is painted");
     let card = measured.borrow().clone().expect("the card was measured");
 
     // Inside the window (the 8 px containment inset included), although the link ends at the
@@ -366,7 +365,7 @@ fn a_long_unicode_destination_card_stays_inside_the_window_wraps_scrolls_and_cop
     );
     // Pressing on the occluding card moved focus off the page (nothing under the pointer was
     // focusable); the owner's focus root takes it back before the copy chord.
-    let (window, page) = (host.window(), page.clone());
+    let window = host.window();
     host.app()
         .update_window(window, |_, window, cx| {
             let focus = page.read(cx).focus.clone();
