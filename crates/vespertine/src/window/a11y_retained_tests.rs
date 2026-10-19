@@ -262,7 +262,7 @@ fn retained_and_full_trees_agree_on_every_frame(cx: &mut TestAppContext) {
                 fixture.set_digit(cx, button, next(10) as u32);
             }
             2 => {
-                let button = Some(next(24) as usize).filter(|_| next(5) != 0);
+                let button = (next(5) != 0).then_some(next(24) as usize);
                 for window in [retained, full] {
                     fixture.focus_without_refresh(cx, window, button);
                 }
@@ -348,7 +348,7 @@ fn replayed_views_reevaluate_focus_and_splice_rebuilt_children(cx: &mut TestAppC
 #[crate::test]
 fn replay_of_a_replay_keeps_the_tree_identical(cx: &mut TestAppContext) {
     let fixture = Fixture::new(cx, 4);
-    let panels = fixture.panels.clone();
+    let panels = fixture.panels;
     let window: AnyWindowHandle = cx.add_window(move |_, _| Dashboard { panels }).into();
     draw(cx, window);
     draw(cx, window);
