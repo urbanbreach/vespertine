@@ -371,6 +371,7 @@ impl CompositionShared {
                 .then_some(RouteSurface {
                     id: entry.id,
                     bounds: slot.logical_bounds,
+                    above_overlay: inner.tree.is_above_overlay(entry.id),
                 })
             })
             .collect()

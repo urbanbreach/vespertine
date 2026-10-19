@@ -8,8 +8,9 @@
 //!
 //! * Candidates are visible surfaces whose current bounds contain the pointer, topmost first
 //!   (stacking order of the surface tree).
-//! * A framework-captured event is delivered to no producer, and a pointer that becomes
-//!   covered counts as leaving its recipient.
+//! * A framework-captured event is delivered to no producer stacked below the overlay (a
+//!   surface hosted above the overlay still receives it), and a pointer that becomes covered
+//!   counts as leaving its recipient.
 //! * Crossing from one surface to another sends a leave to the previous recipient (with the
 //!   new pointer position) before the enter and move of the new one.
 //! * A press keeps its recipient through the matching release even when the pointer moves
@@ -47,6 +48,9 @@ pub struct RouteSurface {
     pub id: SurfaceId,
     /// Its current bounds in window-content logical pixels.
     pub bounds: Bounds<Pixels>,
+    /// The surface is hosted above the overlay (positioned while prepainting deferred
+    /// content), so overlay input capture does not apply to it.
+    pub above_overlay: bool,
 }
 
 /// One event for one surface.
@@ -109,6 +113,16 @@ impl PointerRouter {
             .map(|surface| surface.id)
     }
 
+    /// The candidates the framework did not capture the event from: all of them, or only the
+    /// surfaces hosted above the overlay when the overlay (or a handler) captured it.
+    fn eligible(surfaces: &[RouteSurface], captured: bool) -> Vec<RouteSurface> {
+        surfaces
+            .iter()
+            .filter(|surface| !captured || surface.above_overlay)
+            .copied()
+            .collect()
+    }
+
     fn is_live(surfaces: &[RouteSurface], id: SurfaceId) -> bool {
         surfaces.iter().any(|surface| surface.id == id)
     }
@@ -134,15 +148,14 @@ impl PointerRouter {
             self.recipient = None;
         }
         let mut out = Vec::new();
+        let eligible = Self::eligible(surfaces, captured);
         match input {
             PointerInput::Move(event) => {
                 let target = if let Some(owner) = self.owner {
                     // A press in progress keeps every move with its owner.
                     Some(owner)
-                } else if captured {
-                    None
                 } else {
-                    Self::hit(surfaces, event.position)
+                    Self::hit(&eligible, event.position)
                 };
                 self.cross_to(
                     target,
@@ -159,11 +172,7 @@ impl PointerRouter {
                 }
             }
             PointerInput::Down(event) => {
-                let target = if captured {
-                    None
-                } else {
-                    Self::hit(surfaces, event.position)
-                };
+                let target = Self::hit(&eligible, event.position);
                 self.cross_to(
                     target,
                     event.position,
@@ -194,19 +203,11 @@ impl PointerRouter {
                     });
                     if self.owner.is_none() {
                         // The press is over: the pointer now belongs to whatever is under it.
-                        let target = if captured {
-                            None
-                        } else {
-                            Self::hit(surfaces, event.position)
-                        };
+                        let target = Self::hit(&eligible, event.position);
                         self.cross_to(target, event.position, None, event.modifiers, &mut out);
                     }
                 } else {
-                    let target = if captured {
-                        None
-                    } else {
-                        Self::hit(surfaces, event.position)
-                    };
+                    let target = Self::hit(&eligible, event.position);
                     self.cross_to(target, event.position, None, event.modifiers, &mut out);
                 }
             }
@@ -233,10 +234,7 @@ impl PointerRouter {
         surfaces: &[RouteSurface],
         captured: bool,
     ) -> Vec<SurfaceId> {
-        if captured {
-            return Vec::new();
-        }
-        surfaces
+        Self::eligible(surfaces, captured)
             .iter()
             .filter(|surface| surface.bounds.contains(&event.position))
             .map(|surface| surface.id)
@@ -307,10 +305,12 @@ mod tests {
             RouteSurface {
                 id: upper,
                 bounds: bounds(50.0, 0.0, 100.0, 100.0),
+                above_overlay: false,
             },
             RouteSurface {
                 id: lower,
                 bounds: bounds(0.0, 0.0, 100.0, 100.0),
+                above_overlay: false,
             },
         ];
         (lower, upper, list)
@@ -412,6 +412,22 @@ mod tests {
             kinds(&router.route(&mv(12.0, 10.0, None), &list, false)),
             [(lower, "enter"), (lower, "move")]
         );
+    }
+
+    #[test]
+    fn a11_a_surface_hosted_above_the_overlay_is_not_captured_by_it() {
+        let (lower, upper, mut list) = surfaces();
+        list[0].above_overlay = true;
+        let mut router = PointerRouter::default();
+        // Over both: the hosted-above surface is topmost and receives the press.
+        assert_eq!(
+            kinds(&router.route(&down(70.0, 10.0), &list, true)),
+            [(upper, "enter"), (upper, "down")]
+        );
+        let mut router = PointerRouter::default();
+        // Only the lower surface lies under the pointer: the overlay captured it.
+        assert!(router.route(&down(10.0, 10.0), &list, true).is_empty());
+        let _ = lower;
     }
 
     #[test]

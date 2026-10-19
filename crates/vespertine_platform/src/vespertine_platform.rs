@@ -3,6 +3,10 @@
 
 pub use vespertine::Platform;
 
+/// The reference solid-color producer for native surfaces (PLT-001).
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub use vespertine_linux::{SolidChild, SolidProducer};
+
 use std::rc::Rc;
 
 /// Returns a background executor for the current platform.

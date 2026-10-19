@@ -1,5 +1,5 @@
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     hash::Hash,
     os::{
         fd::{AsRawFd, BorrowedFd, FromRawFd as _, RawFd},
@@ -39,7 +39,7 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
     protocol::{
         wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
-        wl_shm_pool, wl_surface,
+        wl_shm_pool, wl_subcompositor, wl_subsurface, wl_surface,
     },
 };
 use wayland_protocols::wp::pointer_gestures::zv1::client::{
@@ -249,6 +249,7 @@ pub struct Globals {
     pub wm_base: xdg_wm_base::XdgWmBase,
     pub shm: wl_shm::WlShm,
     pub seat: wl_seat::WlSeat,
+    pub subcompositor: Option<wl_subcompositor::WlSubcompositor>,
     pub viewporter: Option<wp_viewporter::WpViewporter>,
     pub fractional_scale_manager:
         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
@@ -300,6 +301,7 @@ impl Globals {
             wm_base: globals
                 .bind(&qh, 1..=6, ())
                 .context("Wayland compositor does not provide xdg_wm_base")?,
+            subcompositor: globals.bind(&qh, 1..=1, ()).ok(),
             viewporter: globals.bind(&qh, 1..=1, ()).ok(),
             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
@@ -372,6 +374,14 @@ pub(crate) struct WaylandClientState {
     last_ime_cursor_rectangle: Option<ImeCursorRectangle>,
     // Surface to Window mapping
     windows: HashMap<ObjectId, WaylandWindowStatePtr>,
+    // Composition subsurfaces (overlay planes, native children) to the window they belong to
+    // (PLT-001 R20): pointer and keyboard events entering them resolve to that window.
+    subsurfaces: HashMap<ObjectId, SubsurfaceInput>,
+    // Where the entered surface's origin lies in window-content coordinates: pointer
+    // coordinates are local to the surface they entered.
+    pointer_surface_origin: Point<Pixels>,
+    // The window whose native child holds keyboard focus (PLT-001 R15).
+    keyboard_focused_native: Option<WaylandWindowStatePtr>,
     // Output to scale mapping
     outputs: HashMap<ObjectId, Output>,
     // Kept after each `done`, since outputs only resend the properties that
@@ -819,12 +829,102 @@ impl WaylandClientStatePtr {
         {
             state.keyboard_focused_window = Some(window);
         }
+        state
+            .subsurfaces
+            .retain(|_, input| !input.window.ptr_eq(&closed_window));
+        if let Some(window) = state.keyboard_focused_native.take()
+            && !window.ptr_eq(&closed_window)
+        {
+            state.keyboard_focused_native = Some(window);
+        }
         if let Some(window) = state.cursor_hidden_window.take()
             && !window.ptr_eq(&closed_window)
         {
             state.cursor_hidden_window = Some(window);
         }
     }
+
+    /// Makes pointer and keyboard events entering `surface` resolve to `window` (PLT-001 R20).
+    pub fn register_subsurface(&self, surface: ObjectId, input: SubsurfaceInput) {
+        if let Some(client) = self.0.upgrade() {
+            client.borrow_mut().subsurfaces.insert(surface, input);
+        }
+    }
+
+    /// Forgets a composition subsurface that is being destroyed.
+    pub fn unregister_subsurface(&self, surface: &ObjectId) {
+        let Some(client) = self.0.upgrade() else {
+            return;
+        };
+        let Ok(mut state) = client.try_borrow_mut() else {
+            return;
+        };
+        if let Some(input) = state.subsurfaces.remove(surface)
+            && state
+                .keyboard_focused_native
+                .as_ref()
+                .is_some_and(|window| window.ptr_eq(&input.window))
+            && !state
+                .subsurfaces
+                .values()
+                .any(|other| other.native && other.window.ptr_eq(&input.window))
+        {
+            state.keyboard_focused_native = None;
+        }
+    }
+
+    /// Whether a native child of `window` holds keyboard focus.
+    pub fn native_focus_active(&self, window: &WaylandWindowStatePtr) -> bool {
+        self.0.upgrade().is_some_and(|client| {
+            client
+                .borrow()
+                .keyboard_focused_native
+                .as_ref()
+                .is_some_and(|native| native.ptr_eq(window))
+        })
+    }
+
+    /// Wayland offers a client no request that moves keyboard focus between its own
+    /// surfaces, so the framework window takes over the key events the compositor keeps
+    /// sending to the focused native surface (PLT-001 R15).
+    pub fn focus_framework_window(&self, window: &WaylandWindowStatePtr) {
+        let Some(client) = self.0.upgrade() else {
+            return;
+        };
+        let mut state = client.borrow_mut();
+        if !state
+            .keyboard_focused_native
+            .as_ref()
+            .is_some_and(|native| native.ptr_eq(window))
+        {
+            return;
+        }
+        state.keyboard_focused_native = None;
+        state.keyboard_focused_window = Some(window.clone());
+        state.enter_token = Some(());
+        let executor = state.globals.executor.clone();
+        drop(state);
+        // Called while the window is presenting: report the focus change once it is done.
+        let window = window.clone();
+        executor
+            .spawn(async move { window.set_focused(true) })
+            .detach();
+    }
+}
+
+/// How pointer and keyboard events of a composition subsurface resolve to the window that owns
+/// it (PLT-001 R16, R20).
+#[derive(Clone)]
+pub(crate) struct SubsurfaceInput {
+    pub window: WaylandWindowStatePtr,
+    /// Whether pointer events entering the surface are delivered to the framework window: always
+    /// for overlay planes, only on request for native children (which otherwise keep their own
+    /// event path).
+    pub framework_pointer: Rc<Cell<bool>>,
+    /// The origin of the surface in window-content logical pixels.
+    pub origin: Rc<Cell<Point<Pixels>>>,
+    /// A native child (as opposed to an overlay plane).
+    pub native: bool,
 }
 
 impl WaylandClientState {
@@ -1089,6 +1189,9 @@ impl WaylandConnection {
             output_globals,
             wl_outputs,
             windows: HashMap::default(),
+            subsurfaces: HashMap::default(),
+            pointer_surface_origin: Point::default(),
+            keyboard_focused_native: None,
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
             keymap_state: None,
@@ -1710,6 +1813,26 @@ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextI
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
+delegate_noop!(WaylandClientStatePtr: ignore wl_subcompositor::WlSubcompositor);
+delegate_noop!(WaylandClientStatePtr: ignore wl_subsurface::WlSubsurface);
+
+/// The window a pointer entering `surface` is delivered to, with the origin of the surface in
+/// window-content coordinates (PLT-001 R20): windows themselves, overlay planes and the native
+/// children that opted into framework forwarding.
+fn pointer_target(
+    state: &WaylandClientState,
+    surface: &ObjectId,
+) -> (Option<WaylandWindowStatePtr>, Point<Pixels>) {
+    if let Some(window) = state.windows.get(surface) {
+        return (Some(window.clone()), Point::default());
+    }
+    match state.subsurfaces.get(surface) {
+        Some(input) if input.framework_pointer.get() => {
+            (Some(input.window.clone()), input.origin.get())
+        }
+        _ => (None, Point::default()),
+    }
+}
 
 impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
     fn event(
@@ -2124,6 +2247,15 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
             }
             wl_keyboard::Event::Enter { surface, .. } => {
                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
+                state.keyboard_focused_native = None;
+                if state.keyboard_focused_window.is_none()
+                    && let Some(input) = state.subsurfaces.get(&surface.id())
+                    && input.native
+                {
+                    // A native child took keyboard focus: its producer receives the keys
+                    // until the framework window takes focus back (PLT-001 R15).
+                    state.keyboard_focused_native = Some(input.window.clone());
+                }
                 state.enter_token = Some(());
 
                 if let Some(window) = state.keyboard_focused_window.clone() {
@@ -2132,7 +2264,18 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 }
             }
             wl_keyboard::Event::Leave { surface, .. } => {
-                let keyboard_focused_window = get_window(&mut state, &surface.id());
+                let mut keyboard_focused_window = get_window(&mut state, &surface.id());
+                if keyboard_focused_window.is_none()
+                    && let Some(input) = state.subsurfaces.get(&surface.id())
+                    && input.native
+                {
+                    // The framework window took over the keys of this native surface.
+                    keyboard_focused_window = state
+                        .keyboard_focused_window
+                        .clone()
+                        .filter(|window| window.ptr_eq(&input.window));
+                    state.keyboard_focused_native = None;
+                }
                 state.keyboard_focused_window = None;
                 state.enter_token.take();
                 // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
@@ -2431,12 +2574,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 surface_y,
                 ..
             } => {
-                let position = point(px(surface_x as f32), px(surface_y as f32));
+                let (target, origin) = pointer_target(&state, &surface.id());
+                state.pointer_surface_origin = origin;
+                let position = point(
+                    px(surface_x as f32) + origin.x,
+                    px(surface_y as f32) + origin.y,
+                );
                 state.serial_tracker.update(SerialKind::MouseEnter, serial);
                 state.mouse_location = Some(position);
                 state.button_pressed = None;
 
-                if let Some(window) = get_window(&mut state, &surface.id()) {
+                if let Some(window) = target {
                     state.mouse_focused_window = Some(window.clone());
 
                     if state.enter_token.is_some() {
@@ -2493,7 +2641,11 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                 if state.mouse_focused_window.is_none() {
                     return;
                 }
-                state.mouse_location = Some(point(px(surface_x as f32), px(surface_y as f32)));
+                let origin = state.pointer_surface_origin;
+                state.mouse_location = Some(point(
+                    px(surface_x as f32) + origin.x,
+                    px(surface_y as f32) + origin.y,
+                ));
                 state.restore_cursor_after_hide();
 
                 if let Some(window) = state.mouse_focused_window.clone() {

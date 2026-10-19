@@ -31,6 +31,7 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::linux::wayland::{
+    composition::WaylandComposition,
     decorations::{mode_after_request, mode_from_configure},
     display::WaylandDisplay,
     serial::SerialKind,
@@ -143,6 +144,10 @@ pub struct WaylandWindowState {
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
     accesskit_adapter: Option<accesskit_unix::Adapter>,
+    /// Scene layering around native content (PLT-001), once enabled.
+    composition: Option<WaylandComposition>,
+    gpu_context: vespertine_wgpu::GpuContext,
+    compositor_gpu: Option<CompositorGpuHint>,
 }
 
 pub enum WaylandSurfaceState {
@@ -598,7 +603,7 @@ impl WaylandWindowState {
                 // Prefer Mailbox to avoid blocking. Falls back to FIFO if Mailbox is unsupported.
                 preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
             };
-            WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
+            WgpuRenderer::new(gpu_context.clone(), &raw_window, config, compositor_gpu)?
         };
 
         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
@@ -654,6 +659,9 @@ impl WaylandWindowState {
             window_controls: WindowControls::default(),
             client_inset: None,
             accesskit_adapter: None,
+            composition: None,
+            gpu_context,
+            compositor_gpu,
         })
     }
 
@@ -906,6 +914,11 @@ impl Drop for WaylandWindow {
         let client = state.client.clone();
 
         state.renderer.take();
+        // Overlay renderers release their GPU surfaces before the overlay surfaces go
+        // (PLT-001 R13), and every surface is gone before the window's own.
+        if let Some(mut composition) = state.composition.take() {
+            composition.teardown();
+        }
 
         // Destroy blur first, this has no dependencies.
         if let Some(blur) = &state.blur {
@@ -951,6 +964,113 @@ impl WaylandWindow {
 
     fn borrow_mut(&self) -> RefMut<'_, WaylandWindowState> {
         self.0.state.borrow_mut()
+    }
+
+    /// Opts the window into layering around native content (PLT-001 R1, R19). Idempotent.
+    fn enable_composition(&self) -> anyhow::Result<()> {
+        let mut state = self.borrow_mut();
+        if state.composition.is_some() {
+            return Ok(());
+        }
+        let scale = state.scale;
+        let logical = state.bounds.size;
+        let device = state.bounds.to_device_pixels(scale).size;
+        let composition = WaylandComposition::new(
+            self.0.clone(),
+            state.surface.clone(),
+            state.globals.clone(),
+            state.client.clone(),
+            state.gpu_context.clone(),
+            state.compositor_gpu,
+            logical,
+            device,
+            scale,
+        )?;
+        state.composition = Some(composition);
+        Ok(())
+    }
+
+    /// Tells embedders whose compositor surface was recreated to remount their content. Runs
+    /// without the window state borrowed because the callbacks are embedder code.
+    fn notify_recreations(&self) {
+        let notice = self
+            .borrow_mut()
+            .composition
+            .as_mut()
+            .and_then(|composition| composition.take_recreation_notices());
+        if let Some((composition, natives)) = notice {
+            for native in natives {
+                native.notify_recreated(composition);
+            }
+        }
+    }
+
+    /// A frame that was not drawn: the presentation is retried like a failed present.
+    fn fail_frame(&self) {
+        let mut state = self.borrow_mut();
+        state.presentation = state.presentation.failed();
+        self.0.frame_loop.set(FrameLoop::PresentationFailed);
+    }
+
+    /// Draws the base plane and, when composition is enabled, the overlay `planes` first so
+    /// that their synchronized commits are released by the base commit (PLT-001 R17, R19).
+    fn draw_frame(
+        &self,
+        scene: &Scene,
+        planes: Option<&[(Option<vespertine::SurfaceId>, &Scene)]>,
+    ) {
+        let mut state = self.borrow_mut();
+        let state = &mut *state;
+        let Some(renderer) = &mut state.renderer else {
+            return;
+        };
+
+        if renderer.device_lost() {
+            let raw_window = RawWindow {
+                window: state.surface.id().as_ptr().cast::<std::ffi::c_void>(),
+                display: state
+                    .surface
+                    .backend()
+                    .upgrade()
+                    .unwrap()
+                    .display_ptr()
+                    .cast::<std::ffi::c_void>(),
+            };
+            match renderer.recover(&raw_window) {
+                Ok(()) => {
+                    if let Some(composition) = &mut state.composition {
+                        composition.device_recovered();
+                    }
+                }
+                Err(err) => {
+                    log::warn!("GPU recovery failed, will retry on next frame: {err}");
+                }
+            }
+
+            state.redraw_requested = true;
+            return;
+        }
+
+        // Surface state changed during this VESPERTINE tick is included in this presentation.
+        state.redraw_requested = false;
+        if state.pending_frame_callback.is_none() {
+            let callback = state.surface.frame(&state.globals.qh, state.surface.id());
+            state.pending_frame_callback = Some(callback);
+        }
+        if let (Some(planes), Some(composition)) = (planes, &mut state.composition) {
+            composition.draw_planes(renderer.sprite_atlas(), planes);
+        }
+        if renderer.draw(scene) {
+            state.presentation = PresentationState::Presented;
+            self.0.frame_loop.set(FrameLoop::AwaitingCallback);
+        } else {
+            state.presentation = state.presentation.failed();
+            self.0.frame_loop.set(FrameLoop::PresentationFailed);
+        }
+
+        if renderer.needs_redraw() {
+            state.redraw_requested = true;
+        }
     }
 
     pub fn new(
@@ -1620,6 +1740,10 @@ impl WaylandWindowStatePtr {
             if let Some(renderer) = &mut state.renderer {
                 renderer.update_drawable_size(device_bounds.size);
             }
+            let (logical_size, scale) = (state.bounds.size, state.scale);
+            if let Some(composition) = &mut state.composition {
+                composition.resize(logical_size, device_bounds.size, scale);
+            }
             (state.bounds.size, state.scale)
         };
 
@@ -2133,51 +2257,96 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn draw(&self, scene: &Scene) {
-        let mut state = self.borrow_mut();
-        let state = &mut *state;
-        let Some(renderer) = &mut state.renderer else {
-            return;
-        };
+        self.draw_frame(scene, None);
+    }
 
-        if renderer.device_lost() {
-            let raw_window = RawWindow {
-                window: state.surface.id().as_ptr().cast::<std::ffi::c_void>(),
-                display: state
-                    .surface
-                    .backend()
-                    .upgrade()
-                    .unwrap()
-                    .display_ptr()
-                    .cast::<std::ffi::c_void>(),
-            };
-            match renderer.recover(&raw_window) {
-                Ok(()) => {}
-                Err(err) => {
-                    log::warn!("GPU recovery failed, will retry on next frame: {err}");
-                }
+    fn enable_scene_overlay(&self) -> anyhow::Result<()> {
+        self.enable_composition()
+    }
+
+    fn enable_window_composition(&self) -> anyhow::Result<()> {
+        self.enable_composition()
+    }
+
+    fn native_composition(&self) -> Option<vespertine::NativeComposition> {
+        self.borrow().composition.as_ref()?.native_composition()
+    }
+
+    fn draw_layered(&self, scene: &Scene, overlay_start: usize, capture: bool) {
+        // The overlay's input region already follows capture (set_overlay_input_region).
+        let _ = capture;
+        if self.borrow().composition.is_none() {
+            return self.draw(scene);
+        }
+        self.notify_recreations();
+        match scene.split_at_overlay(overlay_start) {
+            Ok((base, overlay)) => self.draw_frame(&base, Some(&[(None, &overlay)])),
+            Err(error) => {
+                log::error!("the frame is not drawn, its clip scopes cannot be balanced: {error}");
+                self.fail_frame();
             }
+        }
+    }
 
-            state.redraw_requested = true;
-            return;
-        }
+    fn draw_composed(&self, composed: &vespertine::ComposedScene) -> anyhow::Result<()> {
+        let Some(base) = self
+            .borrow()
+            .composition
+            .as_ref()
+            .map(|composition| composition.base_surface())
+        else {
+            anyhow::bail!("window composition is not enabled");
+        };
+        self.notify_recreations();
+        let empty = Scene::default();
+        let base_scene = composed
+            .layers
+            .iter()
+            .find(|layer| Some(layer.surface) == base)
+            .map_or(&empty, |layer| &layer.scene);
+        let planes: Vec<(Option<vespertine::SurfaceId>, &Scene)> = composed
+            .layers
+            .iter()
+            .filter(|layer| Some(layer.surface) != base)
+            .map(|layer| (Some(layer.surface), &layer.scene))
+            .collect();
+        self.draw_frame(base_scene, Some(&planes));
+        Ok(())
+    }
 
-        // Surface state changed during this VESPERTINE tick is included in this presentation.
-        state.redraw_requested = false;
-        if state.pending_frame_callback.is_none() {
-            let callback = state.surface.frame(&state.globals.qh, state.surface.id());
-            state.pending_frame_callback = Some(callback);
+    fn set_overlay_input_region(&self, region: &[Bounds<Pixels>]) {
+        if let Some(composition) = &mut self.borrow_mut().composition {
+            composition.set_overlay_input_region(region);
         }
-        if renderer.draw(scene) {
-            state.presentation = PresentationState::Presented;
-            self.0.frame_loop.set(FrameLoop::AwaitingCallback);
-        } else {
-            state.presentation = state.presentation.failed();
-            self.0.frame_loop.set(FrameLoop::PresentationFailed);
-        }
+    }
 
-        if renderer.needs_redraw() {
-            state.redraw_requested = true;
-        }
+    fn create_native_attachment(
+        &self,
+        surface: vespertine::SurfaceId,
+        kind: vespertine::SurfaceKind,
+    ) -> anyhow::Result<Rc<dyn vespertine::NativeAttachment>> {
+        let mut state = self.borrow_mut();
+        let Some(composition) = &mut state.composition else {
+            anyhow::bail!("window composition is not enabled");
+        };
+        Ok(composition.create_native(surface, kind)?)
+    }
+
+    fn sync_composition_order(&self, layout: &vespertine::CompositionLayout) -> anyhow::Result<()> {
+        let mut state = self.borrow_mut();
+        let Some(composition) = &mut state.composition else {
+            anyhow::bail!("window composition is not enabled");
+        };
+        composition.sync_order(layout)
+    }
+
+    fn native_focus_active(&self) -> bool {
+        self.borrow().client.native_focus_active(&self.0)
+    }
+
+    fn focus_framework_window(&self) {
+        let client = self.borrow().client.clone();
+        client.focus_framework_window(&self.0);
     }
 
     fn frame_requester(&self) -> Option<Rc<dyn Fn()>> {

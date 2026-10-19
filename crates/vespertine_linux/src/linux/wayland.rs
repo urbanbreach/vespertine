@@ -1,9 +1,11 @@
 mod client;
 mod clipboard;
+mod composition;
 mod cursor;
 mod decorations;
 mod display;
 mod popup;
+mod producer;
 mod serial;
 mod window;
 
@@ -11,6 +13,7 @@ mod window;
 pub mod layer_shell;
 
 pub(crate) use client::*;
+pub use producer::WaylandSolidProducer;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 
