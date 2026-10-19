@@ -39,7 +39,6 @@ vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_test_host = { path = "../vespertine_test_host" }
 vespertine_webview.workspace = true
-vespertine_test_host.workspace = true
 
 [[example]]
 name = "browser_surface"
@@ -72,3 +71,7 @@ path = "examples/elastic_scroll.rs"
 [[example]]
 name = "streaming_list"
 path = "examples/streaming_list.rs"
+
+[[example]]
+name = "diff_viewer"
+path = "examples/diff_viewer.rs"

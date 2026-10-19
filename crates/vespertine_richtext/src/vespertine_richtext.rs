@@ -52,7 +52,7 @@ pub use registry::{
     PaintedHighlight, PaintedText, PressTarget, RegisteredRun, Registry, RunGeometry, RunKey,
     StartRegion, SurfaceId,
 };
-pub use rich_text::RichText;
+pub use rich_text::{RichText, UnderWash};
 pub use selection::{Outcome, Selection, Span, resolve_spans, word_range};
 pub use service::{
     SELECTION_ALPHA, Scope, SelectionRequest, TextService, TextTheme, UserSelect, selection_color,

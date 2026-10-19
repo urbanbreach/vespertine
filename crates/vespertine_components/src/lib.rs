@@ -11,6 +11,7 @@
 pub mod audio;
 pub mod browser;
 pub mod chart;
+pub mod diff;
 pub mod elastic;
 pub mod floating;
 pub mod media;

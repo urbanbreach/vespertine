@@ -16,6 +16,23 @@ use vespertine::{
     Pixels, SharedString, StyledText, TextRun, Window, fill, px,
 };
 
+/// A rounded wash under the glyphs of a byte range of the displayed text. Each wrapped row of
+/// the range gets one rectangle, expanded by `expand_x` horizontally and inset by `inset_y`
+/// vertically.
+#[derive(Clone, Debug)]
+pub struct UnderWash {
+    /// Byte range in the displayed text.
+    pub range: std::ops::Range<usize>,
+    /// Fill color.
+    pub color: vespertine::Hsla,
+    /// Corner radius.
+    pub radius: Pixels,
+    /// Horizontal expansion of each rectangle.
+    pub expand_x: Pixels,
+    /// Vertical inset of each rectangle.
+    pub inset_y: Pixels,
+}
+
 /// A shaped text run of a document. Construct with [`RichText::new`].
 pub struct RichText {
     id: ElementId,
@@ -25,6 +42,7 @@ pub struct RichText {
     runs: Option<Vec<TextRun>>,
     group: Option<RunKey>,
     chrome: bool,
+    under_washes: Vec<UnderWash>,
     native: bool,
     links: Vec<Link>,
     link_options: LinkOptions,
@@ -49,6 +67,7 @@ impl RichText {
             runs: None,
             group: None,
             chrome: false,
+            under_washes: Vec::new(),
             native: false,
             links: Vec::new(),
             link_options: LinkOptions::default(),
@@ -86,6 +105,13 @@ impl RichText {
     /// washes match the exact string it paints (TXT-009 R8).
     pub fn native(mut self) -> Self {
         self.native = true;
+        self
+    }
+
+    /// Rounded washes painted under the glyphs of byte ranges of the displayed text, below the
+    /// search and selection washes (word-level change washes of diff lines).
+    pub fn under_washes(mut self, washes: Vec<UnderWash>) -> Self {
+        self.under_washes = washes;
         self
     }
 
@@ -251,6 +277,13 @@ impl Element for RichText {
         let text_layout = layout.text_layout();
         // Run backgrounds first, then search washes, then the selection wash, then the glyphs.
         text_layout.paint_background(window, cx).ok();
+        // Decorative washes sit under the search and selection washes and under the glyphs.
+        for under in &self.under_washes {
+            let range = under.range.start.min(layout.len())..under.range.end.min(layout.len());
+            for rect in layout.range_rects(range, under.expand_x, under.inset_y) {
+                window.paint_quad(fill(rect, under.color).corner_radii(under.radius));
+            }
+        }
         for highlight_wash in &washes {
             let rects =
                 layout.range_rects(highlight_wash.range.clone(), Pixels::ZERO, Pixels::ZERO);
