@@ -99,6 +99,7 @@ pub(crate) struct TestWindowState {
     pub(crate) chrome: crate::TestChromeState,
     pub(crate) composition: crate::TestCompositionState,
     pub(crate) lifecycle: TestWindowLifecycle,
+    a11y_tree_updates: usize,
 }
 
 #[derive(Clone)]
@@ -182,6 +183,7 @@ impl TestWindow {
             chrome: Default::default(),
             composition: Default::default(),
             lifecycle: TestWindowLifecycle::new(params.bounds),
+            a11y_tree_updates: 0,
         })))
     }
 
@@ -527,6 +529,11 @@ impl TestWindow {
         self.0.lock().last_a11y_tree_update.clone()
     }
 
+    /// How many tree updates the platform received from drawn frames.
+    pub fn accessibility_updates(&self) -> usize {
+        self.0.lock().a11y_tree_updates
+    }
+
     pub fn external_drag_files(&self) -> Vec<(PathBuf, bool)> {
         self.0.lock().external_drag_files.clone()
     }
@@ -861,6 +868,7 @@ impl PlatformWindow for TestWindow {
 
     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
         self.0.lock().last_a11y_tree_update = Some(tree_update);
+        self.0.lock().a11y_tree_updates += 1;
     }
 
     fn enable_scene_overlay(&self) -> anyhow::Result<()> {

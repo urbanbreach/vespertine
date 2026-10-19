@@ -899,9 +899,9 @@ fn active_drag_and_first_accessibility_frame_rebuild_every_view(cx: &mut TestApp
     draw(cx, window);
     assert_eq!(
         stats(cx, window).views_rendered,
-        5,
-        "while accessibility is active no view is replayed: replayed views would not contribute \
-         their accessibility nodes until A11Y-002 records them"
+        0,
+        "views are replayed again while accessibility is active: they contribute their logged \
+         accessibility operations (A11Y-002)"
     );
     cx.update_window(window, |_, window, _| {
         window.a11y.set_active_for_test(false)

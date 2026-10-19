@@ -2572,10 +2572,10 @@ impl Interactivity {
             if window.a11y.is_active() {
                 if let Some(global_id) = global_id {
                     let node_id = global_id.accesskit_node_id();
-                    window.a11y.set_focusable(node_id, focus_handle.id);
-                    if focus_handle.is_focused(window) {
-                        window.a11y.set_focus(node_id);
-                    }
+                    let focused = focus_handle.is_focused(window);
+                    window
+                        .a11y
+                        .register_focusable(node_id, focus_handle.id, focused);
                 } else if focus_handle.is_focused(window) {
                     // Focusable, but with no element id it can't have an
                     // accessibility node, so screen readers fall back to the

@@ -2834,7 +2834,12 @@ mod tests {
             cx.dispatch_action(TestAction);
             if with_a11y {
                 cx.update(|window, cx| {
-                    let mut targets = window.a11y.action_listeners.keys().copied();
+                    let mut targets = window
+                        .rendered_frame
+                        .a11y_listeners
+                        .iter()
+                        .flatten()
+                        .map(|listener| listener.node_id);
                     let target_node = targets
                         .next()
                         .expect("the panel's a11y listener is registered");

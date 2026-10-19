@@ -37,6 +37,8 @@ pub(crate) struct CacheKey {
     pub rem_size: Pixels,
     /// The retention context in force (see [`Window::with_retention_context`]).
     pub context: u64,
+    /// Inside an inert subtree: such views contribute no input or accessibility output.
+    pub inert: bool,
 }
 
 /// Ambient window state a view was built in, kept so the view can be built
@@ -757,6 +759,8 @@ impl PrepaintStateIndex {
             && self.hitbox_switches_index <= range.end.hitbox_switches_index
             && self.effects_index >= range.start.effects_index
             && self.effects_index <= range.end.effects_index
+            && self.a11y_index >= range.start.a11y_index
+            && self.a11y_index <= range.end.a11y_index
             && self
                 .line_layout_index
                 .within(&range.start.line_layout_index, &range.end.line_layout_index)
@@ -788,6 +792,8 @@ impl PaintIndex {
             && self.tab_handle_index <= range.end.tab_handle_index
             && self.effects_index >= range.start.effects_index
             && self.effects_index <= range.end.effects_index
+            && self.a11y_listeners_index >= range.start.a11y_listeners_index
+            && self.a11y_listeners_index <= range.end.a11y_listeners_index
             && self
                 .line_layout_index
                 .within(&range.start.line_layout_index, &range.end.line_layout_index)
@@ -816,6 +822,7 @@ impl Window {
             opacity: self.element_opacity,
             rem_size: self.rem_size(),
             context: self.retention.context,
+            inert: self.inert_depth > 0,
         }
     }
 

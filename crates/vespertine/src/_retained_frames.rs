@@ -65,6 +65,16 @@
 //! that is unique per construction rebuilds them whenever the element is rebuilt), and
 //! `Window::require_whole_view_rebuild` declares that the view being built computes state
 //! over its whole subtree, so it is rebuilt, never replayed around a rebuilt nested view.
+//! ## Accessibility
+//!
+//! While a window is accessible, every retained stretch of prepaint output also carries the
+//! ordered accessibility-building operations it produced (push a node, add a synthetic child,
+//! finish a node, associate a focus handle, claim the active descendant). A replayed view
+//! replays them through the ordinary tree builder, so the tree, the focus and the action
+//! listeners are those of a full reconstruction; focus claims are evaluated against the focus
+//! of the frame being built. The first frame after accessibility is activated reconstructs every
+//! view to seed the log, and the full tree is delivered to the platform on every accessible
+//! frame.
 //!
 //! ## Testing and benchmarking
 //!

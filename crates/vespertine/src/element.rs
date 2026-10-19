@@ -494,6 +494,7 @@ impl<E: Element> Drawable<E> {
                         }
                         self.element
                             .a11y_synthetic_children(&mut prepaint, &mut builder);
+                        builder.finish();
                     }
                     window.a11y.nodes.pop();
                 }

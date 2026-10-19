@@ -70,6 +70,8 @@ use vespertine_util::post_inc;
 use vespertine_util::{ResultExt, measure};
 
 pub(crate) mod a11y;
+#[cfg(test)]
+mod a11y_retained_tests;
 pub(crate) mod read_tracker;
 pub(crate) mod retained;
 #[cfg(test)]
@@ -1124,6 +1126,8 @@ pub(crate) struct Frame {
     /// Whether the overlay holds deferred draws, a prompt or an active drag, so it captures
     /// input (false for tooltips alone).
     pub(crate) overlay_capture: bool,
+    /// Accessibility action listeners registered while painting (A11Y-002 R3).
+    pub(crate) a11y_listeners: Vec<Option<a11y::A11yListener>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
     #[cfg(any(test, feature = "test-support"))]
@@ -1153,6 +1157,7 @@ pub(crate) struct PrepaintStateIndex {
     dispatch_tree_index: usize,
     accessed_element_states_index: usize,
     tab_handle_index: usize,
+    a11y_index: usize,
     line_layout_index: LineLayoutIndex,
     effects_index: usize,
     hitbox_switches_index: usize,
@@ -1170,6 +1175,7 @@ pub(crate) struct PaintIndex {
     surface_switches_index: usize,
     accessed_element_states_index: usize,
     tab_handle_index: usize,
+    a11y_listeners_index: usize,
     line_layout_index: LineLayoutIndex,
     effects_index: usize,
 }
@@ -1203,6 +1209,7 @@ impl PrepaintStateIndex {
                 - from.accessed_element_states_index
                 + to.accessed_element_states_index,
             tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
+            a11y_index: self.a11y_index - from.a11y_index + to.a11y_index,
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
@@ -1236,6 +1243,8 @@ impl PaintIndex {
                 - from.accessed_element_states_index
                 + to.accessed_element_states_index,
             tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
+            a11y_listeners_index: self.a11y_listeners_index - from.a11y_listeners_index
+                + to.a11y_listeners_index,
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
@@ -1271,6 +1280,7 @@ impl Frame {
             surface_switches: Vec::new(),
             hitbox_switches: Vec::new(),
             overlay_capture: false,
+            a11y_listeners: Vec::new(),
 
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds: FxHashMap::default(),
@@ -1302,6 +1312,7 @@ impl Frame {
         self.surface_switches.clear();
         self.hitbox_switches.clear();
         self.overlay_capture = false;
+        self.a11y_listeners.clear();
         self.hitboxes.clear();
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
@@ -4059,16 +4070,15 @@ impl Window {
 
     /// Whether the frame being drawn must construct every view (PRF-001 R7).
     fn retention_blocked(&mut self, cx: &App) -> bool {
-        // Replayed views do not yet contribute their accessibility nodes (the operation log
-        // of A11Y-002 is not implemented), so every frame on which accessibility is active
-        // constructs every view; the first such frame is the forced reconstruction of
-        // PRF-001 R7.
-        let a11y_active = self.a11y.activation_pending();
+        // Latch whether accessibility is active for this frame: views replayed in it
+        // contribute their logged accessibility operations (A11Y-002), so the first frame
+        // after activation constructs every view to seed the log.
+        self.a11y.sync_active_flag();
+        let a11y_active = self.a11y.is_active();
         let a11y_first_frame = a11y_active && !self.retention.a11y_was_active;
         self.retention.a11y_was_active = a11y_active;
         self.refreshing
             || a11y_first_frame
-            || a11y_active
             || retained::retained_frames_disabled()
             || self.retention.window_disabled
             || cx.active_drag.is_some()
@@ -4173,7 +4183,6 @@ impl Window {
         self.begin_composition_frame();
         self.tooltip_bounds.take();
 
-        self.a11y.sync_active_flag();
         if self.a11y.is_active() {
             self.a11y.begin_frame();
         }
@@ -4506,6 +4515,7 @@ impl Window {
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             hitbox_switches_index: self.next_frame.hitbox_switches.len(),
+            a11y_index: self.a11y.op_index(),
             line_layout_index: self.text_system.layout_index(),
             effects_index: self.next_frame.prepaint_effects.len(),
         }
@@ -4546,6 +4556,11 @@ impl Window {
         );
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+        if self.a11y.is_active() {
+            let focus = self.focus;
+            self.a11y
+                .replay(range.start.a11y_index..range.end.a11y_index, focus, None);
+        }
 
         let open_node = self.next_frame.dispatch_tree.active_node_id();
         let reused_subtree = match map {
@@ -4615,6 +4630,7 @@ impl Window {
             surface_switches_index: self.next_frame.surface_switches.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
+            a11y_listeners_index: self.next_frame.a11y_listeners.len(),
             line_layout_index: self.text_system.layout_index(),
             effects_index: self.next_frame.paint_effects.len(),
         }
@@ -4652,6 +4668,12 @@ impl Window {
         self.next_frame.mouse_listeners.extend(
             self.rendered_frame.mouse_listeners
                 [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
+                .iter_mut()
+                .map(|listener| listener.take()),
+        );
+        self.next_frame.a11y_listeners.extend(
+            self.rendered_frame.a11y_listeners
+                [range.start.a11y_listeners_index..range.end.a11y_listeners_index]
                 .iter_mut()
                 .map(|listener| listener.take()),
         );
@@ -8590,31 +8612,37 @@ impl Window {
         if self.inert_depth > 0 {
             return;
         }
-        self.a11y
-            .action_listeners
-            .entry(node_id)
-            .or_default()
-            .push((action, Box::new(listener)));
+        self.next_frame
+            .a11y_listeners
+            .push(Some(a11y::A11yListener {
+                node_id,
+                action,
+                listener: Box::new(listener),
+            }));
     }
 
     pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
-        // Take listeners out temporarily so the closures can borrow Window
-        // mutably, then restore them afterward.
-        if let Some(mut listeners) = self.a11y.action_listeners.remove(&request.target_node) {
-            let extra_data = request.data.as_ref();
-            let mut matched = false;
-            for (action, listener) in &mut listeners {
-                if *action == request.action {
-                    listener(extra_data, self, cx);
-                    matched = true;
-                }
+        // Take each listener out of the frame while it runs so that it can borrow the
+        // window mutably, then put it back.
+        let mut matched = false;
+        for ix in 0..self.rendered_frame.a11y_listeners.len() {
+            let Some(entry) = self.rendered_frame.a11y_listeners[ix].as_ref() else {
+                continue;
+            };
+            if entry.node_id != request.target_node || entry.action != request.action {
+                continue;
             }
-            self.a11y
-                .action_listeners
-                .insert(request.target_node, listeners);
-            if matched {
-                return;
+            let Some(mut entry) = self.rendered_frame.a11y_listeners[ix].take() else {
+                continue;
+            };
+            (entry.listener)(request.data.as_ref(), self, cx);
+            matched = true;
+            if let Some(slot) = self.rendered_frame.a11y_listeners.get_mut(ix) {
+                *slot = Some(entry);
             }
+        }
+        if matched {
+            return;
         }
 
         // Fall back to built-in action handling.

@@ -85,16 +85,25 @@
 //! ### Responding to actions
 //!
 //! On adapter creation, we provide a callback to the adapter, which can be used
-//! to dispatch actions. This callback forwards to [`A11y::action_listeners`], a
-//! mapping from [`NodeId`]s to action handlers (basically just `Box<dyn
-//! Fn()>`).
+//! to dispatch actions. The listeners are part of the ordinary paint output of the
+//! frame (`Frame::a11y_listeners`), so that a retained view carries them with
+//! the rest of its paint output (A11Y-002).
 //!
-//! This is populated in:
+//! They are populated in:
 //! - [`Window::on_a11y_action`], which is called by:
 //! - [`Interactivity::paint`], which is called by:
 //! - [`StatefulInteractiveElement::on_a11y_action`], which is a public-facing API
 //!
-//! These are cleared at the start of a frame, and re-populated during painting.
+//! ### Retained frames (A11Y-002)
+//!
+//! A retained view does not prepaint again, so its accessibility nodes would be
+//! missing from the tree. Every operation the tree builder receives is therefore
+//! also written to an ordered log ([`A11yOp`]): push a node, add a synthetic child,
+//! finish a node, associate a focus handle with the current node, claim the active
+//! descendant. A view's prepaint output records the stretch of that log it produced;
+//! replaying a view replays the stretch through the ordinary builder (which logs it
+//! again for the next frame), attaches the nodes to whichever node is open and
+//! re-evaluates focus claims against the current focus.
 //!
 //! [`NodeId`]: accesskit::NodeId
 
@@ -147,7 +156,6 @@ pub(crate) struct A11y {
     active_this_frame: bool,
     pub(crate) nodes: A11yNodeBuilder,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
-    pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -174,7 +182,6 @@ impl A11y {
             active_this_frame: false,
             nodes: A11yNodeBuilder::new(),
             focus_ids: FxHashMap::default(),
-            action_listeners: FxHashMap::default(),
             window_title,
             last_focus_without_node: None,
             debug: debug::A11yDebug::default(),
@@ -211,12 +218,6 @@ impl A11y {
         self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
     }
 
-    /// Whether accessibility is (still) active at this moment, as the next
-    /// [`Self::sync_active_flag`] would find it.
-    pub(crate) fn activation_pending(&self) -> bool {
-        self.is_enabled() && self.active_flag.load(Ordering::SeqCst)
-    }
-
     /// Simulates the platform adapter activating or deactivating accessibility,
     /// without a connected assistive client. Does nothing when accessibility is
     /// force-disabled.
@@ -243,6 +244,17 @@ impl A11y {
 
     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {
         self.focus_ids.insert(node_id, focus_id);
+    }
+
+    /// Associates the focus handle `focus_id` with the node being built and, when it is
+    /// the focused one, reports the node as focused. The association is logged so that a
+    /// retained view re-evaluates it against the current focus when it is replayed.
+    pub(crate) fn register_focusable(&mut self, node_id: NodeId, focus_id: FocusId, focused: bool) {
+        self.nodes.ops.push(A11yOp::Focusable { node_id, focus_id });
+        self.set_focusable(node_id, focus_id);
+        if focused {
+            self.set_focus(node_id);
+        }
     }
 
     /// Report `node_id` as the currently-focused node, if it is present in the
@@ -276,6 +288,11 @@ impl A11y {
     }
 
     pub(crate) fn set_active_descendant(&mut self, node_id: NodeId) {
+        self.nodes.ops.push(A11yOp::ActiveDescendant { node_id });
+        self.apply_active_descendant(node_id);
+    }
+
+    fn apply_active_descendant(&mut self, node_id: NodeId) {
         // The active descendant must be a descendant of the focused container,
         // not the focused node itself.
         if self.nodes.node_is_focused(node_id) {
@@ -294,8 +311,73 @@ impl A11y {
     /// Clear per-frame state and push the root node to start a new frame.
     pub(crate) fn begin_frame(&mut self) {
         self.focus_ids.clear();
-        self.action_listeners.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
+    }
+
+    /// The number of operations logged so far in the frame being built.
+    pub(crate) fn op_index(&self) -> usize {
+        self.nodes.ops.len()
+    }
+
+    /// Replays the operations `range` of the previous frame's log through the builder (which
+    /// logs them into this frame's log again). `translation` moves every replayed node's
+    /// bounds (scroll-layer replay, PRF-004); `focus` is the window's current focus.
+    pub(crate) fn replay(
+        &mut self,
+        range: std::ops::Range<usize>,
+        focus: Option<FocusId>,
+        translation: Option<(f64, f64)>,
+    ) {
+        for ix in range {
+            let Some(op) = self.nodes.previous_ops.get(ix).cloned() else {
+                debug_assert!(false, "a11y replay range outside the previous log");
+                return;
+            };
+            match op {
+                A11yOp::Push {
+                    id,
+                    mut node,
+                    #[cfg(debug_assertions)]
+                    info,
+                } => {
+                    translate_bounds(&mut node, translation);
+                    if self.nodes.push(id, node) {
+                        #[cfg(debug_assertions)]
+                        if let Some(info) = info {
+                            self.nodes.record_node_info(id, info);
+                        }
+                    }
+                }
+                A11yOp::Synthetic {
+                    id,
+                    mut node,
+                    #[cfg(debug_assertions)]
+                    info,
+                    ..
+                } => {
+                    translate_bounds(&mut node, translation);
+                    if self.nodes.push_leaf(id, node) {
+                        #[cfg(debug_assertions)]
+                        if let Some(info) = info {
+                            self.nodes.record_node_info(id, info);
+                        }
+                    }
+                }
+                A11yOp::SetCurrent { mut node } => {
+                    translate_bounds(&mut node, translation);
+                    self.nodes.replace_current_properties(node);
+                }
+                A11yOp::Pop { id } => {
+                    if self.nodes.top_is(id) {
+                        self.nodes.pop();
+                    }
+                }
+                A11yOp::Focusable { node_id, focus_id } => {
+                    self.register_focusable(node_id, focus_id, focus == Some(focus_id));
+                }
+                A11yOp::ActiveDescendant { node_id } => self.set_active_descendant(node_id),
+            }
+        }
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
@@ -318,11 +400,65 @@ impl A11y {
     }
 }
 
+/// One operation the accessibility tree builder received while a frame was prepainted
+/// (A11Y-002). The log of a frame is replayed, through the ordinary builder, for the views
+/// a retained frame does not prepaint again.
+#[derive(Clone)]
+pub(crate) enum A11yOp {
+    /// A node became the current node (a child of the previous current node).
+    Push {
+        id: NodeId,
+        node: accesskit::Node,
+        #[cfg(debug_assertions)]
+        info: Option<debug::NodeDebugInfo>,
+    },
+    /// A leaf child was added to the current node on behalf of the element that drew
+    /// content itself.
+    Synthetic {
+        id: NodeId,
+        node: accesskit::Node,
+        /// The leaf carries bounds that cannot be assumed to move with the current node.
+        #[allow(dead_code, reason = "read by scroll-layer eligibility (PRF-004)")]
+        independent_bounds: bool,
+        #[cfg(debug_assertions)]
+        info: Option<debug::NodeDebugInfo>,
+    },
+    /// The current node's own properties, changed by a synthetic-children callback.
+    SetCurrent { node: accesskit::Node },
+    /// The current node was finished.
+    Pop { id: NodeId },
+    /// A focus handle was associated with the node; focus is re-evaluated on replay.
+    Focusable { node_id: NodeId, focus_id: FocusId },
+    /// The node claimed to be the active descendant of the focused container.
+    ActiveDescendant { node_id: NodeId },
+}
+
+/// Moves the bounds of `node` by `translation` (device pixels), when it has any.
+pub(crate) fn translate_bounds(node: &mut accesskit::Node, translation: Option<(f64, f64)>) {
+    if let (Some((dx, dy)), Some(bounds)) = (translation, node.bounds()) {
+        node.set_bounds(accesskit::Rect {
+            x0: bounds.x0 + dx,
+            y0: bounds.y0 + dy,
+            x1: bounds.x1 + dx,
+            y1: bounds.y1 + dy,
+        });
+    }
+}
+
+/// An accessibility action listener registered during paint, with the node it targets.
+pub(crate) struct A11yListener {
+    pub node_id: NodeId,
+    pub action: Action,
+    pub listener: A11yActionListener,
+}
+
 /// Builder API for synthetic children. See the docs for
 /// [`Element::a11y_synthetic_children`].
 pub struct A11ySubtreeBuilder<'a> {
     parent_id: NodeId,
     nodes: &'a mut A11yNodeBuilder,
+    /// Whether the callback asked for the parent node (and may have changed it).
+    parent_touched: bool,
     /// Provenance of the real element whose `a11y_synthetic_children` is
     /// running.
     #[cfg(debug_assertions)]
@@ -334,8 +470,17 @@ impl<'a> A11ySubtreeBuilder<'a> {
         Self {
             parent_id,
             nodes,
+            parent_touched: false,
             #[cfg(debug_assertions)]
             creator: debug::NodeCreator::default(),
+        }
+    }
+
+    /// Logs the final properties of the element's node when the callback may have changed
+    /// them, so that a replay reproduces the change (A11Y-002).
+    pub(crate) fn finish(self) {
+        if self.parent_touched {
+            self.nodes.log_current_properties();
         }
     }
 
@@ -381,6 +526,7 @@ impl<'a> A11ySubtreeBuilder<'a> {
 
     /// A mutable reference to the parent node.
     pub fn parent_node(&mut self) -> &mut accesskit::Node {
+        self.parent_touched = true;
         self.nodes
             .current_node_mut()
             .expect("A11ySubtreeBuilder exists only while its element's node is on the stack")
@@ -402,6 +548,10 @@ pub(crate) struct A11yNodeBuilder {
     /// pattern, which allows a focused container to act as if a descendant is
     /// focused.
     active_descendant: Option<NodeId>,
+    /// Every operation of the frame being built, in order (A11Y-002).
+    pub(crate) ops: Vec<A11yOp>,
+    /// The operations of the preceding frame: the source of replays.
+    pub(crate) previous_ops: Vec<A11yOp>,
     #[cfg(debug_assertions)]
     node_info: FxHashMap<NodeId, debug::NodeDebugInfo>,
 }
@@ -415,6 +565,8 @@ impl A11yNodeBuilder {
             seen_ids: FxHashSet::default(),
             focus: None,
             active_descendant: None,
+            ops: Vec::new(),
+            previous_ops: Vec::new(),
             #[cfg(debug_assertions)]
             node_info: FxHashMap::default(),
         }
@@ -423,6 +575,22 @@ impl A11yNodeBuilder {
     /// Records provenance for a node already pushed this frame. Debug builds only.
     #[cfg(debug_assertions)]
     pub(crate) fn record_node_info(&mut self, id: NodeId, info: debug::NodeDebugInfo) {
+        if let Some(
+            A11yOp::Push {
+                id: logged,
+                info: logged_info,
+                ..
+            }
+            | A11yOp::Synthetic {
+                id: logged,
+                info: logged_info,
+                ..
+            },
+        ) = self.ops.last_mut()
+            && *logged == id
+        {
+            *logged_info = Some(info.clone());
+        }
         self.node_info.insert(id, info);
     }
 
@@ -453,6 +621,12 @@ impl A11yNodeBuilder {
         if let Some(parent) = self.nodes_stack.last_mut() {
             parent.push_child(id);
         }
+        self.ops.push(A11yOp::Push {
+            id,
+            node: node.clone(),
+            #[cfg(debug_assertions)]
+            info: None,
+        });
         self.ids_stack.push(id);
         self.nodes_stack.push(node);
         true
@@ -468,9 +642,25 @@ impl A11yNodeBuilder {
             return false;
         }
 
+        let independent_bounds = match (node.bounds(), self.nodes_stack.last()) {
+            (Some(child), Some(parent)) => parent.bounds().is_none_or(|parent| {
+                child.x0 < parent.x0
+                    || child.y0 < parent.y0
+                    || child.x1 > parent.x1
+                    || child.y1 > parent.y1
+            }),
+            _ => false,
+        };
         if let Some(parent) = self.nodes_stack.last_mut() {
             parent.push_child(id);
         }
+        self.ops.push(A11yOp::Synthetic {
+            id,
+            node: node.clone(),
+            independent_bounds,
+            #[cfg(debug_assertions)]
+            info: None,
+        });
         self.all_nodes.push((id, node));
         true
     }
@@ -479,18 +669,46 @@ impl A11yNodeBuilder {
         self.nodes_stack.last_mut()
     }
 
+    /// Whether `id` is the node on top of the stack (and not the root).
+    fn top_is(&self, id: NodeId) -> bool {
+        self.ids_stack.len() > 1 && self.ids_stack.last() == Some(&id)
+    }
+
+    /// Logs the current node's properties (without its children) after something other than
+    /// the builder changed them.
+    fn log_current_properties(&mut self) {
+        if let Some(node) = self.nodes_stack.last() {
+            let mut node = node.clone();
+            node.clear_children();
+            self.ops.push(A11yOp::SetCurrent { node });
+        }
+    }
+
+    /// Replaces the current node's properties with `node`, keeping the children pushed so far.
+    fn replace_current_properties(&mut self, mut node: accesskit::Node) {
+        if let Some(current) = self.nodes_stack.last_mut() {
+            node.set_children(current.children().to_vec());
+            *current = node.clone();
+            node.clear_children();
+            self.ops.push(A11yOp::SetCurrent { node });
+        }
+    }
+
     /// Pop the current node off the stack and finalize it into the all_nodes
     /// list.
     pub(crate) fn pop(&mut self) {
         debug_assert!(self.ids_stack.len() > 1, "pop would remove the root node");
 
         if let (Some(id), Some(node)) = (self.ids_stack.pop(), self.nodes_stack.pop()) {
+            self.ops.push(A11yOp::Pop { id });
             self.all_nodes.push((id, node));
         }
     }
 
     /// Push the root node to start a new frame.
     fn begin_frame(&mut self, window_title: Option<&SharedString>) {
+        std::mem::swap(&mut self.ops, &mut self.previous_ops);
+        self.ops.clear();
         self.all_nodes.clear();
         self.ids_stack.clear();
         self.nodes_stack.clear();
