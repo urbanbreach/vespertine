@@ -3722,6 +3722,7 @@ impl Interactivity {
                     scroll_offset.y += delta_y;
                     scroll_offset.x += delta_x;
                     if *scroll_offset != old_scroll_offset {
+                        window.retention.tracker.note_scroll_notification();
                         cx.notify(current_view);
                     }
                 }

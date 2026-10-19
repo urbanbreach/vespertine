@@ -16,6 +16,8 @@ mod surface;
 mod svg;
 mod text;
 mod uniform_list;
+#[cfg(test)]
+mod uniform_list_row_tests;
 
 pub use anchored::*;
 pub use animation::*;

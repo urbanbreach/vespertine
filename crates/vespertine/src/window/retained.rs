@@ -25,6 +25,9 @@ pub(crate) enum ViewKind {
     /// An explicitly cached view (`cached(style)`): upstream invalidation
     /// rules (not invalidated by an unnotified update of an entity it read).
     Cached,
+    /// A retained row of a virtual list (PRF-005): nested in the view that owns the list,
+    /// built by the list rather than by a view element.
+    Row,
 }
 
 /// The ambient inputs a replay requires to be unchanged.
@@ -115,6 +118,69 @@ pub(crate) struct ViewRecord {
     pub cache_key: Option<CacheKey>,
     /// Frame epoch in which the record was last built or replayed.
     pub live_epoch: u64,
+    /// What a row of a virtual list keeps besides the above (rows only).
+    pub row: Option<Box<RowData>>,
+}
+
+/// The content-space output of one retained list row apart from the ranges its record
+/// keeps: the paint operations (recorded under the row's extent mask), where the row was
+/// recorded and what decides whether it may be replayed.
+pub(crate) struct RowData {
+    /// Paint operations of the row, in window space as of `anchor`.
+    pub scene: crate::Scene,
+    /// The list's content origin (list origin plus snapped scroll offset) when recorded.
+    pub anchor: crate::Point<Pixels>,
+    /// The row's output can be moved: it holds no scope-dependent primitive, deferred draw
+    /// or window-fixed state.
+    pub replayable: bool,
+    /// Rendered by a callback that may have changed (owner rebuilt ambiguously, row count or
+    /// callback replaced): rebuilt as soon as the row is shown.
+    pub suspect: bool,
+    /// The row read hover state while it was built.
+    pub hover_sensitive: bool,
+    /// The row's hitboxes as built, with masks that cover the whole row: the frame holds copies
+    /// clipped to the visible region, which cannot be moved back into view.
+    pub hitboxes: Vec<crate::Hitbox>,
+    /// Whether the pointer was over the row's hitboxes when it was last recorded or replayed.
+    pub hovered: bool,
+}
+
+/// Where a replayed stretch of output lands (rows and scroll layers, PRF-004/PRF-005).
+#[derive(Clone, Copy)]
+pub(crate) struct Placement {
+    /// Moves the recorded geometry (logical pixels).
+    pub offset: crate::Point<Pixels>,
+    /// The visible region; hitbox content masks are clipped to it after moving.
+    pub clip: Bounds<Pixels>,
+    /// Carry the element states the stretch accessed (rows that are shown).
+    pub keep_states: bool,
+    pub scale_factor: f32,
+}
+
+impl Placement {
+    pub fn place_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        Bounds {
+            origin: bounds.origin + self.offset,
+            size: bounds.size,
+        }
+    }
+
+    pub fn place_hitbox(&self, hitbox: &crate::Hitbox) -> crate::Hitbox {
+        let mut hitbox = hitbox.clone();
+        hitbox.bounds = self.place_bounds(hitbox.bounds);
+        hitbox.content_mask.bounds = self
+            .place_bounds(hitbox.content_mask.bounds)
+            .intersect(&self.clip);
+        hitbox
+    }
+
+    /// The offset in device pixels, as accessibility bounds use it.
+    pub fn device_translation(&self) -> (f64, f64) {
+        (
+            f64::from(self.offset.x.0 * self.scale_factor),
+            f64::from(self.offset.y.0 * self.scale_factor),
+        )
+    }
 }
 
 enum Slot {
@@ -218,6 +284,7 @@ impl RetainedViews {
             paint: None,
             cache_key: None,
             live_epoch: self.frame_epoch,
+            row: None,
         };
         let key = if let Some(index) = self.free.pop() {
             let generation = match &self.slots[index as usize] {
@@ -239,6 +306,23 @@ impl RetainedViews {
         };
         self.by_path.insert(path, key);
         add_key(&mut self.by_entity, entity_id, key);
+        key
+    }
+
+    /// Creates the record of a list row nested in `parent`. Rows are invalidated by what they
+    /// read, never by a notification of the owner's entity itself.
+    pub fn create_row(
+        &mut self,
+        path: GlobalElementId,
+        owner: EntityId,
+        parent: Option<ViewKey>,
+    ) -> ViewKey {
+        let key = self.create(path, owner, ViewKind::Row);
+        remove_key(&mut self.by_entity, owner, key);
+        if let Some(record) = self.get_mut(key) {
+            record.parent = parent;
+        }
+        self.register_with_parent(key);
         key
     }
 
@@ -706,6 +790,10 @@ pub(crate) struct RetentionState {
     pub window_disabled: bool,
     /// Whether accessibility was active when the previous frame started.
     pub a11y_was_active: bool,
+    /// What caused the notifications this frame is drawn for.
+    pub causes: super::read_tracker::FrameCauses,
+    /// The notification counters as of the previous frame.
+    pub causes_baseline: [u64; 3],
 }
 
 impl RetentionState {
@@ -723,6 +811,8 @@ impl RetentionState {
             context: 0,
             window_disabled: false,
             a11y_was_active: false,
+            causes: Default::default(),
+            causes_baseline: [0; 3],
         }
     }
 }

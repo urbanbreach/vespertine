@@ -76,6 +76,7 @@ pub(crate) mod read_tracker;
 pub(crate) mod retained;
 #[cfg(test)]
 mod retained_tests;
+pub(crate) mod rows;
 pub use retained::{retained_frames_disabled, set_retained_frames_disabled};
 mod composition;
 #[cfg(test)]
@@ -845,6 +846,7 @@ impl HitboxId {
     ///
     /// See [`Hitbox::is_hovered`] for details.
     pub fn is_hovered(self, window: &Window) -> bool {
+        window.hover_reads.set(window.hover_reads.get() + 1);
         // While the pointer is captured only the captured hitbox reports hovered and every
         // other hitbox reports not hovered, wherever the pointer physically is.
         if let Some(captured) = window.captured_hitbox {
@@ -863,6 +865,7 @@ impl HitboxId {
     ///
     /// See [`HitboxId::is_hovered`] for more details.
     pub(crate) fn is_hovered_ignoring_last_input(self, window: &Window) -> bool {
+        window.hover_reads.set(window.hover_reads.get() + 1);
         if let Some(captured) = window.captured_hitbox {
             return captured == self;
         }
@@ -1435,6 +1438,10 @@ pub struct Window {
     pub(crate) edge_fade: Option<EdgeFade>,
     /// Nesting depth of inert subtrees (see [`Window::with_inert`]).
     pub(crate) inert_depth: u32,
+    /// Retained list rows, by the element id of their list (PRF-005).
+    pub(crate) row_stores: FxHashMap<GlobalElementId, rows::RowStore>,
+    /// How often hover state was read; a row that reads it is rebuilt when its hover changes.
+    pub(crate) hover_reads: Cell<u64>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -2350,6 +2357,8 @@ impl Window {
             paint_scope: ScopeParams::default(),
             edge_fade: None,
             inert_depth: 0,
+            row_stores: FxHashMap::default(),
+            hover_reads: Cell::new(0),
             requested_autoscroll: None,
             last_text_input_configuration: None,
             focused_text_input: None,
@@ -3063,7 +3072,10 @@ impl Window {
     /// and skip the frame request when it is set.
     pub fn request_animation_frame(&self) {
         let entity = self.current_view();
-        self.on_next_frame(move |_, cx| cx.notify(entity));
+        self.on_next_frame(move |window, cx| {
+            window.retention.tracker.note_animation_notification();
+            cx.notify(entity)
+        });
     }
 
     /// Runs all callbacks scheduled via [`Self::on_next_frame`], returning how many ran.
@@ -4046,6 +4058,7 @@ impl Window {
         self.retention.views.flush_draw_writes(&tracker);
         self.retention.adopted.clear();
         self.retention.views.sweep();
+        self.sweep_row_stores();
         debug_assert!(self.retention.stack.is_empty());
     }
 
@@ -4071,6 +4084,7 @@ impl Window {
         }
         let inputs = self.take_input_changes();
         let tracker = self.retention.tracker.clone();
+        self.retention.causes = tracker.causes_since(&mut self.retention.causes_baseline);
         self.retention.views.begin_frame(&tracker, &views, &inputs);
         for entity in views.drain() {
             self.mark_view_dirty(entity);
@@ -4586,7 +4600,7 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>, cx: &mut App) {
-        self.reuse_prepaint_mapped(range, None, cx);
+        self.reuse_prepaint_mapped(range, None, None, cx);
     }
 
     /// Copies the prepaint output in `range` from the previous frame. With a
@@ -4597,33 +4611,46 @@ impl Window {
         &mut self,
         range: Range<PrepaintStateIndex>,
         map: Option<&retained::SpliceMap>,
+        placement: Option<&retained::Placement>,
         cx: &mut App,
     ) {
         let hitbox_start = self.next_frame.hitboxes.len();
         self.replay_hitbox_switches(&range, hitbox_start);
-        self.next_frame.hitboxes.extend(
-            self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
-                .iter()
-                .cloned(),
-        );
+        let hitboxes =
+            &self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index];
+        match placement {
+            None => self.next_frame.hitboxes.extend(hitboxes.iter().cloned()),
+            Some(placement) => self
+                .next_frame
+                .hitboxes
+                .extend(hitboxes.iter().map(|hitbox| placement.place_hitbox(hitbox))),
+        }
         self.next_frame.tooltip_requests.extend(
             self.rendered_frame.tooltip_requests
                 [range.start.tooltips_index..range.end.tooltips_index]
                 .iter_mut()
                 .map(|request| request.take()),
         );
-        self.next_frame.accessed_element_states.extend(
-            self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
-                ..range.end.accessed_element_states_index]
-                .iter()
-                .map(|(id, type_id)| (id.clone(), *type_id)),
-        );
+        if placement.is_none_or(|placement| placement.keep_states) {
+            self.next_frame.accessed_element_states.extend(
+                self.rendered_frame.accessed_element_states[range
+                    .start
+                    .accessed_element_states_index
+                    ..range.end.accessed_element_states_index]
+                    .iter()
+                    .map(|(id, type_id)| (id.clone(), *type_id)),
+            );
+        }
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
         if self.a11y.is_active() {
             let focus = self.focus;
-            self.a11y
-                .replay(range.start.a11y_index..range.end.a11y_index, focus, None);
+            let translation = placement.map(retained::Placement::device_translation);
+            self.a11y.replay(
+                range.start.a11y_index..range.end.a11y_index,
+                focus,
+                translation,
+            );
         }
 
         let open_node = self.next_frame.dispatch_tree.active_node_id();
@@ -4701,13 +4728,27 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>, cx: &mut App) {
+        self.reuse_paint_placed(range, None, true, cx);
+    }
+
+    /// Copies the paint output in `range` from the previous frame, moved by `placement` when
+    /// given. The scene operations of the range are copied only when `with_scene`; recorded
+    /// rows and layers keep their scene operations apart and replay them themselves.
+    pub(crate) fn reuse_paint_placed(
+        &mut self,
+        range: Range<PaintIndex>,
+        placement: Option<&retained::Placement>,
+        with_scene: bool,
+        cx: &mut App,
+    ) {
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
             [range.start.debug_bounds_index..range.end.debug_bounds_index]
         {
+            let bounds = placement.map_or(*bounds, |placement| placement.place_bounds(*bounds));
             self.next_frame
-                .record_debug_bounds(selector.clone(), *bounds);
+                .record_debug_bounds(selector.clone(), bounds);
         }
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
@@ -4741,23 +4782,29 @@ impl Window {
                 .iter_mut()
                 .map(|listener| listener.take()),
         );
-        self.next_frame.accessed_element_states.extend(
-            self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
-                ..range.end.accessed_element_states_index]
-                .iter()
-                .map(|(id, type_id)| (id.clone(), *type_id)),
-        );
+        if placement.is_none_or(|placement| placement.keep_states) {
+            self.next_frame.accessed_element_states.extend(
+                self.rendered_frame.accessed_element_states[range
+                    .start
+                    .accessed_element_states_index
+                    ..range.end.accessed_element_states_index]
+                    .iter()
+                    .map(|(id, type_id)| (id.clone(), *type_id)),
+            );
+        }
         self.next_frame.tab_stops.replay(
             &self.rendered_frame.tab_stops.insertion_history
                 [range.start.tab_handle_index..range.end.tab_handle_index],
         );
 
-        let scene_start = self.next_frame.scene.len();
-        self.next_frame.scene.replay(
-            range.start.scene_index..range.end.scene_index,
-            &self.rendered_frame.scene,
-        );
-        self.replay_surface_switches(&range, scene_start);
+        if with_scene {
+            let scene_start = self.next_frame.scene.len();
+            self.next_frame.scene.replay(
+                range.start.scene_index..range.end.scene_index,
+                &self.rendered_frame.scene,
+            );
+            self.replay_surface_switches(&range, scene_start);
+        }
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
 

@@ -9,9 +9,16 @@ use crate::{
     GlobalElementId, Hitbox, InspectorElementId, InteractiveElement, Interactivity, IntoElement,
     IsZero, LayoutId, ListSizingBehavior, Overflow, Pixels, Point, ScrollHandle, Size,
     StyleRefinement, Styled, Window, point, px, size,
+    window::{
+        read_tracker::ViewKey,
+        retained::Placement,
+        rows::{
+            EXTENSION_BUDGET_VIEWPORTS, MeasureSample, OVERSCAN_VIEWPORTS, RowGeometry, row_offset,
+        },
+    },
 };
 use smallvec::SmallVec;
-use std::{cell::RefCell, cmp, ops::Range, rc::Rc};
+use std::{any::TypeId, cell::RefCell, cmp, collections::BTreeMap, ops::Range, rc::Rc};
 
 use super::ListHorizontalSizingBehavior;
 
@@ -30,6 +37,7 @@ where
     let id = id.into();
     let mut base_style = StyleRefinement::default();
     base_style.overflow.y = Some(Overflow::Scroll);
+    let render_type = type_of(&f);
 
     let render_range = move |range: Range<usize>, window: &mut Window, cx: &mut App| {
         f(range, window, cx)
@@ -41,6 +49,7 @@ where
     UniformList {
         item_count,
         item_to_measure_index: 0,
+        render_type,
         render_items: Box::new(render_range),
         decorations: Vec::new(),
         interactivity: Interactivity {
@@ -58,6 +67,9 @@ where
 pub struct UniformList {
     item_count: usize,
     item_to_measure_index: usize,
+    /// The type of the row callback: a list whose callback is a different closure than
+    /// last frame cannot reuse the rows the old one rendered (PRF-005 R5).
+    render_type: TypeId,
     render_items: Box<
         dyn for<'a> Fn(Range<usize>, &'a mut Window, &'a mut App) -> SmallVec<[AnyElement; 64]>,
     >,
@@ -72,6 +84,55 @@ pub struct UniformList {
 pub struct UniformListFrameState {
     items: SmallVec<[AnyElement; 32]>,
     decorations: SmallVec<[AnyElement; 2]>,
+    /// Retained rows of this frame, in index order (PRF-005).
+    rows: Vec<RowPlan>,
+    row_paint: Option<RowPaint>,
+}
+
+type RenderItems =
+    dyn for<'a> Fn(Range<usize>, &'a mut Window, &'a mut App) -> SmallVec<[AnyElement; 64]>;
+
+/// The parts of a list its rows are planned from; borrowed separately from the list's
+/// interactivity, which is in use while the rows are prepared.
+struct RowSource<'a> {
+    item_count: usize,
+    render_type: TypeId,
+    render_items: &'a RenderItems,
+}
+
+fn type_of<T: 'static>(_: &T) -> TypeId {
+    TypeId::of::<T>()
+}
+
+/// What a frame does with one retained row.
+struct RowPlan {
+    ix: usize,
+    key: ViewKey,
+    /// The element of a row built in this frame; `None` for a replayed row.
+    element: Option<AnyElement>,
+    placement: Placement,
+    /// The row reaches the visible viewport.
+    shown: bool,
+}
+
+/// What painting the rows needs from prepaint.
+struct RowPaint {
+    extent: ContentMask<Pixels>,
+}
+
+/// The measurements of one frame of row planning.
+struct RowFrame {
+    list: GlobalElementId,
+    /// The same row geometry the direct path computes, so both place rows identically.
+    padded_origin_y: Pixels,
+    row_extent: f64,
+    scroll_top: f64,
+    extent: ContentMask<Pixels>,
+    clip: Bounds<Pixels>,
+    scale: f32,
+    content_origin: Point<Pixels>,
+    item_height: Pixels,
+    available_width: Pixels,
 }
 
 /// A handle for controlling the scroll position of a uniform list.
@@ -288,7 +349,7 @@ impl Element for UniformList {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let max_items = self.item_count;
-        let item_size = self.measure_item(None, window, cx);
+        let item_size = self.measure_item_retained(global_id, window, cx);
         let layout_id = self.interactivity.request_layout(
             global_id,
             inspector_id,
@@ -332,6 +393,8 @@ impl Element for UniformList {
             UniformListFrameState {
                 items: SmallVec::new(),
                 decorations: SmallVec::new(),
+                rows: Vec::new(),
+                row_paint: None,
             },
         )
     }
@@ -364,7 +427,7 @@ impl Element for UniformList {
             ListHorizontalSizingBehavior::Unconstrained
         );
 
-        let longest_item_size = self.measure_item(None, window, cx);
+        let longest_item_size = self.measure_item_retained(global_id, window, cx);
         let content_width = if can_scroll_horizontally {
             padded_bounds.size.width.max(longest_item_size.width)
         } else {
@@ -478,7 +541,13 @@ impl Element for UniformList {
                         scroll_offset = *updated_scroll_offset
                     }
 
-                    let scroll_top = -scroll_offset.y.to_f64();
+                    // Scroll offsets place content on the device pixel grid (PRF-004 R3); the
+                    // stored offset keeps its sub-pixel motion.
+                    let snapped_offset = point(
+                        window.pixel_snap(scroll_offset.x),
+                        window.pixel_snap(scroll_offset.y),
+                    );
+                    let scroll_top = -snapped_offset.y.to_f64();
                     let item_height_f64 = item_height.to_f64();
                     let first_visible_element_ix =
                         ((scroll_top - padding.top.to_f64()) / item_height_f64).floor() as usize;
@@ -490,60 +559,91 @@ impl Element for UniformList {
                     let visible_range = first_visible_element_ix
                         ..cmp::min(last_visible_element_ix, self.item_count);
 
-                    let items = if y_flipped {
-                        let flipped_range = self.item_count.saturating_sub(visible_range.end)
-                            ..self.item_count.saturating_sub(visible_range.start);
-                        let mut items = (self.render_items)(flipped_range, window, cx);
-                        items.reverse();
-                        items
-                    } else {
-                        (self.render_items)(visible_range.clone(), window, cx)
-                    };
-
                     let content_mask = ContentMask { bounds };
-                    window.with_content_mask(Some(content_mask), |window| {
-                        for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
-                            let item_top = item_height_f64 * ix as f64 - scroll_top;
-                            let item_origin = padded_bounds.origin
-                                + point(scroll_offset.x, Pixels::from(item_top));
-
-                            let available_width = if can_scroll_horizontally {
-                                padded_bounds.size.width + scroll_offset.x.abs()
-                            } else {
-                                padded_bounds.size.width
-                            };
-                            let available_space = size(
-                                AvailableSpace::Definite(available_width),
-                                AvailableSpace::Definite(item_height),
-                            );
-                            window.with_layout_item_index(ix, |window| {
-                                item.layout_as_root(available_space, window, cx)
-                            });
-                            item.prepaint_at(item_origin, window, cx);
-                            frame_state.items.push(item);
-                        }
-
-                        let bounds =
-                            Bounds::new(padded_bounds.origin + scroll_offset, padded_bounds.size);
-                        for decoration in &self.decorations {
-                            let mut decoration = decoration.as_ref().compute(
-                                visible_range.clone(),
+                    let retained_rows = !y_flipped && global_id.is_some() && window.rows_enabled();
+                    if retained_rows {
+                        let visible = match global_id {
+                            Some(list) => prepaint_rows(
+                                &RowSource {
+                                    item_count: self.item_count,
+                                    render_type: self.render_type,
+                                    render_items: &*self.render_items,
+                                },
+                                list,
                                 bounds,
+                                padded_bounds,
+                                padding.top,
                                 scroll_offset,
                                 item_height,
+                                can_scroll_horizontally,
+                                frame_state,
+                                window,
+                                cx,
+                            ),
+                            None => visible_range.clone(),
+                        };
+                        window.with_content_mask(Some(content_mask), |window| {
+                            prepaint_decorations(
+                                &self.decorations,
                                 self.item_count,
+                                visible,
+                                padded_bounds,
+                                scroll_offset,
+                                item_height,
+                                frame_state,
                                 window,
                                 cx,
                             );
-                            let available_space = size(
-                                AvailableSpace::Definite(bounds.size.width),
-                                AvailableSpace::Definite(bounds.size.height),
-                            );
-                            decoration.layout_as_root(available_space, window, cx);
-                            decoration.prepaint_at(bounds.origin, window, cx);
-                            frame_state.decorations.push(decoration);
+                        });
+                    } else {
+                        if let Some(list) = global_id {
+                            window.row_store_clear(list);
                         }
-                    });
+                        let items = if y_flipped {
+                            let flipped_range = self.item_count.saturating_sub(visible_range.end)
+                                ..self.item_count.saturating_sub(visible_range.start);
+                            let mut items = (self.render_items)(flipped_range, window, cx);
+                            items.reverse();
+                            items
+                        } else {
+                            (self.render_items)(visible_range.clone(), window, cx)
+                        };
+
+                        window.with_content_mask(Some(content_mask), |window| {
+                            for (mut item, ix) in items.into_iter().zip(visible_range.clone()) {
+                                let item_top = item_height_f64 * ix as f64 - scroll_top;
+                                let item_origin = padded_bounds.origin
+                                    + point(snapped_offset.x, Pixels::from(item_top));
+
+                                let available_width = if can_scroll_horizontally {
+                                    padded_bounds.size.width + scroll_offset.x.abs()
+                                } else {
+                                    padded_bounds.size.width
+                                };
+                                let available_space = size(
+                                    AvailableSpace::Definite(available_width),
+                                    AvailableSpace::Definite(item_height),
+                                );
+                                window.with_layout_item_index(ix, |window| {
+                                    item.layout_as_root(available_space, window, cx)
+                                });
+                                item.prepaint_at(item_origin, window, cx);
+                                frame_state.items.push(item);
+                            }
+
+                            prepaint_decorations(
+                                &self.decorations,
+                                self.item_count,
+                                visible_range.clone(),
+                                padded_bounds,
+                                scroll_offset,
+                                item_height,
+                                frame_state,
+                                window,
+                                cx,
+                            );
+                        });
+                    }
                 }
 
                 hitbox
@@ -572,6 +672,7 @@ impl Element for UniformList {
                 for item in &mut request_layout.items {
                     item.paint(window, cx);
                 }
+                paint_rows(request_layout, window, cx);
                 for decoration in &mut request_layout.decorations {
                     decoration.paint(window, cx);
                 }
@@ -668,6 +769,46 @@ impl UniformList {
         self
     }
 
+    /// Measures the item that gives the list its size, reusing the sample of an earlier frame
+    /// while the content, the item count and the constraints it was measured under are
+    /// unchanged (PRF-005 R7).
+    fn measure_item_retained(
+        &self,
+        list: Option<&GlobalElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Size<Pixels> {
+        let Some(list) = list.filter(|_| self.item_count > 0 && window.rows_enabled()) else {
+            return self.measure_item(None, window, cx);
+        };
+        let ambiguous = window.rows_owner_ambiguous();
+        let cached = window
+            .row_store(list)
+            .measure
+            .as_ref()
+            .filter(|sample| sample.item_count == self.item_count && sample.width.is_none())
+            .map(|sample| (sample.key, sample.size));
+        if let Some((key, size)) = cached
+            && !ambiguous
+            && window.row_sample_valid(key)
+        {
+            window.row_touch(key);
+            return size;
+        }
+        let key = window.row_record(list, usize::MAX);
+        window.row_begin(key);
+        let size = self.measure_item(None, window, cx);
+        window.row_layout_done(key);
+        window.row_finish_measure(key);
+        window.row_store(list).measure = Some(MeasureSample {
+            key,
+            item_count: self.item_count,
+            width: None,
+            size,
+        });
+        size
+    }
+
     fn measure_item(
         &self,
         list_width: Option<Pixels>,
@@ -749,10 +890,19 @@ mod test {
             length: usize,
             scroll_handle: UniformListScrollHandle,
             focus_handle: FocusHandle,
-            visible_range: Range<usize>,
         }
 
         impl TestView {
+            /// The rows the list shows, read from its scroll offset: retained rows render only
+            /// the rows that changed, so the row callback no longer reports the visible range
+            /// (PRF-005).
+            fn visible(&self) -> Range<usize> {
+                let top = (-self.scroll_handle.0.borrow().base_handle.offset().y / px(20.0))
+                    .floor()
+                    .max(0.0) as usize;
+                top..(top + 10).min(self.length)
+            }
+
             pub fn select_next(
                 &mut self,
                 _: &SelectNext,
@@ -798,8 +948,7 @@ mod test {
                         uniform_list(
                             "entries",
                             self.length,
-                            cx.processor(|this, range: Range<usize>, _window, _cx| {
-                                this.visible_range = range.clone();
+                            cx.processor(|_this, range: Range<usize>, _window, _cx| {
                                 range
                                     .map(|ix| div().id(ix).h(px(20.0)).child(format!("Item {ix}")))
                                     .collect()
@@ -819,7 +968,6 @@ mod test {
                 index: 0,
                 focus_handle,
                 length: 47,
-                visible_range: 0..0,
             }
         });
 
@@ -830,7 +978,7 @@ mod test {
             cx.dispatch_action(SelectNext);
             view.read_with(cx, |view, _| {
                 assert_eq!(view.index, ix);
-                assert_eq!(view.visible_range, 0..10);
+                assert_eq!(view.visible(), 0..10);
             })
         }
 
@@ -839,7 +987,7 @@ mod test {
             cx.dispatch_action(SelectNext);
             view.read_with(cx, |view, _| {
                 assert_eq!(view.index, ix);
-                assert_eq!(view.visible_range, ix - 9..ix + 1);
+                assert_eq!(view.visible(), ix - 9..ix + 1);
             })
         }
 
@@ -847,14 +995,14 @@ mod test {
         cx.dispatch_action(SelectNext);
         view.read_with(cx, |view, _| {
             assert_eq!(view.index, 0);
-            assert_eq!(view.visible_range, 0..10);
+            assert_eq!(view.visible(), 0..10);
         });
 
         // Return to the last element
         cx.dispatch_action(SelectPrev);
         view.read_with(cx, |view, _| {
             assert_eq!(view.index, 46);
-            assert_eq!(view.visible_range, 37..47);
+            assert_eq!(view.visible(), 37..47);
         });
 
         // First 9 times selecting previous does not scroll
@@ -862,7 +1010,7 @@ mod test {
             cx.dispatch_action(SelectPrev);
             view.read_with(cx, |view, _| {
                 assert_eq!(view.index, ix);
-                assert_eq!(view.visible_range, 37..47);
+                assert_eq!(view.visible(), 37..47);
             })
         }
 
@@ -871,7 +1019,7 @@ mod test {
             cx.dispatch_action(SelectPrev);
             view.read_with(cx, |view, _| {
                 assert_eq!(view.index, ix);
-                assert_eq!(view.visible_range, ix..ix + 10);
+                assert_eq!(view.visible(), ix..ix + 10);
             })
         }
     }
@@ -942,5 +1090,324 @@ mod test {
             .map(|ix| (ix, px(-16.0 + 24.0 * (ix - 9_000_002) as f32)))
             .collect::<Vec<_>>();
         assert_eq!(item_tops, expected_tops);
+    }
+}
+
+/// The decorations of the visible range, prepainted over the rows.
+#[allow(clippy::too_many_arguments)]
+fn prepaint_decorations(
+    decorations: &[Box<dyn UniformListDecoration>],
+    item_count: usize,
+    visible_range: Range<usize>,
+    padded_bounds: Bounds<Pixels>,
+    scroll_offset: Point<Pixels>,
+    item_height: Pixels,
+    frame_state: &mut UniformListFrameState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let bounds = Bounds::new(padded_bounds.origin + scroll_offset, padded_bounds.size);
+    for decoration in decorations {
+        let mut decoration = decoration.as_ref().compute(
+            visible_range.clone(),
+            bounds,
+            scroll_offset,
+            item_height,
+            item_count,
+            window,
+            cx,
+        );
+        let available_space = size(
+            AvailableSpace::Definite(bounds.size.width),
+            AvailableSpace::Definite(bounds.size.height),
+        );
+        decoration.layout_as_root(available_space, window, cx);
+        decoration.prepaint_at(bounds.origin, window, cx);
+        frame_state.decorations.push(decoration);
+    }
+}
+
+/// Plans and prepares the retained rows of the frame: replays the rows that did not change,
+/// builds the missing and changed visible rows, then fills the overscan within the frame's
+/// budget (PRF-005 R1-R7). Returns the visible rows.
+#[allow(clippy::too_many_arguments)]
+fn prepaint_rows(
+    source: &RowSource,
+    list: &GlobalElementId,
+    bounds: Bounds<Pixels>,
+    padded_bounds: Bounds<Pixels>,
+    padding_top: Pixels,
+    scroll_offset: Point<Pixels>,
+    item_height: Pixels,
+    can_scroll_horizontally: bool,
+    frame_state: &mut UniformListFrameState,
+    window: &mut Window,
+    cx: &mut App,
+) -> Range<usize> {
+    let scale = window.scale_factor();
+    let item_count = source.item_count;
+    let snapped = point(
+        window.pixel_snap(scroll_offset.x),
+        window.pixel_snap(scroll_offset.y),
+    );
+    let content_origin = padded_bounds.origin + snapped;
+    let viewport = padded_bounds.size.height.to_f64();
+    let scroll_top = (-snapped.y).to_f64();
+    let row_extent = item_height.to_f64();
+    let first = (((scroll_top - padding_top.to_f64()) / row_extent)
+        .floor()
+        .max(0.0) as usize)
+        .min(item_count);
+    let last = (((scroll_top + viewport) / row_extent).ceil() as usize).min(item_count);
+    let visible = first.min(last)..last;
+    let available_width = if can_scroll_horizontally {
+        padded_bounds.size.width + scroll_offset.x.abs()
+    } else {
+        padded_bounds.size.width
+    };
+    let geometry = RowGeometry {
+        item_count,
+        item_height,
+        bounds: padded_bounds,
+        available_width,
+        scale_factor: scale,
+    };
+    if !window.retention_reuse_allowed()
+        || window.row_store(list).geometry.as_ref() != Some(&geometry)
+    {
+        window.row_store_clear(list);
+    }
+    let ambiguous = window.rows_owner_ambiguous()
+        || window.row_store(list).render_type != Some(source.render_type);
+    let (mut rows, constructed, last_top, was_moving_down) = {
+        let store = window.row_store(list);
+        store.geometry = Some(geometry);
+        store.render_type = Some(source.render_type);
+        (
+            std::mem::take(&mut store.rows),
+            store.constructed,
+            store.last_scroll_top,
+            store.moving_down,
+        )
+    };
+    let moving_down = if scroll_top > last_top {
+        true
+    } else if scroll_top < last_top {
+        false
+    } else {
+        was_moving_down
+    };
+    if ambiguous {
+        for key in rows.values() {
+            window.row_mark_suspect(*key);
+        }
+    }
+
+    let frame = RowFrame {
+        list: list.clone(),
+        padded_origin_y: padded_bounds.origin.y,
+        row_extent,
+        scroll_top,
+        extent: ContentMask {
+            bounds: Bounds {
+                origin: bounds.origin
+                    - point(bounds.size.width, bounds.size.height * 3.0 + item_height),
+                size: size(
+                    bounds.size.width * 3.0,
+                    bounds.size.height * 7.0 + item_height * 2.0,
+                ),
+            },
+        },
+        clip: window.content_mask().bounds,
+        scale,
+        content_origin,
+        item_height,
+        available_width,
+    };
+
+    // The retained region: the viewport and two viewports on each side.
+    let overscan = viewport * f64::from(OVERSCAN_VIEWPORTS);
+    let region_start =
+        (((scroll_top - overscan) / row_extent).floor().max(0.0) as usize).min(item_count);
+    let region_end =
+        (((scroll_top + viewport + overscan) / row_extent).ceil() as usize).min(item_count);
+    // Rows leave in batches of at least a quarter of a viewport.
+    let batch = (((0.25 * viewport) / row_extent).floor() as usize).max(1);
+    let keep = region_start.saturating_sub(batch)..region_end + batch;
+    let departed: Vec<usize> = rows
+        .keys()
+        .copied()
+        .filter(|ix| !keep.contains(ix))
+        .collect();
+    for ix in departed {
+        if let Some(key) = rows.remove(&ix) {
+            window.row_drop(key);
+        }
+    }
+
+    let mut plans: Vec<RowPlan> = Vec::new();
+    let mut built_visible = 0usize;
+    for ix in visible.clone() {
+        built_visible += usize::from(prepare_row(
+            source, &frame, ix, true, &mut rows, &mut plans, window, cx,
+        ));
+    }
+    // Rows retained outside the viewport keep their output alive in the frame.
+    let others: Vec<usize> = rows
+        .keys()
+        .copied()
+        .filter(|ix| !visible.contains(ix))
+        .collect();
+    for ix in others {
+        prepare_row(source, &frame, ix, false, &mut rows, &mut plans, window, cx);
+    }
+    // Fill the overscan: everything on the first frame, afterwards within the budget, three
+    // quarters toward the scroll direction and one quarter against it.
+    let above: Vec<usize> = (region_start..visible.start)
+        .rev()
+        .filter(|ix| !rows.contains_key(ix))
+        .collect();
+    let below: Vec<usize> = (visible.end..region_end)
+        .filter(|ix| !rows.contains_key(ix))
+        .collect();
+    let (toward, against) = if moving_down {
+        (below, above)
+    } else {
+        (above, below)
+    };
+    let fill: Vec<usize> = if constructed {
+        let budget = (((f64::from(EXTENSION_BUDGET_VIEWPORTS) * viewport) / row_extent).floor()
+            as usize)
+            .max(1);
+        let remaining = budget.saturating_sub(built_visible);
+        let against_share = remaining / 4;
+        toward
+            .into_iter()
+            .take(remaining - against_share)
+            .chain(against.into_iter().take(against_share))
+            .collect()
+    } else {
+        toward.into_iter().chain(against).collect()
+    };
+    for ix in fill {
+        prepare_row(source, &frame, ix, false, &mut rows, &mut plans, window, cx);
+    }
+    plans.sort_by_key(|plan| plan.ix);
+    frame_state.rows = plans;
+    frame_state.row_paint = Some(RowPaint {
+        extent: frame.extent,
+    });
+
+    let store = window.row_store(list);
+    store.rows = rows;
+    store.constructed = true;
+    store.last_scroll_top = scroll_top;
+    store.moving_down = moving_down;
+    visible
+}
+
+/// Prepares row `ix` of the frame: replays it when its record is reusable, otherwise builds
+/// it again (when it is shown, or when it is missing and is being filled). Returns whether
+/// the row was built.
+#[allow(clippy::too_many_arguments)]
+fn prepare_row(
+    source: &RowSource,
+    frame: &RowFrame,
+    ix: usize,
+    shown: bool,
+    rows: &mut BTreeMap<usize, ViewKey>,
+    plans: &mut Vec<RowPlan>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    if let Some(key) = rows.get(&ix).copied() {
+        let placement = Placement {
+            offset: row_offset(window.row_anchor(key), frame.content_origin),
+            clip: frame.clip,
+            keep_states: shown,
+            scale_factor: frame.scale,
+        };
+        if window.row_reusable(key) && !window.row_hover_changed(key, &placement) {
+            window.row_replay_prepaint(key, &placement, cx);
+            plans.push(RowPlan {
+                ix,
+                key,
+                element: None,
+                placement,
+                shown,
+            });
+            return false;
+        }
+        if !shown {
+            // A row that changed outside the viewport is built when it is shown.
+            rows.remove(&ix);
+            window.row_drop(key);
+            return false;
+        }
+    }
+    let key = match rows.get(&ix).copied() {
+        Some(key) => key,
+        None => {
+            let key = window.row_record(&frame.list, ix);
+            rows.insert(ix, key);
+            key
+        }
+    };
+    window.row_begin(key);
+    let mut item = (source.render_items)(ix..ix + 1, window, cx)
+        .pop()
+        .unwrap_or_else(|| crate::Empty.into_any_element());
+    let available_space = size(
+        AvailableSpace::Definite(frame.available_width),
+        AvailableSpace::Definite(frame.item_height),
+    );
+    window.with_layout_item_index(ix, |window| {
+        item.layout_as_root(available_space, window, cx)
+    });
+    window.row_layout_done(key);
+    let origin = frame.content_origin + point(px(0.), frame.item_height * ix);
+    let origin = point(
+        origin.x,
+        frame.padded_origin_y + Pixels::from(frame.row_extent * ix as f64 - frame.scroll_top),
+    );
+    window.row_prepaint(
+        key,
+        frame.extent,
+        frame.clip,
+        frame.content_origin,
+        |window| item.prepaint_at(origin, window, cx),
+    );
+    plans.push(RowPlan {
+        ix,
+        key,
+        element: Some(item),
+        placement: Placement {
+            offset: Point::default(),
+            clip: frame.clip,
+            keep_states: true,
+            scale_factor: frame.scale,
+        },
+        shown,
+    });
+    true
+}
+
+/// Paints the rows of the frame: rows built in it are painted into scenes of their own,
+/// replayed rows reuse theirs; the rows that reach the viewport are shown, moved and clipped.
+fn paint_rows(frame_state: &mut UniformListFrameState, window: &mut Window, cx: &mut App) {
+    let Some(row_paint) = frame_state.row_paint.as_ref() else {
+        return;
+    };
+    let extent = row_paint.extent;
+    for plan in &mut frame_state.rows {
+        match plan.element.as_mut() {
+            Some(element) => {
+                window.row_paint(plan.key, extent, |window| element.paint(window, cx));
+            }
+            None => window.row_replay_paint(plan.key, &plan.placement, cx),
+        }
+        if plan.shown {
+            window.row_show(plan.key, &plan.placement);
+        }
     }
 }

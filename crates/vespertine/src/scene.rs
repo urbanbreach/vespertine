@@ -212,6 +212,52 @@ impl Scene {
         }
     }
 
+    /// Replays `range` of `source`'s paint operations moved by `offset` device pixels, with
+    /// every content mask moved along and intersected with `clip` (when given). Primitives
+    /// that end up outside their mask are dropped, as when they are first inserted.
+    pub fn replay_moved(
+        &mut self,
+        range: Range<usize>,
+        source: &Scene,
+        offset: Point<ScaledPixels>,
+        clip: Option<Bounds<ScaledPixels>>,
+    ) {
+        for operation in &source.paint_operations[range] {
+            match operation {
+                PaintOperation::Primitive(primitive) => {
+                    self.insert_primitive(primitive.translated(offset, clip))
+                }
+                PaintOperation::StartLayer(bounds) => {
+                    let bounds = moved(*bounds, offset);
+                    self.push_layer(clip.map_or(bounds, |clip| bounds.intersect(&clip)))
+                }
+                PaintOperation::BackdropBlur(blur) => {
+                    let mut blur = *blur;
+                    blur.bounds = moved(blur.bounds, offset);
+                    blur.content_mask = moved_mask(blur.content_mask, offset, clip);
+                    self.insert_backdrop_blur(blur)
+                }
+                PaintOperation::EndLayer => self.pop_layer(),
+                PaintOperation::PushCurvedClip(shape) => {
+                    self.push_curved_clip(shape.translated(offset.x.0, offset.y.0))
+                }
+                PaintOperation::PopCurvedClip => self.pop_curved_clip(),
+            }
+        }
+    }
+
+    /// Whether any recorded primitive carries scope coordinates that may belong to an
+    /// enclosing element (see [`Primitive::has_active_scope`]), or a curved clip that was
+    /// opened outside the recording.
+    pub fn has_active_scope(&self) -> bool {
+        self.paint_operations
+            .iter()
+            .any(|operation| match operation {
+                PaintOperation::Primitive(primitive) => primitive.has_active_scope(),
+                _ => false,
+            })
+    }
+
     /// The order of the next primitive with the given (nonempty, clipped) bounds: the order of
     /// the innermost explicit layer, otherwise one above every earlier overlapping bounds.
     fn next_order(&mut self, clipped_bounds: Bounds<ScaledPixels>) -> DrawOrder {
@@ -682,6 +728,150 @@ impl Primitive {
             Primitive::PolychromeSprite(sprite) => sprite.scope.curved_clip = curved_clip,
             Primitive::Surface(surface) => surface.curved_clip = curved_clip,
         }
+    }
+}
+
+/// Moves `bounds` by `offset`.
+fn moved(bounds: Bounds<ScaledPixels>, offset: Point<ScaledPixels>) -> Bounds<ScaledPixels> {
+    Bounds {
+        origin: bounds.origin + offset,
+        size: bounds.size,
+    }
+}
+
+/// Moves a content mask by `offset`, then intersects it with `clip` when there is one.
+fn moved_mask(
+    mask: ContentMask<ScaledPixels>,
+    offset: Point<ScaledPixels>,
+    clip: Option<Bounds<ScaledPixels>>,
+) -> ContentMask<ScaledPixels> {
+    let bounds = moved(mask.bounds, offset);
+    ContentMask {
+        bounds: clip.map_or(bounds, |clip| bounds.intersect(&clip)),
+    }
+}
+
+impl ScopeParams {
+    /// This scope moved by `offset`, for scopes that are active; inactive scopes are returned
+    /// unchanged.
+    fn moved(mut self, offset: Point<ScaledPixels>) -> Self {
+        let (dx, dy) = (offset.x.0, offset.y.0);
+        if self.fade_active() {
+            self.fade_edges[0] += dy;
+            self.fade_edges[1] += dy;
+            self.fade_edges[2] += dx;
+            self.fade_edges[3] += dx;
+        }
+        if self.rounded_clip_active() {
+            self.clip_bounds[0] += dx;
+            self.clip_bounds[1] += dy;
+            self.clip_bounds[2] += dx;
+            self.clip_bounds[3] += dy;
+        }
+        self
+    }
+}
+
+impl TransformationMatrix {
+    /// The matrix of a sprite that was moved by `offset` after its transformation was
+    /// recorded: the transformed result moves by the same offset.
+    fn moved(mut self, offset: Point<ScaledPixels>) -> Self {
+        if self == Self::unit() {
+            return self;
+        }
+        let [[a, b], [c, d]] = self.rotation_scale;
+        let (dx, dy) = (offset.x.0, offset.y.0);
+        // The sprite's bounds move by `offset`, so the matrix applied to the moved coordinates
+        // must produce the original result plus `offset`.
+        self.translation[0] += dx - (a * dx + b * dy);
+        self.translation[1] += dy - (c * dx + d * dy);
+        self
+    }
+}
+
+impl Path<ScaledPixels> {
+    fn moved(&mut self, offset: Point<ScaledPixels>, clip: Option<Bounds<ScaledPixels>>) {
+        self.bounds = moved(self.bounds, offset);
+        self.content_mask = moved_mask(self.content_mask, offset, clip);
+        self.start = self.start + offset;
+        self.current = self.current + offset;
+        for vertex in &mut self.vertices {
+            vertex.xy_position = vertex.xy_position + offset;
+            vertex.content_mask = moved_mask(vertex.content_mask, offset, clip);
+        }
+    }
+}
+
+impl Primitive {
+    /// Whether the primitive carries fade or rounded-clip scope coordinates. Their positions
+    /// may belong to an enclosing element that does not move with the primitive, so recorded
+    /// output containing such primitives is never moved.
+    pub fn has_active_scope(&self) -> bool {
+        match self {
+            Primitive::Quad(quad) => quad.scope.is_active(),
+            Primitive::MonochromeSprite(sprite) => sprite.scope.is_active(),
+            Primitive::SubpixelSprite(sprite) => sprite.scope.is_active(),
+            Primitive::PolychromeSprite(sprite) => sprite.scope.is_active(),
+            Primitive::Shadow(_)
+            | Primitive::Path(_)
+            | Primitive::Underline(_)
+            | Primitive::Surface(_) => false,
+        }
+    }
+
+    /// A copy of the primitive moved by `offset` device pixels. The content mask moves with
+    /// it and is then intersected with `clip`, when given.
+    pub fn translated(
+        &self,
+        offset: Point<ScaledPixels>,
+        clip: Option<Bounds<ScaledPixels>>,
+    ) -> Primitive {
+        let mut primitive = self.clone();
+        match &mut primitive {
+            Primitive::Shadow(shadow) => {
+                shadow.bounds = moved(shadow.bounds, offset);
+                shadow.element_bounds = moved(shadow.element_bounds, offset);
+                shadow.content_mask = moved_mask(shadow.content_mask, offset, clip);
+            }
+            Primitive::Quad(quad) => {
+                quad.bounds = moved(quad.bounds, offset);
+                quad.content_mask = moved_mask(quad.content_mask, offset, clip);
+                quad.scope = quad.scope.moved(offset);
+            }
+            Primitive::Path(path) => path.moved(offset, clip),
+            Primitive::Underline(underline) => {
+                underline.bounds = moved(underline.bounds, offset);
+                underline.content_mask = moved_mask(underline.content_mask, offset, clip);
+            }
+            Primitive::MonochromeSprite(sprite) => {
+                sprite.bounds = moved(sprite.bounds, offset);
+                sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
+                sprite.transformation = sprite.transformation.moved(offset);
+                sprite.scope = sprite.scope.moved(offset);
+            }
+            Primitive::SubpixelSprite(sprite) => {
+                sprite.bounds = moved(sprite.bounds, offset);
+                sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
+                sprite.transformation = sprite.transformation.moved(offset);
+                sprite.scope = sprite.scope.moved(offset);
+            }
+            Primitive::PolychromeSprite(sprite) => {
+                sprite.bounds = moved(sprite.bounds, offset);
+                sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
+                sprite.scope = sprite.scope.moved(offset);
+                let effects = &mut sprite.effects;
+                if effects.mask_feather > 0.0 {
+                    effects.mask_bounds[0] += offset.x.0;
+                    effects.mask_bounds[1] += offset.y.0;
+                    effects.mask_bottom_reference += offset.y.0;
+                }
+            }
+            Primitive::Surface(surface) => {
+                surface.bounds = moved(surface.bounds, offset);
+                surface.content_mask = moved_mask(surface.content_mask, offset, clip);
+            }
+        }
+        primitive
     }
 }
 

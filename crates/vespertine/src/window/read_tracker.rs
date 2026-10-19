@@ -109,6 +109,22 @@ pub(crate) struct ReadTracker {
     query_depth: Cell<u32>,
     query_updates: RefCell<FxHashSet<EntityId>>,
     query_notifies: RefCell<FxHashSet<EntityId>>,
+    /// Notifications since the preceding frame, and how many of them came from scroll
+    /// listeners and animation-frame requests (PRF-004 R2, PRF-005 R5).
+    notify_calls: Cell<u64>,
+    scroll_notifies: Cell<u64>,
+    animation_notifies: Cell<u64>,
+}
+
+/// What caused the notifications received since the preceding frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FrameCauses {
+    /// Some notification is neither a scroll nor an animation-frame notification: the
+    /// notified views may render different output for reasons nothing tracked explains.
+    pub unexplained: bool,
+    /// A scroll listener notified.
+    #[allow(dead_code, reason = "read by scroll layers (PRF-004 R2)")]
+    pub scrolled: bool,
 }
 
 impl ReadTracker {
@@ -222,8 +238,41 @@ impl ReadTracker {
 
     /// Called when an entity notifies.
     pub fn entity_notified(&self, id: EntityId) {
+        self.notify_calls.set(self.notify_calls.get() + 1);
         if self.query_depth.get() > 0 {
             self.query_notifies.borrow_mut().insert(id);
+        }
+    }
+
+    /// Records that a scroll listener is about to notify (once per notification).
+    pub fn note_scroll_notification(&self) {
+        self.scroll_notifies.set(self.scroll_notifies.get() + 1);
+    }
+
+    /// Records that an animation-frame request is about to notify.
+    pub fn note_animation_notification(&self) {
+        self.animation_notifies
+            .set(self.animation_notifies.get() + 1);
+    }
+
+    /// Classifies the notifications since `baseline` (the counters the caller saw last) and
+    /// moves `baseline` to the current counters. The counters are shared by every window of
+    /// the app and never reset, so each window keeps its own baseline.
+    pub fn causes_since(&self, baseline: &mut [u64; 3]) -> FrameCauses {
+        let now = [
+            self.notify_calls.get(),
+            self.scroll_notifies.get(),
+            self.animation_notifies.get(),
+        ];
+        let [calls, scrolls, animations] = [
+            now[0] - baseline[0],
+            now[1] - baseline[1],
+            now[2] - baseline[2],
+        ];
+        *baseline = now;
+        FrameCauses {
+            unexplained: calls > scrolls + animations,
+            scrolled: scrolls > 0,
         }
     }
 
