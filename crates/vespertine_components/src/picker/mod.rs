@@ -6,6 +6,7 @@
 //! the highlighted row by identity and computes the reveal offset; [`model`] holds the query,
 //! scope tabs, depth, favorites, keyboard mode and the Enter latch.
 
+pub mod driver;
 pub mod highlight;
 pub mod model;
 pub mod results;
