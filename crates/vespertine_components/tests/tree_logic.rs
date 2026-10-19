@@ -796,6 +796,21 @@ fn a5_menu_navigation_skips_disabled_items_and_wraps() {
 }
 
 #[test]
+fn a5_menu_home_and_end_jump_to_the_first_and_last_enabled_item() {
+    let items = menu_items(&[], 1, &[false], &[false]);
+    // copy-path is the only enabled item.
+    let mut menu = ContextMenu::new(vec!["a".to_owned()], items);
+    menu.last();
+    assert_eq!(menu.active(), Some(0));
+    let items = menu_items(&[], 1, &[true], &[false]);
+    let mut menu = ContextMenu::new(vec!["a".to_owned()], items);
+    menu.last();
+    assert_eq!(menu.active(), Some(1), "delete is disabled, rename is last");
+    menu.first();
+    assert_eq!(menu.active(), Some(0));
+}
+
+#[test]
 fn a5_copy_path_resolves_by_the_hosts_rules_joined_by_newlines_in_order() {
     let paths = vec!["src/a.rs".to_owned(), "b.txt".to_owned()];
     let text = copy_path_text(&paths, |path| {

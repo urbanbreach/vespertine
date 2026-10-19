@@ -2,6 +2,7 @@
 //! navigation that skips disabled items and wraps, and the "copy path" text.
 
 use super::model::{Entry, EntryKind};
+use crate::floating::{Edge, StepDirection, edge_available, step_available};
 
 /// Identifier of the built-in "Copy path" item.
 pub const COPY_PATH: &str = "copy-path";
@@ -110,34 +111,31 @@ impl ContextMenu {
         self.active = index.filter(|ix| self.items.get(*ix).is_some_and(|item| item.enabled));
     }
 
-    fn step(&mut self, delta: isize) {
-        let count = self.items.len() as isize;
-        if count == 0 || self.items.iter().all(|item| !item.enabled) {
-            self.active = None;
-            return;
-        }
-        let mut ix = match self.active {
-            Some(active) => active as isize,
-            None if delta > 0 => -1,
-            None => count,
-        };
-        loop {
-            ix = (ix + delta).rem_euclid(count);
-            if self.items[ix as usize].enabled {
-                self.active = Some(ix as usize);
-                return;
-            }
-        }
+    fn step(&mut self, direction: StepDirection) {
+        let items = &self.items;
+        self.active = step_available(items.len(), self.active, direction, |ix| items[ix].enabled);
     }
 
     /// Down: the next enabled item, wrapping.
     pub fn next(&mut self) {
-        self.step(1);
+        self.step(StepDirection::Forward);
     }
 
     /// Up: the previous enabled item, wrapping.
     pub fn previous(&mut self) {
-        self.step(-1);
+        self.step(StepDirection::Backward);
+    }
+
+    /// Home: the first enabled item.
+    pub fn first(&mut self) {
+        let items = &self.items;
+        self.active = edge_available(items.len(), Edge::First, |ix| items[ix].enabled);
+    }
+
+    /// End: the last enabled item.
+    pub fn last(&mut self) {
+        let items = &self.items;
+        self.active = edge_available(items.len(), Edge::Last, |ix| items[ix].enabled);
     }
 
     /// Enter: the active item, when there is one.

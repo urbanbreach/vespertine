@@ -18,9 +18,10 @@ use super::{
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
-    App, Bounds, Context, ElementId, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    MotionClock, MouseButton, ParentElement, Pixels, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Window, canvas, div, prelude::FluentBuilder, px,
+    App, Bounds, Context, Div, ElementId, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, MotionClock, MouseButton, ParentElement, Pixels, Render, Role, ScrollHandle,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Window, canvas, div,
+    prelude::FluentBuilder, px,
 };
 
 /// One row of a popup menu.
@@ -337,6 +338,33 @@ impl PopupMenu {
     }
 }
 
+/// The row of a popup menu: its role, geometry, active highlight and disabled look, with the
+/// label as its content. Owners of menus that are not a [`PopupMenu`] (a context menu opened at
+/// the pointer) build their rows with it and attach their own listeners.
+pub fn menu_item_row(
+    id: impl Into<ElementId>,
+    item: &PopupMenuItem,
+    active: bool,
+    tokens: &ComponentTokens,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::MenuItem)
+        .aria_label(item.label.clone())
+        .relative()
+        .flex()
+        .items_center()
+        .flex_none()
+        .w_full()
+        .h(px(32.))
+        .px_2()
+        .rounded(px(4.))
+        .text_color(tokens.text)
+        .when(active, |row| row.bg(tokens.highlight))
+        .when(item.disabled, |row| row.opacity(tokens.disabled_opacity))
+        .child(item.label.clone())
+}
+
 impl Render for PopupMenu {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = ComponentTokens::current(cx);
@@ -378,30 +406,19 @@ impl Render for PopupMenu {
             }
             for (ix, item) in self.items.iter().enumerate() {
                 let active = open.active == Some(ix);
-                let row = div()
-                    .id(ElementId::NamedInteger("popup-menu-row".into(), ix as u64))
-                    .role(Role::MenuItem)
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .flex_none()
-                    .w_full()
-                    .h(px(32.))
-                    .px_2()
-                    .rounded(px(4.))
-                    .text_color(tokens.text)
-                    .when(active, |row| row.bg(tokens.highlight))
-                    .when(item.disabled, |row| row.opacity(tokens.disabled_opacity))
-                    .when(!item.disabled, |row| {
-                        row.on_mouse_move(
-                            cx.listener(move |this, _, _, cx| this.set_active(ix, cx)),
-                        )
+                let row = menu_item_row(
+                    ElementId::NamedInteger("popup-menu-row".into(), ix as u64),
+                    item,
+                    active,
+                    &tokens,
+                )
+                .when(!item.disabled, |row| {
+                    row.on_mouse_move(cx.listener(move |this, _, _, cx| this.set_active(ix, cx)))
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.select(ix, window, cx)),
                         )
-                    })
-                    .child(item.label.clone())
-                    .children(self.observe(MenuPart::Row(ix)));
+                })
+                .children(self.observe(MenuPart::Row(ix)));
                 menu = menu.child(row);
             }
             menu

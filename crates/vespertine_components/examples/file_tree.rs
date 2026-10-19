@@ -17,7 +17,7 @@ use vespertine::{
     App, AppContext as _, Bounds, Context, Entity, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, px, size,
 };
-use vespertine_components::browser::{AddressEvent, AddressInput, BrowserTheme};
+use vespertine_components::text::{TextField, TextFieldEvent};
 use vespertine_components::tree::{
     Entry, EntryKind, Page, RevealIntent, SearchEvent, SearchResult, SearchResults, Tree,
     TreeEvent, TreeTheme, delete_subject, file_name, is_within, parent_path,
@@ -111,7 +111,7 @@ impl Fs {
 
 struct FileTreeExample {
     tree: Entity<Tree>,
-    field: Entity<AddressInput>,
+    field: Entity<TextField>,
     results: Entity<SearchResults>,
     searching: bool,
     theme: TreeTheme,
@@ -195,35 +195,27 @@ impl FileTreeExample {
         window.focus(&tree.focus_handle(cx), cx);
 
         let theme = TreeTheme::default();
-        let field_theme = BrowserTheme {
-            text: theme.text,
-            muted: theme.text_muted,
-            faint: theme.text_faint,
-            border: theme.border,
-            strong_border: theme.border_strong,
-            raised: theme.overlay,
-            page_background: theme.input,
-            danger: theme.danger,
-            hover: theme.wash(0.055),
-        };
+        let field_theme = theme.field_theme();
         let field = cx.new(|cx| {
-            let mut field = AddressInput::new("Search files", window, cx);
-            field.set_theme(Some(field_theme), cx);
-            field.set_label("Search");
-            field
+            TextField::new(window, cx)
+                .chromeless()
+                .theme(field_theme)
+                .text_metrics(px(12.0), px(16.0))
+                .placeholder("Search files")
+                .accessible_label("Search")
         });
         let results = cx.new(SearchResults::new);
 
         cx.subscribe_in(
             &field,
             window,
-            |this, field, event: &AddressEvent, window, cx| match event {
-                AddressEvent::Edited => this.query_changed(window, cx),
-                AddressEvent::Escape => {
-                    field.update(cx, |field, cx| field.set_text("", window, cx));
+            |this, field, event: &TextFieldEvent, window, cx| match event {
+                TextFieldEvent::Changed(_) => this.query_changed(window, cx),
+                TextFieldEvent::Cancelled => {
+                    field.update(cx, |field, cx| field.set_value("", window, cx));
                     this.query_changed(window, cx);
                 }
-                AddressEvent::Submit => {}
+                _ => {}
             },
         )
         .detach();
@@ -246,7 +238,7 @@ impl FileTreeExample {
             if let TreeEvent::RevealFinished { effect, .. } = event {
                 if effect.clear_search {
                     this.field
-                        .update(cx, |field, cx| field.set_text("", window, cx));
+                        .update(cx, |field, cx| field.set_value("", window, cx));
                     this.query_changed(window, cx);
                 }
             }
@@ -264,7 +256,7 @@ impl FileTreeExample {
     }
 
     fn query_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.field.read(cx).text().to_owned();
+        let text = self.field.read(cx).value_text().to_owned();
         let query = text.trim().to_owned();
         self.searching = !query.is_empty();
         let results = self.fs.borrow().search(&query);
@@ -308,7 +300,7 @@ impl Render for FileTreeExample {
                         .items_center()
                         .rounded(px(4.0))
                         .bg(self.theme.input)
-                        .child(self.field.clone()),
+                        .child(div().flex_1().min_w_0().child(self.field.clone())),
                 ),
             )
             .child(div().flex_1().min_h_0().child(body))

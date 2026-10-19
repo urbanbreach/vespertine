@@ -222,7 +222,11 @@ impl Picker {
     ) -> Self {
         bind_default_keys(cx);
         let label = label.into();
-        let field = cx.new(|cx| TextField::new(window, cx).placeholder("Search\u{2026}"));
+        let field = cx.new(|cx| {
+            TextField::new(window, cx)
+                .placeholder("Search\u{2026}")
+                .accessible_label(label.clone())
+        });
         let field_focus = field.read(cx).focus_handle(cx);
         let subscriptions = vec![
             cx.subscribe_in(&field, window, |this, field, event, window, cx| {
@@ -1355,12 +1359,10 @@ impl Render for Picker {
 
         match &depth {
             Depth::List => {
-                // The field is labelled by the picker (R18).
+                // The text input node itself carries the picker's label (R18).
                 card = card.child(
                     div()
                         .id((self.id.clone(), "search"))
-                        .role(Role::Search)
-                        .aria_label(SharedString::from(format!("{} search", self.label)))
                         .px(px(8.))
                         .pb(px(8.))
                         .child(self.field.clone()),

@@ -79,6 +79,7 @@ pub struct TextField {
     tab_stop: bool,
     role: Role,
     accessible_label: Option<SharedString>,
+    chromeless: bool,
     metrics: TextMetrics,
     theme: Option<FieldTheme>,
     font: Option<Font>,
@@ -137,6 +138,7 @@ impl TextField {
             tab_stop: true,
             role: Role::TextInput,
             accessible_label: None,
+            chromeless: false,
             metrics: TextMetrics::default(),
             theme: None,
             font: None,
@@ -207,6 +209,13 @@ impl TextField {
     /// unlabelled); a picker or dialog labels its field with the name of its purpose.
     pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessible_label = Some(label.into());
+        self
+    }
+
+    /// Draws no border, surface, padding or radius: the owner supplies the surrounding chrome
+    /// (an inline rename inside a tree row) and the field is only its text, caret and selection.
+    pub fn chromeless(mut self) -> Self {
+        self.chromeless = true;
         self
     }
 
@@ -1190,12 +1199,14 @@ impl Render for TextField {
             .flex_row()
             .items_stretch()
             .gap(px(6.0))
-            .px(px(8.0))
-            .py(px(4.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(border)
-            .bg(surface)
+            .when(!self.chromeless, |root| {
+                root.px(px(8.0))
+                    .py(px(4.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(border)
+                    .bg(surface)
+            })
             .text_size(self.metrics.size)
             .line_height(self.metrics.line_height)
             .text_color(if disabled { theme.muted } else { theme.text })
@@ -1207,16 +1218,18 @@ impl Render for TextField {
             .aria_placeholder(self.placeholder.clone())
             .aria_read_only(self.core.is_read_only())
             .aria_disabled(disabled)
-            .focus_visible(move |style| {
-                style
-                    .border_color(theme.accent)
-                    .shadow(vec![vespertine::BoxShadow {
-                        color: theme.accent,
-                        offset: point(px(0.0), px(0.0)),
-                        blur_radius: px(0.0),
-                        spread_radius: px(1.0),
-                        inset: false,
-                    }])
+            .when(!self.chromeless, |root| {
+                root.focus_visible(move |style| {
+                    style
+                        .border_color(theme.accent)
+                        .shadow(vec![vespertine::BoxShadow {
+                            color: theme.accent,
+                            offset: point(px(0.0), px(0.0)),
+                            blur_radius: px(0.0),
+                            spread_radius: px(1.0),
+                            inset: false,
+                        }])
+                })
             });
         if !disabled {
             root = root

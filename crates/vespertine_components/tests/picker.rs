@@ -964,8 +964,7 @@ fn the_picker_exposes_a_labelled_dialog_a_list_of_options_and_the_active_descend
     node(&mut f.host, "list", Some("Command palette"));
     let option = node(&mut f.host, "listBoxOption", Some("Save"));
     assert_eq!(option.role, "listBoxOption");
-    node(&mut f.host, "textInput", None);
-    node(&mut f.host, "search", Some("Command palette search"));
+    node(&mut f.host, "textInput", Some("Command palette"));
 }
 
 #[test]

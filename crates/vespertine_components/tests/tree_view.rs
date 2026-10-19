@@ -3,7 +3,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+mod controls_support;
+use controls_support::{center, node};
+use vespertine::EntityInputHandler as _;
 use vespertine::{AppContext as _, Context, Entity, Window};
+use vespertine_components::floating::layers;
 use vespertine_components::tree::{
     Entry, LoadRequest, Page, RevealIntent, RowKind, Tree, TreeEvent, list_fade_flags,
 };
@@ -166,6 +170,12 @@ impl Harness {
 
     fn keys(&mut self, keys: &str) {
         self.host.simulate_keystrokes(keys, None).unwrap();
+    }
+
+    /// Lets a closing menu finish its exit phase (until then its overlay swallows presses).
+    fn settle(&mut self) {
+        self.host.advance_executor_time(200.0).unwrap();
+        self.host.flush();
     }
 }
 
@@ -426,6 +436,7 @@ fn a5_a_secondary_click_inside_the_selection_keeps_it_and_outside_selects_the_en
         &["a.txt".to_owned(), "c.txt".to_owned()]
     );
     harness.keys("escape");
+    harness.settle();
     let (x, y) = harness.center("b.txt");
     harness.host.click(x, y, 2, "").unwrap();
     assert_eq!(harness.selected(), ["b.txt"]);
@@ -467,6 +478,7 @@ fn a5_menu_keys_move_the_active_item_skipping_disabled_ones_and_do_not_reach_the
     // Down did not move the tree cursor.
     assert_eq!(harness.cursor().as_deref(), Some("b.txt"));
     harness.keys("escape");
+    harness.settle();
     harness.click("a.txt", "");
     harness.keys("menu");
     let items = harness.read(|tree| tree.context_menu().unwrap().items.clone());
@@ -498,7 +510,7 @@ fn a5_the_menu_closes_on_scroll_and_when_interactions_are_suspended() {
     assert!(harness.read(|tree| tree.context_menu().is_some()));
     harness
         .host
-        .scroll_wheel(100.0, 100.0, 0.0, -30.0, "")
+        .scroll_wheel(250.0, 150.0, 0.0, -30.0, "")
         .unwrap();
     assert!(harness.read(|tree| tree.context_menu().is_none()));
     harness.keys("menu");
@@ -762,7 +774,7 @@ fn a10_f2_selects_the_basename_and_enter_commits_once() {
     let field = harness.read(|tree| tree.rename_field().cloned().unwrap());
     let (text, selection) = harness.host.app().update(|cx| {
         let field = field.read(cx);
-        (field.text().to_owned(), field.selection())
+        (field.value_text().to_owned(), field.selected_range())
     });
     assert_eq!(text, "report.final.txt");
     assert_eq!(&text[selection], "report.final");
@@ -772,7 +784,7 @@ fn a10_f2_selects_the_basename_and_enter_commits_once() {
         .host
         .app()
         .update_window(window, |_, window, cx| {
-            field.update(cx, |field, cx| field.set_text("report.md", window, cx))
+            field.update(cx, |field, cx| field.set_value("report.md", window, cx))
         })
         .unwrap();
     harness.keys("enter");
@@ -808,7 +820,7 @@ fn a10_an_invalid_name_is_rejected_with_the_message_and_the_field_stays() {
         .host
         .app()
         .update_window(window, |_, window, cx| {
-            field.update(cx, |field, cx| field.set_text("a/b", window, cx))
+            field.update(cx, |field, cx| field.set_value("a/b", window, cx))
         })
         .unwrap();
     harness.keys("enter");
@@ -855,7 +867,7 @@ fn a10_losing_focus_cancels_unless_a_commit_is_in_flight() {
         .host
         .app()
         .update_window(window, |_, window, cx| {
-            field.update(cx, |field, cx| field.set_text("x.txt", window, cx))
+            field.update(cx, |field, cx| field.set_value("x.txt", window, cx))
         })
         .unwrap();
     harness.keys("enter");
@@ -877,7 +889,7 @@ fn a10_a_changed_revision_blocks_the_commit_in_the_open_field() {
         .host
         .app()
         .update_window(window, |_, window, cx| {
-            field.update(cx, |field, cx| field.set_text("renamed.txt", window, cx))
+            field.update(cx, |field, cx| field.set_value("renamed.txt", window, cx))
         })
         .unwrap();
     // The entry changed under the field: a refreshed listing brings a new revision token.
@@ -975,4 +987,174 @@ fn row_kinds_and_status_text_are_painted() {
     );
     let rows = harness.read(|tree| tree.model().visible_rows().to_vec());
     assert_eq!(rows[0].kind, RowKind::Empty);
+}
+
+// ---- seams: CMP-002 menu layer, CMP-031 rail with INP-001 capture, CMP-007 field ------------
+
+fn layer_count(harness: &mut Harness) -> usize {
+    let window = harness.host.window();
+    harness
+        .host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx).len())
+        .unwrap()
+}
+
+#[test]
+fn a5_the_context_menu_is_a_dismissal_layer_that_owns_escape_and_returns_focus() {
+    vespertine_test_host::require_backend!();
+    let mut harness = loaded(600.0);
+    harness.click("a.txt", "");
+    harness.click("c.txt", "ctrl");
+    harness.keys("menu");
+    assert_eq!(layer_count(&mut harness), 1);
+    harness.keys("escape");
+    assert_eq!(layer_count(&mut harness), 0);
+    assert!(harness.read(|tree| tree.context_menu().is_none()));
+    assert_eq!(
+        harness.selected(),
+        ["a.txt", "c.txt"],
+        "the menu consumed the Escape; the selection did not collapse"
+    );
+    harness.settle();
+    harness.keys("down");
+    assert_eq!(
+        harness.cursor().as_deref(),
+        Some("report.final.txt"),
+        "focus returned to the tree"
+    );
+}
+
+#[test]
+fn a5_an_outside_press_dismisses_the_menu_without_clicking_through() {
+    vespertine_test_host::require_backend!();
+    let mut harness = loaded(600.0);
+    let (_, y) = harness.center("a.txt");
+    harness.host.click(20.0, y, 2, "").unwrap();
+    assert!(harness.read(|tree| tree.context_menu().is_some()));
+    let (_, other) = harness.center("c.txt");
+    harness.host.click(260.0, other, 0, "").unwrap();
+    assert!(harness.read(|tree| tree.context_menu().is_none()));
+    assert_eq!(
+        harness.selected(),
+        ["a.txt"],
+        "the dismissing press did not select the row under it"
+    );
+    assert_eq!(layer_count(&mut harness), 0);
+}
+
+#[test]
+fn a5_hovering_highlights_a_menu_row_and_clicking_it_runs_the_item() {
+    vespertine_test_host::require_backend!();
+    let mut harness = loaded(600.0);
+    let (_, y) = harness.center("a.txt");
+    harness.host.click(20.0, y, 2, "").unwrap();
+    // Finish the entrance so the rows sit at their resting positions.
+    harness.host.motion_fast_forward(400.0).unwrap();
+    harness.host.paint_frame();
+    let rename = node(&mut harness.host, "menuItem", Some("Rename"));
+    let (x, ry) = center(&mut harness.host, &rename);
+    harness.host.mouse_move(x, ry, None, "").unwrap();
+    assert_eq!(
+        harness.read(|tree| tree.context_menu().unwrap().active()),
+        Some(1)
+    );
+    let delete = node(&mut harness.host, "menuItem", Some("Delete…"));
+    let (x, dy) = center(&mut harness.host, &delete);
+    harness.host.click(x, dy, 0, "").unwrap();
+    assert_eq!(harness.log.borrow().deletes, [vec!["a.txt".to_owned()]]);
+    assert!(harness.read(|tree| tree.context_menu().is_none()));
+    assert_eq!(layer_count(&mut harness), 0);
+}
+
+#[test]
+fn a5_home_end_and_ctrl_n_step_the_menu_like_every_cmp002_list() {
+    vespertine_test_host::require_backend!();
+    let mut harness = loaded(600.0);
+    harness.click("a.txt", "");
+    harness.keys("menu");
+    let active = |harness: &mut Harness| harness.read(|tree| tree.context_menu().unwrap().active());
+    harness.keys("end");
+    assert_eq!(active(&mut harness), Some(2));
+    harness.keys("home");
+    assert_eq!(active(&mut harness), Some(0));
+    harness.keys("ctrl-n");
+    assert_eq!(active(&mut harness), Some(1));
+    harness.keys("ctrl-p");
+    assert_eq!(active(&mut harness), Some(0));
+}
+
+#[test]
+fn r9_the_overlay_rail_drives_the_list_and_its_drag_is_captured_beyond_the_tree() {
+    vespertine_test_host::require_backend!();
+    let mut harness = Harness::new(270.0, |tree| tree);
+    harness.load();
+    harness.answer("", many_files(60), None);
+    harness.host.motion_set(1000.0).unwrap();
+    harness.host.paint_frame();
+    harness
+        .host
+        .scroll_wheel(100.0, 100.0, 0.0, -300.0, "")
+        .unwrap();
+    harness.host.paint_frame();
+    let extents = |harness: &mut Harness| {
+        harness.read(|tree| {
+            let (max, position) = tree.list_state().scrollbar_extents();
+            (f32::from(max), f32::from(position))
+        })
+    };
+    let (max, before) = extents(&mut harness);
+    assert!(max > 1000.0 && before > 0.0, "{max} {before}");
+    // Pressing the track scrolls at press time; the strip took the press, not a row.
+    harness.host.mouse_down(315.0, 135.0, 0, "").unwrap();
+    let (_, pressed) = extents(&mut harness);
+    assert!(
+        (pressed - before).abs() > 10.0,
+        "the press scrolled: {before} -> {pressed}"
+    );
+    assert!(harness.selected().is_empty());
+    // The drag follows the strip far outside the tree (pointer capture).
+    harness.host.paint_frame();
+    harness.host.mouse_move(100.0, 900.0, Some(0), "").unwrap();
+    let (_, bottom) = extents(&mut harness);
+    assert!((bottom - max).abs() < 1.0, "clamped at the end: {bottom}");
+    harness.host.paint_frame();
+    harness.host.mouse_move(100.0, -50.0, Some(0), "").unwrap();
+    let (_, top) = extents(&mut harness);
+    assert!(top.abs() < 1.0, "clamped at the start: {top}");
+    harness.host.mouse_up(100.0, -50.0, 0, "").unwrap();
+    harness.host.mouse_move(100.0, 200.0, Some(0), "").unwrap();
+    let (_, after) = extents(&mut harness);
+    assert!(after.abs() < 1.0, "no drag after the release: {after}");
+    assert!(harness.selected().is_empty());
+    assert!(harness.read(|tree| tree.drag_session().is_none()));
+}
+
+#[test]
+fn a10_the_rename_field_is_a_labelled_text_field_and_typing_replaces_the_basename() {
+    vespertine_test_host::require_backend!();
+    let mut harness = rename_ready();
+    harness.keys("f2");
+    node(&mut harness.host, "textInput", Some("Rename"));
+    let field = harness.read(|tree| tree.rename_field().cloned().unwrap());
+    let window = harness.host.window();
+    harness
+        .host
+        .app()
+        .update_window(window, |_, window, cx| {
+            field.update(cx, |field, cx| {
+                field.replace_text_in_range(None, "summary", window, cx)
+            })
+        })
+        .unwrap();
+    let text = harness
+        .host
+        .app()
+        .update(|cx| field.read(cx).value_text().to_owned());
+    assert_eq!(text, "summary.txt");
+    harness.keys("enter");
+    assert_eq!(
+        harness.log.borrow().renames,
+        [("report.final.txt".to_owned(), "summary.txt".to_owned())]
+    );
 }

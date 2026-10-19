@@ -1,5 +1,6 @@
 //! Theme roles, metrics and row washes of the tree (CMP-016 R7, R8).
 
+use crate::text::FieldTheme;
 use vespertine::{App, Bounds, Hsla, IntoElement, PathBuilder, Pixels, Styled, canvas, point, px};
 use vespertine_theme::appearance::try_theme_of;
 use vespertine_theme::builtin::neutral_variant;
@@ -100,6 +101,22 @@ impl TreeTheme {
     /// The neutral wash: the text colour at `alpha`.
     pub fn wash(&self, alpha: f32) -> Hsla {
         self.text.opacity(alpha)
+    }
+
+    /// The roles of a single-line text field (CMP-007) drawn inside the tree's chrome: the
+    /// rename field and the search field of an owner.
+    pub fn field_theme(&self) -> FieldTheme {
+        FieldTheme {
+            text: self.text,
+            faint: self.text_faint,
+            muted: self.text_muted,
+            selection: self.accent.opacity(0.35),
+            caret: self.text,
+            surface: self.input,
+            border: self.border,
+            accent: self.accent,
+            disabled_surface: self.overlay,
+        }
     }
 }
 

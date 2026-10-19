@@ -10,9 +10,7 @@ use super::drag::{
     DRAG_TICK, DragItem, DragSession, DropHit, RAIL_EXCLUSION, ROOT_ROW_HEIGHT, TreeDragPayload,
     destination_paths, resolve_destination,
 };
-use super::menu::{
-    COPY_PATH, ContextMenu, DELETE, MenuItem, RENAME, copy_path_text, is_mutable, menu_items,
-};
+use super::menu::{COPY_PATH, ContextMenu, DELETE, RENAME, copy_path_text, is_mutable, menu_items};
 use super::model::{
     Activation, EntryKind, LoadRequest, Outcome, Page, PageError, RowKind, TreeModel, VisibleRow,
 };
@@ -24,16 +22,23 @@ use super::style::{
     NAME_SIZE, RENAME_HEIGHT, RENAME_PADDING, RENAME_RADIUS, ROW_HEIGHT, ROW_PADDING_RIGHT,
     RowVisual, STATUS_SIZE, TreeTheme, TreeWashes, chevron, guide_x, row_padding_left,
 };
-use crate::browser::{AddressEvent, AddressInput, BrowserTheme};
+use crate::floating::{
+    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, ListKey, OutsidePress,
+    Placement, Popup, PopupMenuItem, SurfaceMotion, anchored_menu_at, classify_key, close_popup,
+    menu_item_row, open_layer,
+};
+use crate::scroll::{ListRail, RailBar, RailOrientation, render_rail, track_hover};
+use crate::text::{TextField, TextFieldEvent};
+use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use std::time::Instant;
 use vespertine::{
     AnyElement, App, AppContext as _, Bounds, ClickEvent, ClipboardItem, Context, CursorStyle,
     DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
-    IntoElement, KeyDownEvent, ListAlignment, ListState, Modifiers, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Point, Render, Role, ScrollWheelEvent, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, anchored, deferred,
-    div, edge_faded, list, prelude::FluentBuilder, px,
+    IntoElement, KeyDownEvent, ListAlignment, ListState, Modifiers, MotionClock, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, Role, ScrollWheelEvent, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div,
+    edge_faded, list, prelude::FluentBuilder, px,
 };
 
 type IdentityFn = Rc<dyn Fn(EntryKind, &str, bool, &mut Window, &mut App) -> AnyElement>;
@@ -92,13 +97,17 @@ struct OwnerMenuItem {
 struct OpenMenu {
     menu: ContextMenu,
     position: Point<Pixels>,
+    layer: LayerHandle,
 }
 
 struct RenameState {
     session: RenameSession,
-    field: Entity<AddressInput>,
+    field: Entity<TextField>,
     _subscriptions: Vec<Subscription>,
 }
+
+/// The line height of the rename field's text: the field is 23 px tall with a 1 px border.
+const RENAME_LINE_HEIGHT: f32 = RENAME_HEIGHT - 2.0;
 
 /// The interactive virtual file tree.
 pub struct Tree {
@@ -107,13 +116,15 @@ pub struct Tree {
     rows: Vec<VisibleRow>,
     rows_revision: u64,
     focus_handle: FocusHandle,
+    menu_focus: FocusHandle,
+    rail: RailBar,
     theme_override: Option<TreeTheme>,
     frame_theme: TreeTheme,
     washes: TreeWashes,
     label: SharedString,
     hooks: Hooks,
     owner_menu_items: Vec<OwnerMenuItem>,
-    menu: Option<OpenMenu>,
+    menu: Popup<OpenMenu>,
     rename: Option<RenameState>,
     drag: Option<DragSession>,
     drag_task: Option<Task<()>>,
@@ -155,13 +166,15 @@ impl Tree {
             rows: Vec::new(),
             rows_revision: 0,
             focus_handle: cx.focus_handle(),
+            menu_focus: cx.focus_handle(),
+            rail: RailBar::new(),
             theme_override: None,
             frame_theme: TreeTheme::current(cx),
             washes: TreeWashes::default(),
             label: SharedString::new_static("Files"),
             hooks: Hooks::default(),
             owner_menu_items: Vec::new(),
-            menu: None,
+            menu: Popup::new(),
             rename: None,
             drag: None,
             drag_task: None,
@@ -332,7 +345,7 @@ impl Tree {
 
     /// The open context menu.
     pub fn context_menu(&self) -> Option<&ContextMenu> {
-        self.menu.as_ref().map(|open| &open.menu)
+        self.menu.as_open().map(|open| &open.menu)
     }
 
     /// The drag in progress inside the tree.
@@ -351,7 +364,7 @@ impl Tree {
     }
 
     /// The rename field, while a rename is open.
-    pub fn rename_field(&self) -> Option<&Entity<AddressInput>> {
+    pub fn rename_field(&self) -> Option<&Entity<TextField>> {
         self.rename.as_ref().map(|rename| &rename.field)
     }
 
@@ -505,7 +518,7 @@ impl Tree {
     /// Closes the menu, cancels a drag and an open rename: the owner target or the window
     /// changed.
     pub fn suspend_interactions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
+        self.close_context_menu(window, cx);
         if self.drag.is_some() {
             if cx.has_active_drag() {
                 cx.stop_active_drag(window);
@@ -653,7 +666,7 @@ impl Tree {
         }
     }
 
-    fn empty_clicked(&mut self, event: &ClickEvent, cx: &mut Context<Self>) {
+    fn empty_clicked(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         if event.is_right_click() || event.is_middle_click() {
             return;
         }
@@ -662,7 +675,7 @@ impl Tree {
             return;
         }
         let changed = self.model.clear_selection();
-        self.menu = None;
+        self.close_context_menu(window, cx);
         self.selection_changed(changed, cx);
     }
 
@@ -702,8 +715,8 @@ impl Tree {
         if self.rename.is_some() {
             return false;
         }
-        if self.menu.is_some() {
-            return self.handle_menu_key(key, window, cx);
+        if self.menu.is_open() {
+            return self.handle_menu_key(classify_key(key, modifiers, true), window, cx);
         }
         let plain =
             !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function);
@@ -814,8 +827,9 @@ impl Tree {
 
     // ---- context menu -----------------------------------------------------------------------
 
-    /// Opens the context menu for the action paths at `position`. Does nothing without action
-    /// paths or while renaming.
+    /// Opens the context menu for the action paths at `position`, as a CMP-002 layer: it takes
+    /// focus, owns Escape and dismisses on an outside press without clicking through. Does
+    /// nothing without action paths or while renaming.
     pub fn open_context_menu(
         &mut self,
         position: Point<Pixels>,
@@ -840,10 +854,37 @@ impl Tree {
             .map(|item| (item.id.clone(), item.label.clone()))
             .collect();
         let items = menu_items(&owner, paths.len(), &rename_mutable, &delete_mutable);
-        self.menu = Some(OpenMenu {
-            menu: ContextMenu::new(paths.clone(), items),
-            position,
+        if let Some(previous) = self.menu.as_open() {
+            previous.layer.close(window, cx);
+        }
+        let view = cx.entity().downgrade();
+        let escape: EscapeHandler = Rc::new(move |window, cx| {
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |this, cx| this.close_context_menu(window, cx));
+            }
+            EscapeOutcome::Dismissed
         });
+        let layer = open_layer(
+            window,
+            cx,
+            LayerOptions {
+                escape,
+                layer_focus: self.menu_focus.clone(),
+                trigger: Some(self.focus_handle.clone()),
+                initial_focus: FocusTarget::Default,
+                final_focus: FocusTarget::Default,
+                trigger_first: false,
+            },
+        );
+        let now = MotionClock::now_ms(cx);
+        self.menu.open(
+            OpenMenu {
+                menu: ContextMenu::new(paths.clone(), items),
+                position,
+                layer,
+            },
+            now,
+        );
         if let Some(hook) = self.hooks.on_context_menu.clone() {
             self.call(window, cx, move |window, cx| {
                 hook(&paths, position, window, cx)
@@ -853,50 +894,63 @@ impl Tree {
         true
     }
 
-    /// Closes the context menu.
-    pub fn close_context_menu(&mut self, cx: &mut Context<Self>) {
-        if self.menu.take().is_some() {
+    /// Closes the context menu: its layer ends (Escape stops reaching it, focus returns to the
+    /// tree) and the exit phase starts.
+    pub fn close_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(open) = self.menu.as_open() {
+            open.layer.close(window, cx);
+        }
+        close_popup(self, cx, |this| &mut this.menu);
+    }
+
+    fn set_menu_active(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(open) = self.menu.as_open_mut() {
+            open.menu.set_active(Some(ix));
             cx.notify();
         }
     }
 
-    fn handle_menu_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn handle_menu_key(
+        &mut self,
+        key: ListKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(open) = self.menu.as_open_mut() else {
+            return false;
+        };
         match key {
-            "down" => {
-                if let Some(open) = &mut self.menu {
-                    open.menu.next();
+            ListKey::Down => open.menu.next(),
+            ListKey::Up => open.menu.previous(),
+            ListKey::Home => open.menu.first(),
+            ListKey::End => open.menu.last(),
+            ListKey::Enter | ListKey::SecondaryEnter => {
+                if let Some(ix) = open.menu.active() {
+                    self.activate_menu_item(ix, window, cx);
                 }
-                cx.notify();
+                return true;
             }
-            "up" => {
-                if let Some(open) = &mut self.menu {
-                    open.menu.previous();
-                }
-                cx.notify();
+            ListKey::Escape => {
+                self.close_context_menu(window, cx);
+                return true;
             }
-            "enter" => {
-                let active = self.menu.as_ref().and_then(|open| open.menu.active());
-                match active {
-                    Some(ix) => self.activate_menu_item(ix, window, cx),
-                    None => {}
-                }
-            }
-            "escape" => self.close_context_menu(cx),
             _ => return false,
         }
+        cx.notify();
         true
     }
 
     /// Dispatches the enabled item `ix` of the open menu and closes the menu.
     pub fn activate_menu_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(open) = self.menu.take() else {
+        let Some(open) = self.menu.as_open() else {
             return;
         };
-        cx.notify();
-        let Some(item) = open.menu.items.get(ix).filter(|item| item.enabled).cloned() else {
+        let paths = open.menu.paths.clone();
+        let item = open.menu.items.get(ix).filter(|item| item.enabled).cloned();
+        self.close_context_menu(window, cx);
+        let Some(item) = item else {
             return;
         };
-        let paths = open.menu.paths;
         match item.id.as_str() {
             COPY_PATH => {
                 let resolve = self.hooks.path_resolver.clone();
@@ -940,30 +994,33 @@ impl Tree {
         let Some(entry) = self.model.node(path).map(|node| node.entry.clone()) else {
             return false;
         };
-        self.menu = None;
+        self.close_context_menu(window, cx);
         let changed = self.model.select(path);
         self.selection_changed(changed, cx);
         self.reveal_cursor();
         let theme = self.current_theme(cx);
-        let browser_theme = browser_theme(&theme);
-        let field = cx.new(|cx| AddressInput::new("", window, cx));
+        let field_theme = theme.field_theme();
         let range = basename_range(&entry.name, entry.is_dir());
+        let field = cx.new(|cx| {
+            TextField::new(window, cx)
+                .chromeless()
+                .theme(field_theme)
+                .text_metrics(px(NAME_SIZE), px(RENAME_LINE_HEIGHT))
+                .accessible_label("Rename")
+                .value(&entry.name)
+        });
         field.update(cx, |field, cx| {
-            field.set_theme(Some(browser_theme), cx);
-            field.set_label("Rename");
-            field.set_select_all_on_focus(false);
-            field.set_text(&entry.name, window, cx);
-            field.set_selection(range, window, cx);
+            field.set_selected_range(range, false, window, cx);
         });
         let focus = field.focus_handle(cx);
         let subscriptions = vec![
             cx.subscribe_in(
                 &field,
                 window,
-                |this, _, event: &AddressEvent, window, cx| match event {
-                    AddressEvent::Submit => this.commit_rename(window, cx),
-                    AddressEvent::Escape => this.cancel_rename(window, cx),
-                    AddressEvent::Edited => {}
+                |this, _, event: &TextFieldEvent, window, cx| match event {
+                    TextFieldEvent::Submitted(_) => this.commit_rename(window, cx),
+                    TextFieldEvent::Cancelled => this.cancel_rename(window, cx),
+                    _ => {}
                 },
             ),
             cx.on_blur(&focus, window, |this, window, cx| {
@@ -985,7 +1042,7 @@ impl Tree {
         let Some(rename) = &mut self.rename else {
             return;
         };
-        let name = rename.field.read(cx).text().to_owned();
+        let name = rename.field.read(cx).value_text().to_owned();
         let path = rename.session.path().to_owned();
         let current_revision = self
             .model
@@ -1150,8 +1207,8 @@ impl Tree {
             }
             return;
         }
-        if self.menu.take().is_some() {
-            cx.notify();
+        if self.menu.is_mounted() {
+            self.close_context_menu(window, cx);
         }
         let payload = event.drag(cx).clone();
         if self.drag.is_none() {
@@ -1450,7 +1507,7 @@ impl Tree {
                 .text_size(px(NAME_SIZE))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(|_, _, cx| cx.stop_propagation())
-                .child(field)
+                .child(div().flex_1().min_w_0().child(field))
                 .into_any_element()
         } else {
             div()
@@ -1573,95 +1630,63 @@ impl Tree {
     }
 
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let open = self.menu.as_ref()?;
-        let theme = &self.frame_theme;
-        let items: Vec<AnyElement> = open
-            .menu
-            .items
-            .iter()
-            .enumerate()
-            .map(|(ix, item)| {
-                let active = open.menu.active() == Some(ix);
-                menu_row(ix, item, active, theme, cx)
+        let open = self.menu.get()?;
+        let tokens = ComponentTokens::current(cx);
+        let position = open.position;
+        let dismiss = {
+            let view = cx.entity().downgrade();
+            Rc::new(move |window: &mut Window, cx: &mut App| {
+                if let Some(view) = view.upgrade() {
+                    view.update(cx, |this, cx| this.close_context_menu(window, cx));
+                }
             })
-            .collect();
-        Some(
-            deferred(
-                anchored().position(open.position).snap_to_window().child(
-                    div()
-                        .id("tree-context-menu")
-                        .role(Role::Menu)
-                        .aria_label("Context menu")
-                        .occlude()
-                        .min_w(px(168.0))
-                        .py(px(4.0))
-                        .rounded(px(6.0))
-                        .border_1()
-                        .border_color(theme.border_strong)
-                        .bg(theme.overlay)
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.close_context_menu(cx);
+        };
+        let mut menu = anchored_menu_at("tree-context-menu", position)
+            .motion(SurfaceMotion::now(
+                &self.menu,
+                Placement::At(position).side(),
+                cx,
+            ))
+            .track_focus(&self.menu_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let key = classify_key(&event.keystroke.key, event.keystroke.modifiers, true);
+                if this.handle_menu_key(key, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .outside_press(OutsidePress {
+                layer: open.layer.id(),
+                on_dismiss: dismiss,
+                consume: true,
+                exempt: Vec::new(),
+            })
+            .min_w(px(168.0));
+        for (ix, item) in open.menu.items.iter().enumerate() {
+            let entry = PopupMenuItem {
+                label: SharedString::from(item.label.clone()),
+                disabled: !item.enabled,
+            };
+            let active = open.menu.active() == Some(ix);
+            let row = menu_item_row(("tree-menu-item", ix), &entry, active, &tokens).when(
+                item.enabled,
+                |row| {
+                    row.cursor(CursorStyle::PointingHand)
+                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            this.set_menu_active(ix, cx);
                         }))
-                        .children(items),
-                ),
-            )
-            .with_priority(1)
-            .into_any_element(),
-        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.activate_menu_item(ix, window, cx);
+                        }))
+                },
+            );
+            menu = menu.child(row);
+        }
+        Some(menu.into_any_element())
     }
 }
 
 const ROW_PADDING_LEFT_PX: f32 = super::style::ROW_PADDING_LEFT;
-
-fn menu_row(
-    ix: usize,
-    item: &MenuItem,
-    active: bool,
-    theme: &TreeTheme,
-    cx: &mut Context<Tree>,
-) -> AnyElement {
-    let enabled = item.enabled;
-    let hover = theme.wash(0.08);
-    div()
-        .id(("tree-menu-item", ix))
-        .role(Role::MenuItem)
-        .aria_label(SharedString::from(item.label.clone()))
-        .flex()
-        .items_center()
-        .h(px(26.0))
-        .px(px(10.0))
-        .text_size(px(12.0))
-        .text_color(if enabled {
-            theme.text
-        } else {
-            theme.text_faint
-        })
-        .when(active, |row| row.bg(theme.wash(0.12)))
-        .when(enabled, |row| {
-            row.hover(move |style| style.bg(hover))
-                .cursor(CursorStyle::PointingHand)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.activate_menu_item(ix, window, cx);
-                }))
-        })
-        .child(item.label.clone())
-        .into_any_element()
-}
-
-fn browser_theme(theme: &TreeTheme) -> BrowserTheme {
-    BrowserTheme {
-        text: theme.text,
-        muted: theme.text_muted,
-        faint: theme.text_faint,
-        border: theme.border,
-        strong_border: theme.border_strong,
-        raised: theme.overlay,
-        page_background: theme.input,
-        danger: theme.danger,
-        hover: theme.wash(0.055),
-    }
-}
 
 /// The default entry identity icon: a folder or file glyph in neutral colours.
 pub fn default_identity(kind: EntryKind, expanded: bool, theme: &TreeTheme) -> AnyElement {
@@ -1735,7 +1760,7 @@ impl Render for DragGhost {
 }
 
 impl Render for Tree {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frame_theme = self.current_theme(cx);
         let theme = self.frame_theme.clone();
         let list_state = self.list.clone();
@@ -1754,6 +1779,24 @@ impl Render for Tree {
         .size_full();
         let faded = edge_faded(px(FADE_BAND), true, true, rows)
             .fade_overflow_y_with(move |_, _| list_fade_flags(&fade_list));
+        // The overlay rail reads its geometry from the list state (R9), never from row counts.
+        let rail = render_rail(
+            "tree-rail",
+            Rc::new(ListRail::new(self.list.clone(), self.rail.clone())),
+            RailOrientation::Vertical,
+            window,
+            cx,
+        );
+        let list_pane = track_hover(
+            div()
+                .id("tree-list")
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(faded)
+                .children(rail),
+            &self.rail,
+        );
         let root_row = self.render_root_row(cx);
         let menu = self.render_menu(cx);
         div()
@@ -1779,16 +1822,16 @@ impl Render for Tree {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::focus_on_press))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::focus_on_press))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::focus_on_press))
-            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| this.empty_clicked(event, cx)))
-            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
-                this.close_context_menu(cx);
+            .on_click(cx.listener(Self::empty_clicked))
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, window, cx| {
+                this.close_context_menu(window, cx);
             }))
             .on_drag_move(cx.listener(Self::drag_moved))
             .on_drop(cx.listener(|this, payload: &TreeDragPayload, window, cx| {
                 this.drop_payload(payload, window, cx);
             }))
             .children(root_row)
-            .child(div().relative().flex_1().min_h_0().child(faded))
+            .child(list_pane)
             .children(menu)
     }
 }

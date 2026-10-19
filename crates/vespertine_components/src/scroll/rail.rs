@@ -2,16 +2,15 @@
 //!
 //! [`render_rail`] is the one-call helper: it observes the host's scroll position, decides
 //! whether the rail is visible, arms the single hide wake-up and returns the positioned strip
-//! element with its pointer listeners (strip hover, press, drag capture, drag move and both
-//! release ends). The strip exists, and is hit-testable, only while the rail is visible.
+//! element with its pointer listeners (strip hover, press with pointer capture (INP-001), drag
+//! move and release). The strip exists, and is hit-testable, only while the rail is visible.
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use vespertine::{
-    AnyElement, App, DispatchPhase, ElementId, InteractiveElement as _, IntoElement as _,
-    ListState, MotionClock, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, canvas, div, hsla, point,
-    px,
+    AnyElement, App, ElementId, InteractiveElement as _, IntoElement as _, ListState, MotionClock,
+    MouseButton, ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Window, canvas, div, hsla, point, px,
 };
 
 use super::{
@@ -331,59 +330,20 @@ pub fn render_rail(
             .w(px(metrics.thumb_len))
     };
 
-    let capture = {
-        let host = host.clone();
+    // The strip origin the press maths measure from is read in the strip's prepaint.
+    let origin_probe = {
         let bar = bar.clone();
         canvas(
-            {
-                let bar = bar.clone();
-                move |bounds, _, _| {
-                    bar.with(|state| {
-                        state.set_strip_origin(if vertical {
-                            f32::from(bounds.origin.y)
-                        } else {
-                            f32::from(bounds.origin.x)
-                        });
-                    });
-                }
-            },
-            move |_, _, window, _| {
-                if !bar.with(|state| state.dragging()) {
-                    return;
-                }
-                let move_host = host.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture
-                        || !move_host.rail_bar().with(|s| s.dragging())
-                    {
-                        return;
-                    }
-                    if event.pressed_button != Some(MouseButton::Left) {
-                        // The release happened where no event reached us (outside the window).
-                        end_press(move_host.as_ref(), MotionClock::now_ms(cx));
+            move |bounds, _, _| {
+                bar.with(|state| {
+                    state.set_strip_origin(if vertical {
+                        f32::from(bounds.origin.y)
                     } else {
-                        drag_to(
-                            move_host.as_ref(),
-                            orientation,
-                            axis_coordinate(orientation, event.position),
-                        );
-                    }
-                    window.refresh();
-                    cx.stop_propagation();
-                });
-                let up_host = host.clone();
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture
-                        || event.button != MouseButton::Left
-                        || !up_host.rail_bar().with(|s| s.dragging())
-                    {
-                        return;
-                    }
-                    end_press(up_host.as_ref(), MotionClock::now_ms(cx));
-                    window.refresh();
-                    cx.stop_propagation();
+                        f32::from(bounds.origin.x)
+                    });
                 });
             },
+            |_, _, _, _| {},
         )
         .absolute()
         .size_full()
@@ -394,6 +354,10 @@ pub fn render_rail(
         .absolute()
         .block_mouse_except_scroll()
         .cursor_default()
+        // INP-001: a left press captures the pointer for the strip, so the drag moves and the
+        // release reach it wherever the pointer goes in the window. The press handler must not
+        // stop propagation: the capture is armed by a listener registered before it.
+        .capture_pointer()
         .on_hover(move |hovered, window, cx| {
             let now = MotionClock::now_ms(cx);
             bar.with(|state| state.set_bar_hovered(*hovered, now));
@@ -401,8 +365,7 @@ pub fn render_rail(
         })
         .on_mouse_down(MouseButton::Left, {
             let host = host.clone();
-            move |event, window, cx| {
-                cx.stop_propagation();
+            move |event, window, _| {
                 begin_press(
                     host.as_ref(),
                     orientation,
@@ -411,11 +374,29 @@ pub fn render_rail(
                 window.refresh();
             }
         })
+        .on_mouse_move({
+            let host = host.clone();
+            move |event, window, cx| {
+                if !host.rail_bar().with(|state| state.dragging()) {
+                    return;
+                }
+                if event.pressed_button != Some(MouseButton::Left) {
+                    // The release happened where no event reached us (outside the window).
+                    end_press(host.as_ref(), MotionClock::now_ms(cx));
+                } else {
+                    drag_to(
+                        host.as_ref(),
+                        orientation,
+                        axis_coordinate(orientation, event.position),
+                    );
+                }
+                window.refresh();
+                cx.stop_propagation();
+            }
+        })
         .on_mouse_up(MouseButton::Left, {
             let host = host.clone();
             move |_, window, cx| {
-                // A release on the strip itself ends the drag even before a frame installed the
-                // window-level release listener.
                 end_press(host.as_ref(), MotionClock::now_ms(cx));
                 window.refresh();
             }
@@ -429,5 +410,5 @@ pub fn render_rail(
             .bottom_0()
             .h(px(RAIL_HIT_THICKNESS))
     };
-    Some(strip.child(capture).child(thumb).into_any_element())
+    Some(strip.child(origin_probe).child(thumb).into_any_element())
 }
