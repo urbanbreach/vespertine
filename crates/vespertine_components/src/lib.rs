@@ -18,6 +18,11 @@
 //! loading, selection, cursor, anchor), path-attached scroll anchors, drag-and-drop destination
 //! logic, inline rename, the hierarchical search-result tree and the [`tree::Tree`] view that
 //! renders them with the virtual list.
+//!
+//! [`table`] is the data table of CMP-019: columns with fixed or flexible widths, header-driven
+//! resizing and reordering that keep per-column identity, grouped rows with collapsible headings
+//! and a paging footer, a scroll anchor that survives filtering, paging and sorting, and a graph
+//! gutter whose canvas rows align exactly with the table rows.
 
 pub mod audio;
 pub mod browser;
@@ -36,6 +41,7 @@ pub mod select;
 pub mod shader;
 pub mod status;
 pub mod streaming;
+pub mod table;
 pub mod terminal;
 pub mod tokens;
 pub mod tooltip;
