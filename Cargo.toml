@@ -20,7 +20,6 @@ members = [
     "crates/vespertine_path",
     "crates/vespertine_perf",
     "crates/vespertine_platform",
-    "crates/vespertine_pp_rs",
     "crates/vespertine_public_image_loader",
     "crates/vespertine_refineable",
     "crates/vespertine_residency",
@@ -719,11 +718,6 @@ nonminimal_bool = "allow"
 [workspace.lints.clippy.style]
 level = "allow"
 priority = -1
-
-# naga's GLSL front end (CMP-026) needs the `pp-rs` preprocessor, which is not in the offline
-# registry: the workspace provides its own implementation of the same interface.
-[patch.crates-io.pp-rs]
-path = "crates/vespertine_pp_rs"
 
 [patch.crates-io.async-process]
 git = "https://github.com/zed-industries/async-process.git"

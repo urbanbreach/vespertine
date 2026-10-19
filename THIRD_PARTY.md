@@ -8,10 +8,10 @@ Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Cl
 
 ## Summary
 
-- Rust crates compiled by some build, test or example: **730**
-- Rust crates present only in `Cargo.lock` (never compiled): **114**
+- Rust crates compiled by some build, test or example: **732**
+- Rust crates present only in `Cargo.lock` (never compiled): **113**
 - npm packages (third-party): **65**; first-party npm packages: 6
-- Rust crates by license used: MIT 663, Apache-2.0 23, Unicode-3.0 22, BSD-3-Clause 9, ISC 4, Zlib 3, BSD-2-Clause 1, ISC AND Apache-2.0 1, ISC AND Apache-2.0 AND Apache-2.0 AND MIT AND BSD-3-Clause AND MIT AND Apache-2.0 1, MIT AND BSD-3-Clause 1, Apache-2.0 AND ISC 1, MIT AND Unicode-3.0 1
+- Rust crates by license used: MIT 664, Apache-2.0 23, Unicode-3.0 22, BSD-3-Clause 10, ISC 4, Zlib 3, BSD-2-Clause 1, ISC AND Apache-2.0 1, ISC AND Apache-2.0 AND Apache-2.0 AND MIT AND BSD-3-Clause AND MIT AND Apache-2.0 1, MIT AND BSD-3-Clause 1, Apache-2.0 AND ISC 1, MIT AND Unicode-3.0 1
 
 ## Vendored crates (`third_party/`)
 
@@ -545,6 +545,7 @@ First-party npm packages (all Apache-2.0): `@vespertine/dev`, `@vespertine/examp
 | portable-atomic-util | 0.2.4 | Apache-2.0 OR MIT | MIT | crates.io |
 | postage | 0.5.0 | MIT | MIT | crates.io |
 | potential_utf | 0.1.3 | Unicode-3.0 | Unicode-3.0 | crates.io |
+| pp-rs | 0.2.1 | BSD-3-Clause | BSD-3-Clause | crates.io |
 | ppv-lite86 | 0.2.21 | MIT OR Apache-2.0 | MIT | crates.io |
 | presser | 0.3.1 | MIT OR Apache-2.0 | MIT | crates.io |
 | proc-macro-crate | 3.4.0 | MIT OR Apache-2.0 | MIT | crates.io |
@@ -725,6 +726,7 @@ First-party npm packages (all Apache-2.0): `@vespertine/dev`, `@vespertine/examp
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | MIT | crates.io |
 | unicode-vo | 0.1.0 | MIT/Apache-2.0 | MIT | crates.io |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 | MIT | crates.io |
+| unicode-xid | 0.2.6 | MIT OR Apache-2.0 | MIT | crates.io |
 | untrusted | 0.9.0 | ISC | ISC | crates.io |
 | url | 2.5.7 | MIT OR Apache-2.0 | MIT | crates.io |
 | usvg | 0.46.0 | Apache-2.0 OR MIT | MIT | crates.io |
@@ -953,7 +955,6 @@ Optional dependencies that no enabled feature compiles (for example the AV1 enco
 | sysinfo | 0.31.4 | MIT | MIT | crates.io |
 | tao-core-video-sys | 0.2.0 | MIT | MIT | crates.io |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | MIT | crates.io |
-| unicode-xid | 0.2.6 | MIT OR Apache-2.0 | MIT | crates.io |
 | v_frame | 0.3.9 | BSD-2-Clause | BSD-2-Clause | crates.io |
 | value-bag-serde1 | 1.12.0 | Apache-2.0 OR MIT | MIT | crates.io |
 | value-bag-sval2 | 1.12.0 | Apache-2.0 OR MIT | MIT | crates.io |
