@@ -76,8 +76,8 @@ Fidelity scene sizes come from `reports/fidelity/SIZES.tsv`.
 
 ```sh
 REP=~/Projects/vespertine-cleanroom/reports/fidelity
-$D capture --runner vsp=$R --scene FID-RND-001-1 --scene-sizes $REP/SIZES.tsv --out-dir /tmp/cap
-$D compare /tmp/cap/vsp-FID-RND-001-1.png $REP/ref/FID-RND-001-1.png --diff /tmp/cap/diff.png
+$D capture --runner vsp=$R --scene FID-RND-001-1 --scene-sizes $REP/SIZES.tsv --out-dir target/scene-out/cap
+$D compare target/scene-out/cap/vsp-FID-RND-001-1.png $REP/ref/FID-RND-001-1.png --diff target/scene-out/cap/diff.png
 ```
 
 A scene passes when at most 0.5 % of pixels differ by more than 8/255 in any channel (`compare` exits
@@ -86,8 +86,8 @@ A scene passes when at most 0.5 % of pixels differ by more than 8/255 in any cha
 ## Measuring against the upstream runner
 
 ```sh
-$D perf --runner upstream=$U --runner vsp=$R --scene PERF-LIST --runs 10 --out-dir /tmp/perf
-cat /tmp/perf/results.md          # median/min/max CPU µs per frame and the ratio to the first runner
+$D perf --runner upstream=$U --runner vsp=$R --scene PERF-LIST --runs 10 --out-dir target/scene-out/perf
+cat target/scene-out/perf/results.md          # median/min/max CPU µs per frame and the ratio to the first runner
 ```
 
 Omit `--scene` for all six baseline scenes (`PERF-IDLE` runs in idle mode). Other ids need
