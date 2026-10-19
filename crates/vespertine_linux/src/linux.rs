@@ -39,6 +39,8 @@ pub use wayland::WaylandSolidProducer;
 #[cfg(feature = "wayland")]
 pub(crate) use wayland::*;
 #[cfg(feature = "x11")]
+pub use x11::X11SolidProducer;
+#[cfg(feature = "x11")]
 pub(crate) use x11::*;
 
 use std::rc::Rc;
