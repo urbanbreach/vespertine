@@ -86,10 +86,21 @@ impl ReaderSample {
     /// Samples the list's current top anchor and viewport height.
     pub fn from_list(list: &ListState) -> Self {
         let top = list.logical_scroll_top();
+        let viewport = f32::from(list.viewport_bounds().size.height);
+        let (max, position) = list.scrollbar_extents();
+        if max > px(0.0) && position >= max - px(0.5) {
+            // The viewport bottom sits on the bottom of the last row: the at-end sentinel, an
+            // index beyond the last row (R27).
+            return Self {
+                index: list.item_count(),
+                offset: 0.0,
+                viewport,
+            };
+        }
         Self {
             index: top.item_ix,
             offset: f32::from(top.offset_in_item),
-            viewport: f32::from(list.viewport_bounds().size.height),
+            viewport,
         }
     }
 }

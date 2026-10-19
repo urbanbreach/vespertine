@@ -164,6 +164,7 @@ struct Inner {
     kick: bool,
     frame_scheduled: bool,
     long_jump_done: bool,
+    estimate: Option<f32>,
     visible_range: Option<Rc<RefCell<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>>,
 }
 
@@ -191,6 +192,7 @@ impl FollowController {
                 kick: false,
                 frame_scheduled: false,
                 long_jump_done: false,
+                estimate: None,
                 visible_range: None,
             })),
             list,
@@ -267,11 +269,31 @@ impl FollowController {
             && (!inner.policy.is_pinned() || self.distance_from_bottom() <= LANDING_SNAP)
     }
 
+    /// The viewport height, the maximum scroll offset (the target) and the current scroll offset
+    /// (positions: larger = closer to the bottom), from the extents a scrollbar would report.
     fn geometry(&self) -> (f32, f32, f32) {
         let viewport = f32::from(self.list.viewport_bounds().size.height);
-        let max = f32::from(self.list.max_offset_for_scrollbar().y).max(0.0);
-        let scrolled = (-f32::from(self.list.scroll_px_offset_for_scrollbar().y)).clamp(0.0, max);
-        (viewport, max, scrolled)
+        let (max, scrolled) = self.list.scrollbar_extents();
+        let max = f32::from(max).max(0.0);
+        (viewport, max, f32::from(scrolled).clamp(0.0, max))
+    }
+
+    /// Keeps the list's estimate for unmeasured rows at the measured average, so pixel scrolls
+    /// through unmeasured territory map to sensible rows (only re-estimated on a 10% change).
+    fn refresh_estimate(&self) {
+        let Some(average) = self.list.average_measured_height() else {
+            return;
+        };
+        let average = f32::from(average).round().max(1.0);
+        let mut inner = self.inner.borrow_mut();
+        let drifted = inner
+            .estimate
+            .is_none_or(|last| (average - last).abs() / last > 0.1);
+        if drifted {
+            inner.estimate = Some(average);
+            drop(inner);
+            self.list.set_estimated_item_height(Some(px(average)));
+        }
     }
 
     fn is_glued(&self) -> bool {
@@ -281,6 +303,7 @@ impl FollowController {
     // List events.
 
     fn on_list_event(&self, event: &ListScrollEvent, window: &mut Window, cx: &mut App) {
+        self.refresh_estimate();
         if event.user_initiated {
             self.on_user_scroll(window, cx);
         }
@@ -499,6 +522,9 @@ impl FollowController {
     /// is the parent height minus it ([`list_viewport_height`]).
     pub fn set_bottom_clearance(&self, requested: f32, limit: f32, window: &mut Window) -> f32 {
         let reserved = reserved_height(requested, limit);
+        // A view at the end stays at the end: the new reservation is resolved before the list
+        // lays out, so the end rests above the chrome in the very frame it changes.
+        let at_end = self.distance_from_bottom() <= AT_BOTTOM_EPSILON;
         let (changed, pinned, anchored) = {
             let mut inner = self.inner.borrow_mut();
             let changed = reservation_changed(inner.bottom_clearance, reserved);
@@ -508,7 +534,9 @@ impl FollowController {
             (changed, inner.policy.is_pinned(), inner.hold.is_some())
         };
         if changed {
-            if pinned {
+            if pinned && at_end {
+                self.land();
+            } else if pinned {
                 self.kick(window);
             }
             if anchored {
@@ -563,6 +591,7 @@ impl FollowController {
                 && self.distance_from_bottom() <= AT_BOTTOM_EPSILON;
             (inner.policy.is_pinned(), live)
         };
+        self.refresh_estimate();
         let was_empty = self.list.item_count() == 0;
         let glued = self.is_glued();
         match commit {
@@ -715,6 +744,7 @@ impl FollowController {
     /// Runs one stepper tick after layout (so measurements are fresh); returns whether another
     /// frame is needed. A stationary spring never asks for one.
     pub fn tick(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.refresh_estimate();
         let now = MotionClock::now_ms(cx);
         let mut again = false;
         again |= self.tick_navigation(now, cx);
@@ -933,6 +963,7 @@ impl FollowController {
         self.list.scroll_to_end();
         let mut inner = self.inner.borrow_mut();
         inner.policy.record_distance(0.0);
+        inner.policy.update_jump_button(0.0);
         inner.kick = false;
     }
 }

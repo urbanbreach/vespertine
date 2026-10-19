@@ -122,6 +122,7 @@ pub struct ElasticState {
     last_event_ms: Option<f64>,
     spring: Option<ReturnSpring>,
     springs_created: u32,
+    reported_offset: f32,
 }
 
 impl Default for ElasticState {
@@ -145,6 +146,7 @@ impl ElasticState {
             last_event_ms: None,
             spring: None,
             springs_created: 0,
+            reported_offset: 0.0,
         }
     }
 
@@ -182,8 +184,10 @@ impl ElasticState {
     pub fn reset(&mut self) {
         let extent = self.extent;
         let created = self.springs_created;
+        let reported = self.reported_offset;
         *self = Self::new(extent);
         self.springs_created = created;
+        self.reported_offset = reported;
     }
 
     fn start_spring(&mut self, x0: f32, v0: f32, now_ms: f64) {
@@ -416,6 +420,7 @@ pub struct ElasticScroll {
     child: AnyElement,
     enabled: bool,
     reliable_phases: Option<bool>,
+    on_change: Option<Rc<dyn Fn(f32, &mut Window, &mut App)>>,
 }
 
 /// Wraps `child`, the scroll container that owns `source`, in an elastic overscroll wrapper.
@@ -430,6 +435,7 @@ pub fn elastic_scroll(
         child: child.into_any_element(),
         enabled: true,
         reliable_phases: None,
+        on_change: None,
     }
 }
 
@@ -444,6 +450,13 @@ impl ElasticScroll {
     /// gesture phases (a test override; hosts set [`ReliableScrollPhases`] globally).
     pub fn reliable_phases(mut self, reliable: bool) -> Self {
         self.reliable_phases = Some(reliable);
+        self
+    }
+
+    /// Observes the displayed band offset: called, after the frame, whenever it changed (the
+    /// wrapper's state changes notify the owner).
+    pub fn on_change(mut self, listener: impl Fn(f32, &mut Window, &mut App) + 'static) -> Self {
+        self.on_change = Some(Rc::new(listener));
         self
     }
 
@@ -516,6 +529,13 @@ impl Element for ElasticScroll {
             }
             if state.spring_active() {
                 window.request_animation_frame();
+            }
+            if state.reported_offset != state.offset() {
+                state.reported_offset = state.offset();
+                if let Some(listener) = self.on_change.clone() {
+                    let offset = state.offset();
+                    window.defer(cx, move |window, cx| listener(offset, window, cx));
+                }
             }
             state.offset()
         };

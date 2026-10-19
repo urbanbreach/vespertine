@@ -1063,6 +1063,17 @@ impl ListState {
         Some((max, current.min(max)))
     }
 
+    /// The average height of the rows measured so far, or `None` before any row is measured.
+    /// Hosts feed it back through [`Self::set_estimated_item_height`] so unmeasured rows are
+    /// valued sensibly while scrolling far through a long list.
+    pub fn average_measured_height(&self) -> Option<Pixels> {
+        let state = self.0.borrow();
+        let mounted = state.mounted_range();
+        let measured = state.tree_prefix(mounted.len());
+        (measured.measured_count > 0)
+            .then(|| measured.measured_height / measured.measured_count as f32)
+    }
+
     /// The scroll extents a scrollbar reports for this list (CMP-031 R2): the maximum scroll
     /// distance and the current scroll distance, both nonnegative.
     ///

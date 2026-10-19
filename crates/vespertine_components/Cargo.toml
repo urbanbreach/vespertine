@@ -59,3 +59,11 @@ path = "examples/terminal_surface.rs"
 [[example]]
 name = "scrollbars"
 path = "examples/scrollbars.rs"
+
+[[example]]
+name = "elastic_scroll"
+path = "examples/elastic_scroll.rs"
+
+[[example]]
+name = "streaming_list"
+path = "examples/streaming_list.rs"
