@@ -427,7 +427,9 @@ impl HostScene {
     pub fn scroll_offset(&self, id: NodeId) -> Option<(f32, f32)> {
         let handle = self.nodes.get(&id)?.host.scroll_handle()?;
         let offset = handle.offset();
-        Some((offset.x.into(), offset.y.into()))
+        // `+ 0.0` turns a negative zero (an unscrolled axis) into a plain zero.
+        let (x, y): (f32, f32) = (offset.x.into(), offset.y.into());
+        Some((x + 0.0, y + 0.0))
     }
 
     /// Scrolls a scrolling node to an absolute offset (positive numbers scroll toward the far side).
@@ -594,7 +596,7 @@ fn register(emit: &EmitEvent, id: NodeId, host: &HostNode, name: &'static str) {
         "scrollChange" => {
             let emit = emit.clone();
             host.on_scroll_change(move |event, _, cx| {
-                emit(cx, id, "scrollChange", json!({ "x": event.x, "y": event.y }));
+                emit(cx, id, "scrollChange", json!({ "x": event.x + 0.0, "y": event.y + 0.0 }));
             });
         }
         _ => {}
