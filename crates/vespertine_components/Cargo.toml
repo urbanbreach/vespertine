@@ -15,6 +15,7 @@ doctest = false
 
 [dependencies]
 bytemuck.workspace = true
+anyhow.workspace = true
 accesskit.workspace = true
 vespertine.workspace = true
 vespertine_richtext.workspace = true
@@ -51,6 +52,10 @@ vespertine_webview.workspace = true
 [[example]]
 name = "browser_surface"
 path = "examples/browser_surface.rs"
+
+[[example]]
+name = "badges_gallery"
+path = "examples/badges_gallery.rs"
 
 [[example]]
 name = "chart_gallery"

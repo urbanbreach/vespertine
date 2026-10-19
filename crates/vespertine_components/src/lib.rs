@@ -25,6 +25,7 @@
 //! gutter whose canvas rows align exactly with the table rows.
 
 pub mod audio;
+pub mod badges;
 pub mod browser;
 pub mod chart;
 pub mod controls;

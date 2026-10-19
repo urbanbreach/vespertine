@@ -7762,6 +7762,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "alacritty_terminal",
+ "anyhow",
  "bytemuck",
  "futures",
  "image",
