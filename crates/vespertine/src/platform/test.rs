@@ -3,6 +3,9 @@ mod display;
 mod platform;
 mod window;
 
+#[cfg(test)]
+mod embedded_launch_tests;
+
 pub use dispatcher::*;
 pub(crate) use display::*;
 pub(crate) use platform::*;

@@ -148,7 +148,7 @@ impl HeadlessAppContext {
     /// Updates app state.
     pub fn update<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut app = self.app.borrow_mut();
-        f(&mut app)
+        app.update(f)
     }
 
     /// Updates a window and calls draw to render.

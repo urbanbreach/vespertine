@@ -142,6 +142,8 @@ impl ShapedLine {
             &mut Window,
         ),
     ) -> Result<()> {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::text_paint_observer::notify_text_painted(cx, &self.text, origin, line_height);
         paint_line(
             origin,
             &self.layout,
@@ -470,6 +472,8 @@ impl WrappedLine {
             Some(bounds) => Some(bounds.size.width),
             None => self.layout.wrap_width,
         };
+        #[cfg(any(test, feature = "test-support"))]
+        crate::text_paint_observer::notify_text_painted(cx, &self.text, origin, line_height);
 
         paint_line(
             origin,

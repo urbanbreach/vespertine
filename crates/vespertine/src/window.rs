@@ -2287,6 +2287,9 @@ impl Window {
                 break;
             }
         }
+        // An entity that is not a view (for example a model a cached view read while rendering)
+        // has no ancestors, but cached views that read it must still see it as changed.
+        self.dirty_views.insert(view_id);
     }
 
     pub(crate) fn refresh_visibility(&mut self, cx: &mut App) {
@@ -2404,6 +2407,12 @@ impl Window {
             self.refreshing = true;
             self.invalidator.set_dirty(true);
         }
+    }
+
+    /// Whether the window has been invalidated since its last draw, so that the next frame
+    /// request would produce a new frame.
+    pub fn needs_draw(&self) -> bool {
+        self.invalidator.is_dirty()
     }
 
     /// Close this window.
@@ -3467,6 +3476,9 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::text_paint_observer::notify_frame_started(self, cx);
+
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -6088,11 +6100,18 @@ impl Window {
     /// Dispatch a given keystroke as though the user had typed it.
     /// You can create a keystroke with Keystroke::parse("").
     pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
+        self.dispatch_key_down(keystroke, false, cx)
+    }
+
+    /// Dispatch a key-down for the given keystroke as though the user had pressed it, with the
+    /// platform's key-repeat flag set to `is_held`. Like [`Self::dispatch_keystroke`], a
+    /// keystroke that no listener handles is delivered as text to the focused input handler.
+    pub fn dispatch_key_down(&mut self, keystroke: Keystroke, is_held: bool, cx: &mut App) -> bool {
         let keystroke = keystroke.with_simulated_ime();
         let result = self.dispatch_event(
             PlatformInput::KeyDown(KeyDownEvent {
                 keystroke: keystroke.clone(),
-                is_held: false,
+                is_held,
                 prefer_character_input: false,
             }),
             cx,

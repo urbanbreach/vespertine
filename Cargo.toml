@@ -24,6 +24,7 @@ members = [
     "crates/vespertine_scheduler",
     "crates/vespertine_shared_string",
     "crates/vespertine_sum_tree",
+    "crates/vespertine_test_host",
     "crates/vespertine_tokio",
     "crates/vespertine_util",
     "crates/vespertine_util_core",

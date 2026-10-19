@@ -548,6 +548,12 @@ fn prepaint_view(
                     && element_state.cache_key.content_mask == content_mask
                     && element_state.cache_key.text_style == text_style
                     && !window.dirty_views.contains(&entity_id)
+                    // A cached view also re-renders when an entity it read during its last
+                    // render was notified, not only when the view's own entity was.
+                    && !window
+                        .dirty_views
+                        .iter()
+                        .any(|dirty| element_state.accessed_entities.contains(dirty))
                     && !window.refreshing
                 {
                     let prepaint_start = window.prepaint_index();

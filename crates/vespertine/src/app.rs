@@ -70,6 +70,8 @@ mod entity_map;
 #[cfg(any(test, feature = "test-support"))]
 mod headless_app_context;
 #[cfg(any(test, feature = "test-support"))]
+mod headless_window_control;
+#[cfg(any(test, feature = "test-support"))]
 mod test_app;
 #[cfg(any(test, feature = "test-support"))]
 mod test_context;
@@ -3093,6 +3095,19 @@ impl App {
     pub fn has_asset<A: Asset>(&self, source: &A::Source) -> bool {
         let asset_id = (TypeId::of::<A>(), hash(source));
         self.loading_assets.contains_key(&asset_id)
+    }
+
+    /// Returns the output of a completed cached load of `A` for `source`, without
+    /// starting a load, waiting, subscribing a view, or touching the cache entry.
+    ///
+    /// Returns `None` when the asset was never requested, is still loading, or was
+    /// removed. A completed output that is an error value is returned unchanged.
+    pub fn peek_asset<A: Asset>(&self, source: &A::Source) -> Option<A::Output> {
+        let asset_id = (TypeId::of::<A>(), hash(source));
+        self.loading_assets
+            .get(&asset_id)
+            .and_then(|entry| entry.downcast_ref::<CachedLoad<A::Output>>())
+            .and_then(CachedLoad::get)
     }
 
     /// Starts loading an uncached asset and returns its result once available.

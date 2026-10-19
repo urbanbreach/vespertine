@@ -42,6 +42,7 @@ mod keymap;
 mod paint_scope;
 #[cfg(test)]
 mod paint_scope_window_tests;
+mod motion_clock;
 mod path_builder;
 mod platform;
 pub mod prelude;
@@ -74,6 +75,8 @@ mod tab_stop;
 mod taffy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;
+#[cfg(any(test, feature = "test-support"))]
+mod text_paint_observer;
 mod text_system;
 mod util;
 mod view;
@@ -205,6 +208,7 @@ pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
 pub use paint_scope::*;
+pub use motion_clock::MotionClock;
 pub use path_builder::*;
 pub use platform::*;
 pub use profiler::*;
@@ -228,6 +232,8 @@ use taffy::TaffyLayoutEngine;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]
 pub use test::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use text_paint_observer::{PaintObserver, PaintedText};
 pub use text_system::*;
 pub use util::{FutureExt, Timeout};
 pub use vespertine_http_client;

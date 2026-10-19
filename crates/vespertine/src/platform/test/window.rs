@@ -59,6 +59,8 @@ pub(crate) struct TestWindowState {
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
     subpixel_rendering_supported: bool,
+    a11y_callbacks: Option<crate::A11yCallbacks>,
+    last_a11y_tree_update: Option<accesskit::TreeUpdate>,
 }
 
 #[derive(Clone)]
@@ -135,6 +137,8 @@ impl TestWindow {
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
             subpixel_rendering_supported: false,
+            a11y_callbacks: None,
+            last_a11y_tree_update: None,
         })))
     }
     pub fn simulate_scheduled_frame(&self) -> bool {
@@ -296,6 +300,28 @@ impl TestWindow {
         let result = callback(event);
         self.0.lock().input_callback = Some(callback);
         !result.propagate
+    }
+
+    /// Connects a simulated assistive technology: the window's accessibility adapter is
+    /// activated, so every following frame builds and delivers an accessibility tree that
+    /// [`Self::last_accessibility_update`] returns. Returns whether the window registered an
+    /// adapter (it does not when accessibility is disabled for the application).
+    pub fn simulate_accessibility_activation(&self) -> bool {
+        let state = self.0.lock();
+        let Some(callbacks) = state.a11y_callbacks.as_ref() else {
+            return false;
+        };
+        let initial = (callbacks.activation)();
+        drop(state);
+        if let Some(initial) = initial {
+            self.0.lock().last_a11y_tree_update = Some(initial);
+        }
+        true
+    }
+
+    /// The accessibility tree update most recently delivered to the platform, if any.
+    pub fn last_accessibility_update(&self) -> Option<accesskit::TreeUpdate> {
+        self.0.lock().last_a11y_tree_update.clone()
     }
 
     pub fn external_drag_files(&self) -> Vec<(PathBuf, bool)> {
@@ -560,6 +586,14 @@ impl PlatformWindow for TestWindow {
         if let Some(renderer) = &mut state.renderer {
             renderer.render_scene(scene, device_size).warn_on_err();
         }
+    }
+
+    fn a11y_init(&self, callbacks: crate::A11yCallbacks) {
+        self.0.lock().a11y_callbacks = Some(callbacks);
+    }
+
+    fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
+        self.0.lock().last_a11y_tree_update = Some(tree_update);
     }
 
     fn sprite_atlas(&self) -> sync::Arc<dyn crate::PlatformAtlas> {

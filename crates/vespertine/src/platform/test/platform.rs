@@ -56,6 +56,7 @@ pub(crate) struct TestPlatform {
         Option<Box<dyn Fn() -> anyhow::Result<Option<Box<dyn PlatformHeadlessRenderer>>>>>,
     weak: Weak<Self>,
     menus: RefCell<Vec<OwnedMenu>>,
+    quit_requests: Cell<usize>,
     pub(crate) app_lifecycle_callback: RefCell<Option<Box<dyn FnMut(AppLifecyclePhase)>>>,
     pub(crate) memory_warning_callback: RefCell<Option<Box<dyn FnMut()>>>,
 }
@@ -125,6 +126,11 @@ pub(crate) struct TestPrompts {
 }
 
 impl TestPlatform {
+    /// How many times the application asked the platform to quit.
+    pub(crate) fn quit_requests(&self) -> usize {
+        self.quit_requests.get()
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn new(executor: BackgroundExecutor, foreground_executor: ForegroundExecutor) -> Rc<Self> {
         Self::with_platform(
@@ -228,6 +234,7 @@ impl TestPlatform {
             text_system,
             headless_renderer_factory,
             menus: Default::default(),
+            quit_requests: Cell::new(0),
             app_lifecycle_callback: Default::default(),
             memory_warning_callback: Default::default(),
         })
@@ -487,11 +494,17 @@ impl Platform for TestPlatform {
         }
     }
 
-    fn run(&self, _on_finish_launching: Box<dyn FnOnce()>) {
-        unimplemented!()
+    /// Launches the application by invoking the launch callback exactly once and returning
+    /// immediately, which is the shape [`Application::run_embedded`](crate::Application::run_embedded)
+    /// requires. The test platform owns no event loop and schedules no work of its own; tasks
+    /// advance only when the harness drives the test dispatcher.
+    fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+        on_finish_launching();
     }
 
-    fn quit(&self) {}
+    fn quit(&self) {
+        self.quit_requests.set(self.quit_requests.get() + 1);
+    }
 
     fn restart(&self, path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
         if let Some(tx) = self.expect_restart.take() {

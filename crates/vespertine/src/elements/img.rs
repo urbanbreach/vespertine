@@ -584,6 +584,38 @@ impl ImageSource {
         }
     }
 
+    /// Evict this image: remove its cached asset (as [`Self::remove_asset`] does) and
+    /// release the decoded image's atlas tiles in every window.
+    ///
+    /// The decoded image is obtained without starting any load; a pending or failed
+    /// load frees no tiles but its cache entry is still removed. Pass the currently
+    /// updating window as `window`, since it is absent from the application's window
+    /// collection while being updated. Rendered-image sources have no cache entry and
+    /// only release tiles; custom sources are caller-owned and are left untouched.
+    pub fn evict(&self, window: Option<&mut Window>, cx: &mut App) {
+        let image = match self {
+            ImageSource::Resource(resource) => {
+                let image = cx
+                    .peek_asset::<ImgResourceLoader>(resource)
+                    .and_then(Result::ok);
+                cx.remove_asset::<ImgResourceLoader>(resource);
+                image
+            }
+            ImageSource::Image(data) => {
+                let image = cx
+                    .peek_asset::<AssetLogger<ImageDecoder>>(data)
+                    .and_then(Result::ok);
+                cx.remove_asset::<AssetLogger<ImageDecoder>>(data);
+                image
+            }
+            ImageSource::Render(data) => Some(data.clone()),
+            ImageSource::Custom(_) => None,
+        };
+        if let Some(image) = image {
+            cx.drop_image(image, window);
+        }
+    }
+
     /// Check whether this image source is present in the asset system (loading
     /// or loaded), without fetching it.
     #[cfg(any(test, feature = "test-support"))]
@@ -979,5 +1011,459 @@ mod tests {
                 .id(TEST_IMG_ID)
                 .into_any_element()
         });
+    }
+}
+
+#[cfg(test)]
+mod eviction_tests {
+    use super::*;
+    use crate::{
+        AnyView, AppContext as _, Context, Empty, Render, TestAppContext, VisualTestContext, point,
+        size,
+    };
+    use image::{Frame, ImageBuffer};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    const PNG_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/image/app-icon.png");
+    const JPEG_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/image/exif-orientation-rotate-180.jpg"
+    );
+    const MISSING_FIXTURE: &str = "/nonexistent/app-001/missing.png";
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum LoadState {
+        Pending,
+        Failed,
+        Completed,
+    }
+
+    type Decoded = Option<Result<Arc<RenderImage>, ImageCacheError>>;
+
+    fn path_source(path: &str) -> ImageSource {
+        ImageSource::Resource(Resource::Path(Path::new(path).into()))
+    }
+
+    fn encoded_source(bytes: Vec<u8>) -> ImageSource {
+        ImageSource::Image(Arc::new(Image::from_bytes(crate::ImageFormat::Png, bytes)))
+    }
+
+    fn png_bytes() -> Vec<u8> {
+        fs::read(PNG_FIXTURE).expect("PNG fixture should be readable")
+    }
+
+    fn new_window(cx: &mut TestAppContext) -> VisualTestContext {
+        let handle = cx.add_window(|_, _| Empty);
+        VisualTestContext::from_window(handle.into(), cx)
+    }
+
+    /// A view that paints one image, so draws have a rendering view for asset use.
+    struct ImageView(ImageSource);
+
+    impl Render for ImageView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            img(self.0.clone()).size(px(64.))
+        }
+    }
+
+    fn draw(window: &mut VisualTestContext, source: &ImageSource) {
+        window.draw(point(px(0.), px(0.)), size(px(64.), px(64.)), |_, cx| {
+            AnyView::from(cx.new(|_| ImageView(source.clone()))).into_any_element()
+        });
+    }
+
+    /// Draws `source` until its load reaches `state`, leaving it painted when completed.
+    fn drive(window: &mut VisualTestContext, source: &ImageSource, state: LoadState) {
+        draw(window, source);
+        if state != LoadState::Pending {
+            window.run_until_parked();
+            draw(window, source);
+        }
+    }
+
+    /// Inspects the cached decode of a cache-backed source without loading it.
+    fn peek(cx: &TestAppContext, source: &ImageSource) -> Decoded {
+        cx.read(|cx| match source {
+            ImageSource::Resource(resource) => cx.peek_asset::<ImgResourceLoader>(resource),
+            ImageSource::Image(data) => cx.peek_asset::<AssetLogger<ImageDecoder>>(data),
+            ImageSource::Render(_) | ImageSource::Custom(_) => {
+                panic!("rendered and custom sources have no cache entry")
+            }
+        })
+    }
+
+    fn decoded_image(cx: &TestAppContext, source: &ImageSource) -> Arc<RenderImage> {
+        match peek(cx, source) {
+            Some(Ok(image)) => image,
+            Some(Err(error)) => panic!("source should have decoded, got {error:?}"),
+            None => panic!("source should be completed"),
+        }
+    }
+
+    fn has_tiles(window: &mut VisualTestContext, image: &RenderImage) -> bool {
+        window.update(|window, _| window.has_image_atlas_entry(image))
+    }
+
+    fn is_cached(cx: &TestAppContext, source: &ImageSource) -> bool {
+        cx.read(|cx| source.is_asset_cached(cx))
+    }
+
+    fn evict_in(window: &mut VisualTestContext, source: &ImageSource) {
+        window.update(|window, cx| source.evict(Some(window), cx));
+    }
+
+    fn render_image() -> Arc<RenderImage> {
+        let frame = Frame::new(ImageBuffer::from_pixel(8, 8, Rgba([1, 2, 3, 255])));
+        Arc::new(RenderImage::new(SmallVec::from_elem(frame, 1)))
+    }
+
+    /// Evicts a cache-backed source in `state` and checks the full R4/R5/R6/R7 contract
+    /// while a bystander image in the same window stays untouched.
+    fn assert_cache_backed_eviction(
+        cx: &mut TestAppContext,
+        source: ImageSource,
+        state: LoadState,
+    ) {
+        let mut window = new_window(cx);
+        let bystander = path_source(JPEG_FIXTURE);
+        drive(&mut window, &bystander, LoadState::Completed);
+        let bystander_image = decoded_image(cx, &bystander);
+        assert!(has_tiles(&mut window, &bystander_image));
+
+        drive(&mut window, &source, state);
+        assert!(is_cached(cx, &source));
+        let decoded = match (state, peek(cx, &source)) {
+            (LoadState::Pending, None) => None,
+            (LoadState::Failed, Some(Err(_))) => None,
+            (LoadState::Completed, Some(Ok(image))) => Some(image),
+            (state, other) => panic!("unexpected {state:?} cache contents: {other:?}"),
+        };
+        if let Some(image) = &decoded {
+            assert!(has_tiles(&mut window, image));
+        }
+
+        evict_in(&mut window, &source);
+        cx.run_until_parked();
+
+        assert!(!is_cached(cx, &source));
+        assert!(peek(cx, &source).is_none());
+        if let Some(image) = &decoded {
+            assert!(!has_tiles(&mut window, image));
+        }
+        assert!(is_cached(cx, &bystander));
+        assert!(has_tiles(&mut window, &bystander_image));
+
+        // A second eviction changes nothing and does not panic.
+        evict_in(&mut window, &source);
+        assert!(!is_cached(cx, &source));
+        assert!(is_cached(cx, &bystander));
+        assert!(has_tiles(&mut window, &bystander_image));
+    }
+
+    #[vespertine::test]
+    fn app_001_a3_eviction_releases_tiles_in_every_window_including_passed_current_window(
+        cx: &mut TestAppContext,
+    ) {
+        let mut first = new_window(cx);
+        let mut second = new_window(cx);
+        let source = path_source(PNG_FIXTURE);
+
+        draw(&mut first, &source);
+        draw(&mut second, &source);
+        cx.run_until_parked();
+        draw(&mut first, &source);
+        draw(&mut second, &source);
+
+        let image = decoded_image(cx, &source);
+        assert!(has_tiles(&mut first, &image));
+        assert!(has_tiles(&mut second, &image));
+        assert!(is_cached(cx, &source));
+
+        // `first` is the currently updating window and is passed explicitly.
+        evict_in(&mut first, &source);
+
+        assert!(!has_tiles(&mut first, &image));
+        assert!(!has_tiles(&mut second, &image));
+        assert!(!is_cached(cx, &source));
+        assert!(peek(cx, &source).is_none());
+    }
+
+    #[vespertine::test]
+    fn app_001_a3_current_window_keeps_its_tiles_when_not_passed(cx: &mut TestAppContext) {
+        let mut first = new_window(cx);
+        let mut second = new_window(cx);
+        let source = path_source(PNG_FIXTURE);
+        for window in [&mut first, &mut second] {
+            drive(window, &source, LoadState::Completed);
+        }
+        // `second` finished its draw before `first` loaded; make sure both have tiles.
+        draw(&mut second, &source);
+        let image = decoded_image(cx, &source);
+        assert!(has_tiles(&mut first, &image));
+        assert!(has_tiles(&mut second, &image));
+
+        // While `first` is being updated it is absent from the window collection, so
+        // evicting without passing it releases only the other window's tiles.
+        first.update(|_, cx| source.evict(None, cx));
+
+        assert!(has_tiles(&mut first, &image));
+        assert!(!has_tiles(&mut second, &image));
+        assert!(!is_cached(cx, &source));
+    }
+
+    #[vespertine::test]
+    fn app_001_a3_encoded_image_eviction_releases_tiles_in_every_window(cx: &mut TestAppContext) {
+        let mut first = new_window(cx);
+        let mut second = new_window(cx);
+        let source = encoded_source(png_bytes());
+
+        draw(&mut first, &source);
+        draw(&mut second, &source);
+        cx.run_until_parked();
+        draw(&mut first, &source);
+        draw(&mut second, &source);
+        let image = decoded_image(cx, &source);
+        assert!(has_tiles(&mut first, &image));
+        assert!(has_tiles(&mut second, &image));
+
+        evict_in(&mut second, &source);
+
+        assert!(!has_tiles(&mut first, &image));
+        assert!(!has_tiles(&mut second, &image));
+        assert!(!is_cached(cx, &source));
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_resource_pending_eviction_removes_entry_and_frees_no_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        assert_cache_backed_eviction(cx, path_source(PNG_FIXTURE), LoadState::Pending);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_resource_failed_eviction_removes_entry_and_frees_no_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        assert_cache_backed_eviction(cx, path_source(MISSING_FIXTURE), LoadState::Failed);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_embedded_resource_failed_eviction_removes_entry(cx: &mut TestAppContext) {
+        let source = ImageSource::Resource(Resource::Embedded("app-001/missing.png".into()));
+        assert_cache_backed_eviction(cx, source, LoadState::Failed);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_resource_completed_eviction_removes_entry_and_frees_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        assert_cache_backed_eviction(cx, path_source(PNG_FIXTURE), LoadState::Completed);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_encoded_image_pending_eviction_removes_entry_and_frees_no_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        assert_cache_backed_eviction(cx, encoded_source(png_bytes()), LoadState::Pending);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_encoded_image_failed_eviction_removes_entry_and_frees_no_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        let source = encoded_source(b"not a png".to_vec());
+        assert_cache_backed_eviction(cx, source, LoadState::Failed);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_encoded_image_completed_eviction_removes_entry_and_frees_tiles(
+        cx: &mut TestAppContext,
+    ) {
+        assert_cache_backed_eviction(cx, encoded_source(png_bytes()), LoadState::Completed);
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_rendered_image_eviction_frees_tiles_without_touching_the_cache(
+        cx: &mut TestAppContext,
+    ) {
+        let mut first = new_window(cx);
+        let mut second = new_window(cx);
+        let bystander = path_source(JPEG_FIXTURE);
+        drive(&mut first, &bystander, LoadState::Completed);
+        let bystander_image = decoded_image(cx, &bystander);
+
+        let image = render_image();
+        let source = ImageSource::Render(image.clone());
+        draw(&mut first, &source);
+        draw(&mut second, &source);
+        assert!(has_tiles(&mut first, &image));
+        assert!(has_tiles(&mut second, &image));
+
+        evict_in(&mut first, &source);
+
+        assert!(!has_tiles(&mut first, &image));
+        assert!(!has_tiles(&mut second, &image));
+        assert!(!is_cached(cx, &source));
+        assert!(is_cached(cx, &bystander));
+        assert!(has_tiles(&mut first, &bystander_image));
+
+        // Rendered sources evict without a window too, and repeatedly.
+        draw(&mut second, &source);
+        assert!(has_tiles(&mut second, &image));
+        cx.update(|cx| source.evict(None, cx));
+        assert!(!has_tiles(&mut second, &image));
+        cx.update(|cx| source.evict(None, cx));
+    }
+
+    #[vespertine::test]
+    fn app_001_a4_custom_source_eviction_does_nothing(cx: &mut TestAppContext) {
+        let mut window = new_window(cx);
+        let image = render_image();
+        let calls = Rc::new(Cell::new(0));
+        let source = ImageSource::from({
+            let image = image.clone();
+            let calls = calls.clone();
+            move |_: &mut Window, _: &mut App| {
+                calls.set(calls.get() + 1);
+                Some(Ok(image.clone()))
+            }
+        });
+
+        draw(&mut window, &source);
+        assert!(has_tiles(&mut window, &image));
+        let calls_before_eviction = calls.get();
+        assert!(calls_before_eviction > 0);
+
+        evict_in(&mut window, &source);
+        cx.update(|cx| source.evict(None, cx));
+
+        // The caller-owned loader is not invoked and its image keeps its tiles.
+        assert_eq!(calls.get(), calls_before_eviction);
+        assert!(has_tiles(&mut window, &image));
+        assert!(!is_cached(cx, &source));
+    }
+
+    #[vespertine::test]
+    fn app_001_a5_repeated_eviction_changes_nothing_after_the_first(cx: &mut TestAppContext) {
+        let mut first = new_window(cx);
+        let mut second = new_window(cx);
+        let source = path_source(PNG_FIXTURE);
+        let bystander = encoded_source(png_bytes());
+        drive(&mut first, &bystander, LoadState::Completed);
+        let bystander_image = decoded_image(cx, &bystander);
+        // `second` never draws the evicted image and never draws the bystander.
+        drive(&mut first, &source, LoadState::Completed);
+        let image = decoded_image(cx, &source);
+        assert!(!has_tiles(&mut second, &image));
+
+        evict_in(&mut first, &source);
+        let after_first = (
+            is_cached(cx, &source),
+            has_tiles(&mut first, &image),
+            has_tiles(&mut second, &image),
+            is_cached(cx, &bystander),
+            has_tiles(&mut first, &bystander_image),
+        );
+        assert_eq!(after_first, (false, false, false, true, true));
+
+        evict_in(&mut first, &source);
+        cx.update(|cx| source.evict(None, cx));
+        let after_more = (
+            is_cached(cx, &source),
+            has_tiles(&mut first, &image),
+            has_tiles(&mut second, &image),
+            is_cached(cx, &bystander),
+            has_tiles(&mut first, &bystander_image),
+        );
+        assert_eq!(after_more, after_first);
+    }
+
+    #[vespertine::test]
+    fn app_001_a5_evicting_an_uncached_source_succeeds_without_any_window(cx: &mut TestAppContext) {
+        let mut window = new_window(cx);
+        let bystander = path_source(JPEG_FIXTURE);
+        drive(&mut window, &bystander, LoadState::Completed);
+        let bystander_image = decoded_image(cx, &bystander);
+
+        for source in [
+            path_source(PNG_FIXTURE),
+            encoded_source(png_bytes()),
+            ImageSource::Resource(Resource::Embedded("app-001/never-requested".into())),
+        ] {
+            cx.update(|cx| source.evict(None, cx));
+            evict_in(&mut window, &source);
+            assert!(!is_cached(cx, &source));
+        }
+
+        assert!(is_cached(cx, &bystander));
+        assert!(has_tiles(&mut window, &bystander_image));
+    }
+
+    #[vespertine::test]
+    fn app_001_a5_evicting_while_pending_without_a_window_then_completing_is_safe(
+        cx: &mut TestAppContext,
+    ) {
+        let mut window = new_window(cx);
+        let source = path_source(PNG_FIXTURE);
+        drive(&mut window, &source, LoadState::Pending);
+        assert!(is_cached(cx, &source));
+
+        cx.update(|cx| source.evict(None, cx));
+        cx.run_until_parked();
+
+        assert!(!is_cached(cx, &source));
+        assert!(peek(cx, &source).is_none());
+    }
+
+    #[vespertine::test]
+    fn app_001_a6_reuse_after_eviction_starts_exactly_one_new_load(cx: &mut TestAppContext) {
+        for source in [path_source(PNG_FIXTURE), encoded_source(png_bytes())] {
+            let mut window = new_window(cx);
+            drive(&mut window, &source, LoadState::Completed);
+            let first_image = decoded_image(cx, &source);
+            assert!(has_tiles(&mut window, &first_image));
+
+            evict_in(&mut window, &source);
+            assert!(!is_cached(cx, &source));
+            assert!(!has_tiles(&mut window, &first_image));
+
+            // The next use starts a fresh load: pending first, nothing painted yet.
+            draw(&mut window, &source);
+            assert!(is_cached(cx, &source));
+            assert!(peek(cx, &source).is_none());
+            cx.run_until_parked();
+
+            // Every decode creates a new image id, so an unchanged id across further
+            // draws shows no additional load was started.
+            let second_image = decoded_image(cx, &source);
+            assert_ne!(second_image.id, first_image.id);
+            for _ in 0..3 {
+                draw(&mut window, &source);
+                cx.run_until_parked();
+                assert_eq!(decoded_image(cx, &source).id, second_image.id);
+            }
+            assert!(has_tiles(&mut window, &second_image));
+            assert!(!has_tiles(&mut window, &first_image));
+        }
+    }
+
+    #[vespertine::test]
+    fn app_001_a6_cache_only_removal_leaves_allocated_tiles_in_place(cx: &mut TestAppContext) {
+        for source in [path_source(PNG_FIXTURE), encoded_source(png_bytes())] {
+            let mut first = new_window(cx);
+            let mut second = new_window(cx);
+            drive(&mut first, &source, LoadState::Completed);
+            draw(&mut second, &source);
+            let image = decoded_image(cx, &source);
+            assert!(has_tiles(&mut first, &image));
+            assert!(has_tiles(&mut second, &image));
+
+            cx.update(|cx| source.remove_asset(cx));
+
+            assert!(!is_cached(cx, &source));
+            assert!(has_tiles(&mut first, &image));
+            assert!(has_tiles(&mut second, &image));
+        }
     }
 }

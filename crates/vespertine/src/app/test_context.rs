@@ -431,6 +431,11 @@ impl TestAppContext {
         self.test_platform.opened_url.borrow().clone()
     }
 
+    /// How many times the application asked the platform to quit (`App::quit`) during this test.
+    pub fn quit_requests(&self) -> usize {
+        self.test_platform.quit_requests()
+    }
+
     /// Returns the application identity configured during this test.
     pub fn app_identity(&self) -> Option<(SharedString, SharedString)> {
         self.test_platform.app_identity()

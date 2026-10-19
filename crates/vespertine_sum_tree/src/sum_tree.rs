@@ -10,7 +10,6 @@ use std::marker::PhantomData;
 use std::mem;
 use std::{cmp::Ordering, fmt, iter::FromIterator, sync::Arc};
 pub use tree_map::{MapSeekTarget, TreeMap, TreeSet};
-use vespertine_ztracing::instrument;
 
 #[cfg(test)]
 pub const TREE_BASE: usize = 2;
@@ -396,7 +395,6 @@ impl<T: Item> SumTree<T> {
     /// A more efficient version of `Cursor::new()` + `Cursor::seek()` + `Cursor::item()`.
     ///
     /// Only returns the item that exactly has the target match.
-    #[instrument(skip_all)]
     pub fn find_exact<'a, 'slf, D, Target>(
         &'slf self,
         cx: <T::Summary as Summary>::Context<'a>,
@@ -422,7 +420,6 @@ impl<T: Item> SumTree<T> {
     }
 
     /// A more efficient version of `Cursor::new()` + `Cursor::seek()` + `Cursor::item()`
-    #[instrument(skip_all)]
     pub fn find<'a, 'slf, D, Target>(
         &'slf self,
         cx: <T::Summary as Summary>::Context<'a>,
@@ -507,7 +504,6 @@ impl<T: Item> SumTree<T> {
     }
 
     /// A more efficient version of `Cursor::new()` + `Cursor::seek()` + `Cursor::item()`
-    #[instrument(skip_all)]
     pub fn find_with_prev<'a, 'slf, D, Target>(
         &'slf self,
         cx: <T::Summary as Summary>::Context<'a>,
@@ -1398,7 +1394,75 @@ mod tests {
 
     #[ctor::ctor(unsafe)]
     fn init_logger() {
-        vespertine_zlog::init_test();
+        // An ordinary environment-configurable logger; tolerates one that is already installed.
+        let _ = env_logger::try_init();
+    }
+
+    #[test]
+    fn dev_001_a2_logger_initialization_is_repeatable() {
+        assert!(env_logger::try_init().is_err() || log::max_level() != log::LevelFilter::Off);
+        // A second (and third) initialization attempt reports an error instead of panicking.
+        assert!(env_logger::try_init().is_err());
+        assert!(env_logger::try_init().is_err());
+    }
+
+    /// Compares randomized seek/seek_forward/next/prev sequences on trees of several shapes
+    /// against a flat reference model (one item per `Count` unit).
+    #[test]
+    fn dev_001_a3_cursor_traversal_matches_reference_model() {
+        for seed in 0..40u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let len = rng.random_range(0..300usize);
+            let items = (0..len).map(|_| rng.random::<u8>()).collect::<Vec<_>>();
+            let tree = SumTree::from_iter(items.iter().copied(), ());
+            let mut cursor = tree.cursor::<Count>(());
+            // The model tracks the item index under the cursor (`len` when past the end).
+            let mut pos = 0usize;
+            cursor.seek(&Count(0), Bias::Left);
+            for _ in 0..200 {
+                match rng.random_range(0..4) {
+                    0 | 1 => {
+                        let target = rng.random_range(0..len + 3);
+                        let bias = if rng.random() {
+                            Bias::Left
+                        } else {
+                            Bias::Right
+                        };
+                        let index = match bias {
+                            Bias::Left => target.saturating_sub(1),
+                            Bias::Right => target,
+                        }
+                        .min(len);
+                        if rng.random_range(0..2) == 0 {
+                            // seek_forward is only valid for non-decreasing targets.
+                            if Count(target) >= *cursor.start() {
+                                cursor.seek_forward(&Count(target), bias);
+                                // A forward seek never moves the cursor backward.
+                                pos = pos.max(index);
+                            }
+                        } else {
+                            cursor.reset();
+                            cursor.seek(&Count(target), bias);
+                            pos = index;
+                        }
+                    }
+                    2 => {
+                        cursor.next();
+                        if pos < len {
+                            pos += 1;
+                        }
+                    }
+                    _ => {
+                        if pos > 0 {
+                            cursor.prev();
+                            pos -= 1;
+                        }
+                    }
+                }
+                assert_eq!(cursor.item(), items.get(pos), "seed {seed} item at {pos}");
+                assert_eq!(cursor.start().0, pos, "seed {seed} start");
+            }
+        }
     }
 
     #[test]

@@ -158,6 +158,8 @@ windows = { workspace = true, features = [
 
 
 [dev-dependencies]
+# Integration tests (tests/*.rs) need the test support that `cfg(test)` provides to unit tests.
+vespertine = { path = ".", features = ["test-support"] }
 backtrace.workspace = true
 vespertine_bench_metrics = { workspace = true, features = ["test-support"] }
 vespertine_collections = { workspace = true, features = ["test-support"] }
@@ -320,3 +322,11 @@ required-features = ["test-support"]
 name = "rounded_clip_limits"
 path = "examples/rounded_clip_limits.rs"
 required-features = ["test-support"]
+
+[[example]]
+name = "reactive_background"
+path = "examples/reactive_background.rs"
+
+[[example]]
+name = "menus_in_window"
+path = "examples/menus_in_window.rs"

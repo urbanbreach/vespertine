@@ -16,8 +16,6 @@ doctest = false
 [dependencies]
 heapless.workspace = true
 rayon.workspace = true
-vespertine_ztracing.workspace = true
-tracing.workspace = true
 proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -25,11 +23,8 @@ log.workspace = true
 ctor.workspace = true
 rand.workspace = true
 proptest.workspace = true
-vespertine_zlog.workspace = true
+env_logger.workspace = true
 
-
-[package.metadata.cargo-shear]
-ignored = ["tracing"]
 
 [features]
 test-support = ["proptest"]

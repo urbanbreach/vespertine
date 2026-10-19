@@ -296,6 +296,97 @@ mod tests {
         assert_eq!(source.load_count(), 2);
     }
 
+    #[vespertine::test]
+    fn app_001_a1_peek_never_loads_and_reports_only_completed_output(cx: &mut TestAppContext) {
+        let (sender, receiver) = oneshot::channel();
+        let source = TestAssetSource::new(10, [receiver]);
+
+        // Never requested: absence, and the loader is never invoked, repeatedly.
+        for _ in 0..3 {
+            assert_eq!(cx.read(|cx| cx.peek_asset::<TestAsset>(&source)), None);
+        }
+        assert_eq!(source.load_count(), 0);
+        assert!(!cx.read(|cx| cx.has_asset::<TestAsset>(&source)));
+
+        // Pending: a request starts exactly one load; peeking does not change that.
+        assert_eq!(cx.update(|cx| cx.fetch_asset::<TestAsset>(&source)), None);
+        assert_eq!(source.load_count(), 1);
+        for _ in 0..3 {
+            assert_eq!(cx.read(|cx| cx.peek_asset::<TestAsset>(&source)), None);
+        }
+        assert_eq!(source.load_count(), 1);
+        assert!(cx.read(|cx| cx.has_asset::<TestAsset>(&source)));
+
+        // Completed: the output is returned repeatedly, with the entry and count unchanged.
+        assert!(sender.send(Ok(7)).is_ok());
+        cx.run_until_parked();
+        for _ in 0..3 {
+            assert_eq!(
+                cx.read(|cx| cx.peek_asset::<TestAsset>(&source)),
+                Some(Ok(7))
+            );
+        }
+        assert_eq!(source.load_count(), 1);
+        assert!(cx.read(|cx| cx.has_asset::<TestAsset>(&source)));
+        assert_eq!(
+            cx.update(|cx| cx.fetch_asset::<TestAsset>(&source)),
+            Some(Ok(7))
+        );
+        assert_eq!(source.load_count(), 1);
+
+        // Removed: absence again, still without invoking the loader.
+        cx.update(|cx| cx.remove_asset::<TestAsset>(&source));
+        assert_eq!(cx.read(|cx| cx.peek_asset::<TestAsset>(&source)), None);
+        assert_eq!(source.load_count(), 1);
+    }
+
+    #[vespertine::test]
+    fn app_001_a1_peek_does_not_notify_views_or_complete_a_pending_load(cx: &mut TestAppContext) {
+        let (sender, receiver) = oneshot::channel();
+        let source = TestAssetSource::new(11, [receiver]);
+        let notification_count = Rc::new(Cell::new(0));
+        let entity = cx.update(|cx| {
+            let entity = cx.new(|_| ());
+            cx.observe(&entity, {
+                let notification_count = notification_count.clone();
+                move |_, _| notification_count.set(notification_count.get() + 1)
+            })
+            .detach();
+            entity
+        });
+
+        assert_eq!(cx.update(|cx| cx.fetch_asset::<TestAsset>(&source)), None);
+        assert_eq!(cx.read(|cx| cx.peek_asset::<TestAsset>(&source)), None);
+        assert!(sender.send(Ok(5)).is_ok());
+        cx.run_until_parked();
+
+        // Neither the peek nor the fetch registered `entity` for completion.
+        assert_eq!(notification_count.get(), 0);
+        assert_eq!(
+            cx.read(|cx| cx.peek_asset::<TestAsset>(&source)),
+            Some(Ok(5))
+        );
+        drop(entity);
+    }
+
+    #[vespertine::test]
+    fn app_001_a2_peek_returns_completed_error_output(cx: &mut TestAppContext) {
+        let (sender, receiver) = oneshot::channel();
+        let source = TestAssetSource::new(12, [receiver]);
+
+        assert_eq!(cx.update(|cx| cx.fetch_asset::<TestAsset>(&source)), None);
+        assert!(sender.send(Err("decode failed")).is_ok());
+        cx.run_until_parked();
+
+        for _ in 0..2 {
+            assert_eq!(
+                cx.read(|cx| cx.peek_asset::<TestAsset>(&source)),
+                Some(Err("decode failed"))
+            );
+        }
+        assert_eq!(source.load_count(), 1);
+    }
+
     struct TestAsset;
 
     #[derive(Clone)]
