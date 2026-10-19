@@ -95,6 +95,15 @@ struct GammaParams {
 @group(0) @binding(1) var<uniform> gamma_params: GammaParams;
 @group(2) @binding(0) var t_sprite: texture_2d<f32>;
 @group(2) @binding(1) var s_sprite: sampler;
+// Curved overflow clip shapes (RND-002 R11-R18): 48 bytes per shape, one chain node per
+// shape; `clip_parents` links a node to the enclosing node (0 = none). Nodes are 1-based.
+struct CurvedClipShape {
+    bounds: vec4<f32>,
+    radii_x: vec4<f32>,
+    radii_y: vec4<f32>,
+}
+@group(0) @binding(2) var<storage, read> clip_shapes: array<CurvedClipShape>;
+@group(0) @binding(3) var<storage, read> clip_parents: array<u32>;
 
 const M_PI_F: f32 = 3.1415926;
 const GRAYSCALE_FACTORS: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
@@ -394,6 +403,120 @@ fn blend_color(color: vec4<f32>, alpha_factor: f32) -> vec4<f32> {
     return vec4<f32>(color.rgb * multiplier, alpha);
 }
 
+// --- scoped edge fade, rounded clip and curved overflow clip (RND-001, RND-002) --- //
+
+struct ScopeParams {
+    fade_edges: array<f32, 4>,
+    fade_bands: array<f32, 4>,
+    clip_bounds: array<f32, 4>,
+    clip_radius: f32,
+    curved_clip: u32,
+    reserved0: u32,
+    reserved1: u32,
+}
+
+fn scope_fade_active(scope: ScopeParams) -> bool {
+    return scope.fade_bands[0] > 0.0 || scope.fade_bands[1] > 0.0 ||
+        scope.fade_bands[2] > 0.0 || scope.fade_bands[3] > 0.0;
+}
+
+fn scope_rounded_active(scope: ScopeParams) -> bool {
+    return scope.clip_bounds[2] > scope.clip_bounds[0];
+}
+
+fn scope_is_active(scope: ScopeParams) -> bool {
+    return scope_fade_active(scope) || scope_rounded_active(scope);
+}
+
+// Squared minimum of the active edge ramps at the fragment position `p`.
+fn scope_edge_coverage(scope: ScopeParams, p: vec2<f32>) -> f32 {
+    var u = 1.0;
+    if (scope.fade_bands[0] > 0.0) {
+        u = min(u, saturate((p.y - scope.fade_edges[0]) / scope.fade_bands[0]));
+    }
+    if (scope.fade_bands[1] > 0.0) {
+        u = min(u, saturate((scope.fade_edges[1] - p.y) / scope.fade_bands[1]));
+    }
+    if (scope.fade_bands[2] > 0.0) {
+        u = min(u, saturate((p.x - scope.fade_edges[2]) / scope.fade_bands[2]));
+    }
+    if (scope.fade_bands[3] > 0.0) {
+        u = min(u, saturate((scope.fade_edges[3] - p.x) / scope.fade_bands[3]));
+    }
+    return u * u;
+}
+
+// Antialiased coverage of the explicit rounded clip scope.
+fn scope_rounded_coverage(scope: ScopeParams, p: vec2<f32>) -> f32 {
+    if (!scope_rounded_active(scope)) {
+        return 1.0;
+    }
+    let clip_min = vec2<f32>(scope.clip_bounds[0], scope.clip_bounds[1]);
+    let clip_max = vec2<f32>(scope.clip_bounds[2], scope.clip_bounds[3]);
+    let half_size = (clip_max - clip_min) / 2.0;
+    let center = clip_min + half_size;
+    let radius = min(scope.clip_radius, min(half_size.x, half_size.y));
+    let q = abs(p - center) - half_size + vec2<f32>(radius);
+    let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    return saturate(0.5 - distance);
+}
+
+// The scope factor F = E * K.
+fn scope_factor(scope: ScopeParams, p: vec2<f32>) -> f32 {
+    return scope_edge_coverage(scope, p) * scope_rounded_coverage(scope, p);
+}
+
+fn curved_corner_distance(d: f32, inward: vec2<f32>, rx: f32, ry: f32) -> f32 {
+    if (rx > 0.0 && ry > 0.0 && inward.x < rx && inward.y < ry) {
+        let q = vec2<f32>((inward.x - rx) / rx, (inward.y - ry) / ry);
+        let length_q = length(q);
+        let gradient = length(vec2<f32>(q.x / rx, q.y / ry)) / max(length_q, 0.000001);
+        return max(d, (length_q - 1.0) / max(gradient, 0.000001));
+    }
+    return d;
+}
+
+fn curved_shape_coverage(shape: CurvedClipShape, p: vec2<f32>) -> f32 {
+    let extent = shape.bounds.zw - shape.bounds.xy;
+    if (!(extent.x > 0.0 && extent.y > 0.0)) {
+        return 0.0;
+    }
+    let local = p - shape.bounds.xy;
+    var d = max(max(-local.x, -local.y), max(local.x - extent.x, local.y - extent.y));
+    d = curved_corner_distance(d, local, shape.radii_x.x, shape.radii_y.x);
+    d = curved_corner_distance(d, vec2<f32>(extent.x - local.x, local.y), shape.radii_x.y, shape.radii_y.y);
+    d = curved_corner_distance(d, extent - local, shape.radii_x.z, shape.radii_y.z);
+    d = curved_corner_distance(d, vec2<f32>(local.x, extent.y - local.y), shape.radii_x.w, shape.radii_y.w);
+    return saturate(0.5 - d);
+}
+
+// Minimum coverage over the chain of enclosing curved overflow clips; 1 with none.
+fn curved_clip_coverage(chain: u32, p: vec2<f32>) -> f32 {
+    var coverage = 1.0;
+    var node = chain;
+    loop {
+        if (node == 0u) {
+            break;
+        }
+        coverage = min(coverage, curved_shape_coverage(clip_shapes[node - 1u], p));
+        node = clip_parents[node - 1u];
+    }
+    return coverage;
+}
+
+// Multiplies a final fragment color by the curved clip coverage: alpha always, RGB too on
+// premultiplied targets.
+fn apply_curved_clip(color: vec4<f32>, chain: u32, p: vec2<f32>) -> vec4<f32> {
+    if (chain == 0u) {
+        return color;
+    }
+    let coverage = curved_clip_coverage(chain, p);
+    if (globals.premultiplied_alpha != 0u) {
+        return color * coverage;
+    }
+    return vec4<f32>(color.rgb, color.a * coverage);
+}
+
 
 struct GradientColor {
     solid: vec4<f32>,
@@ -525,6 +648,7 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
+    scope: ScopeParams,
 }
 
 struct QuadVarying {
@@ -570,7 +694,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     let quad = load_quad(input.quad_id);
 
-    let background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
+    var background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
         input.background_solid, input.background_color0, input.background_color1);
 
     let unrounded = quad.corner_radii.top_left == 0.0 &&
@@ -578,13 +702,27 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         quad.corner_radii.top_right == 0.0 &&
         quad.corner_radii.bottom_right == 0.0;
 
+    let borderless = quad.border_widths.top == 0.0 &&
+        quad.border_widths.left == 0.0 &&
+        quad.border_widths.right == 0.0 &&
+        quad.border_widths.bottom == 0.0;
+
+    // Scoped fade/clip factor F = E x K. Every quad that reaches this general route
+    // attenuates its fill by F here and, when rounded or bordered, a second time through the
+    // outer coverage below (RND-001 R11b, R11c). The plain solid bypass of RND-001 R11a is
+    // not decided here: it belongs to the specialized solid routes below, which the renderer
+    // picks per draw batch (PRF-008 R3), so a simple solid quad that shares its batch with
+    // any other kind of quad is shaded by this route and receives K.
+    var scope_f = 1.0;
+    if (scope_is_active(quad.scope)) {
+        scope_f = scope_factor(quad.scope, input.position.xy);
+    }
+    background_color.a *= scope_f;
+    let curved_chain = quad.scope.curved_clip;
+
     // Fast path when the quad is not rounded and doesn't have any border
-    if (quad.border_widths.top == 0.0 &&
-            quad.border_widths.left == 0.0 &&
-            quad.border_widths.right == 0.0 &&
-            quad.border_widths.bottom == 0.0 &&
-            unrounded) {
-        return blend_color(background_color, 1.0);
+    if (borderless && unrounded) {
+        return apply_curved_clip(blend_color(background_color, 1.0), curved_chain, input.position.xy);
     }
 
     let size = quad.bounds.size;
@@ -650,7 +788,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // However, that might negatively impact performance in the case of
     // reasonable sizes for rounded corners.
     if (is_within_inner_straight_border && !is_near_rounded_corner) {
-        return blend_color(background_color, 1.0);
+        return apply_curved_clip(blend_color(background_color, 1.0), curved_chain, input.position.xy);
     }
 
     // Signed distance of the point to the outside edge of the quad's border. It
@@ -889,7 +1027,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     saturate(antialias_threshold - inner_sdf));
     }
 
-    return blend_color(color, saturate(antialias_threshold - outer_sdf));
+    return apply_curved_clip(
+        blend_color(color, saturate(antialias_threshold - outer_sdf) * scope_f),
+        curved_chain,
+        input.position.xy);
 }
 
 // Returns the dash velocity of a corner given the dash velocity of the two
@@ -945,6 +1086,52 @@ fn fmod(a: f32, b: f32) -> f32 {
     return a - b * trunc(a / b);
 }
 
+// --- specialized solid quads (PRF-008) --- //
+//
+// Quad batches made only of simple solid quads (single solid color, square corners, no
+// border, no fade band) are drawn by these routes. They read nothing from the instance
+// record per fragment: the vertex stage passes the color and the clip distances through
+// interpolants. The scoped rounded clip is deliberately not evaluated (the plain solid
+// quirk of RND-001 R11a and RND-002 R6); the curved overflow chain is (RND-002 R15).
+
+struct SolidQuadVarying {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
+    @location(1) clip_distances: vec4<f32>,
+    @location(2) @interpolate(flat) curved_clip: u32,
+}
+
+@vertex
+fn vs_quad_solid(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) instance_id: u32) -> SolidQuadVarying {
+    let unit_vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    let quad = load_quad(instance_id);
+
+    var out = SolidQuadVarying();
+    out.position = to_device_position(unit_vertex, quad.bounds);
+    out.color = hsla_to_rgba(quad.background.solid);
+    out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
+    out.curved_clip = quad.scope.curved_clip;
+    return out;
+}
+
+// Clipped solid shading: transparent outside the rectangular content mask, otherwise the
+// solid color with the target's premultiplication.
+@fragment
+fn fs_quad_solid_clipped(input: SolidQuadVarying) -> @location(0) vec4<f32> {
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    return apply_curved_clip(blend_color(input.color, 1.0), input.curved_clip, input.position.xy);
+}
+
+// Opaque solid shading: the color with alpha exactly 1, drawn with blending disabled and no
+// per-fragment clipping (the renderer proves the quad lies inside its content mask and has no
+// curved overflow chain).
+@fragment
+fn fs_quad_solid_opaque(input: SolidQuadVarying) -> @location(0) vec4<f32> {
+    return vec4<f32>(input.color.rgb, 1.0);
+}
+
 // --- shadows --- //
 
 struct Shadow {
@@ -961,7 +1148,7 @@ struct Shadow {
     element_corner_radii: Corners,
     // 0 = drop shadow, 1 = inset shadow.
     inset: u32,
-    pad: u32, // align to 8 bytes
+    curved_clip: u32,
 }
 
 struct ShadowVarying {
@@ -1042,7 +1229,7 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return blend_color(input.color, alpha);
+    return apply_curved_clip(blend_color(input.color, alpha), shadow.curved_clip, input.position.xy);
 }
 
 // --- path rasterization --- //
@@ -1113,12 +1300,15 @@ fn fs_path_rasterization(input: PathRasterizationVarying) -> @location(0) vec4<f
 
 struct PathSprite {
     bounds: Bounds,
+    curved_clip: u32,
+    pad: u32,
 }
 
 
 struct PathVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) texture_coords: vec2<f32>,
+    @location(1) @interpolate(flat) curved_clip: u32,
 }
 
 @vertex
@@ -1134,6 +1324,7 @@ fn vs_path(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     var out = PathVarying();
     out.position = device_position;
     out.texture_coords = texture_coords;
+    out.curved_clip = sprite.curved_clip;
 
     return out;
 }
@@ -1141,6 +1332,10 @@ fn vs_path(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
 @fragment
 fn fs_path(input: PathVarying) -> @location(0) vec4<f32> {
     let sample = textureSample(t_sprite, s_sprite, input.texture_coords);
+    if (input.curved_clip != 0u) {
+        // The intermediate texture is premultiplied: scale all channels once, at composite.
+        return sample * curved_clip_coverage(input.curved_clip, input.position.xy);
+    }
     return sample;
 }
 
@@ -1148,7 +1343,7 @@ fn fs_path(input: PathVarying) -> @location(0) vec4<f32> {
 
 struct Underline {
     order: u32,
-    pad: u32,
+    curved_clip: u32,
     bounds: Bounds,
     content_mask: Bounds,
     color: Hsla,
@@ -1191,7 +1386,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let underline = load_underline(input.underline_id);
     if (underline.wavy == 0u)
     {
-        return blend_color(input.color, input.color.a);
+        return apply_curved_clip(blend_color(input.color, input.color.a), underline.curved_clip, input.position.xy);
     }
 
     let half_thickness = underline.thickness * 0.5;
@@ -1207,27 +1402,82 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let distance_from_top_border = distance_in_pixels - half_thickness;
     let distance_from_bottom_border = distance_in_pixels + half_thickness;
     let alpha = saturate(0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return blend_color(input.color, alpha * input.color.a);
+    return apply_curved_clip(blend_color(input.color, alpha * input.color.a), underline.curved_clip, input.position.xy);
 }
 
 // --- monochrome sprites --- //
 
 struct MonochromeSprite {
     order: u32,
-    pad: u32,
+    blur: f32,
     bounds: Bounds,
     content_mask: Bounds,
     color: Hsla,
     tile: AtlasTile,
     transformation: TransformationMatrix,
+    scope: ScopeParams,
 }
 
+
+// Composite-time glyph blur (RND-005). `sprite.blur` is the device sigma; a positive sigma
+// means the sprite bounds were inflated by the halo 3 * sigma on every side while the tile
+// keeps its size and alignment inside them, and the fragment averages a Gaussian
+// neighborhood of the sprite's own tile.
+const BLUR_MAX_TAP_RADIUS: i32 = 12;
+const BLUR_EPSILON: f32 = 0.000001;
 
 struct MonoSpriteVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) sprite_id: u32,
     @location(3) clip_distances: vec4<f32>,
+    @location(4) @interpolate(flat) scope_active: u32,
+    @location(5) @interpolate(flat) curved_clip: u32,
+    @location(6) @interpolate(flat) blur: f32,
+}
+
+// Tile position with the halo: (U * Q - h) * T / max(Q - 2h, eps), Q the expanded size.
+fn to_blurred_tile_position(unit_vertex: vec2<f32>, bounds: Bounds, tile: AtlasTile, sigma: f32) -> vec2<f32> {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let halo = vec2<f32>(3.0 * sigma);
+    let expanded = vec2<f32>(bounds.size);
+    let tile_coordinate = (unit_vertex * expanded - halo) * vec2<f32>(tile.bounds.size) / max(expanded - 2.0 * halo, vec2<f32>(BLUR_EPSILON));
+    return (vec2<f32>(tile.bounds.origin) + tile_coordinate) / atlas_size;
+}
+
+fn blurred_mono_coverage(center: vec2<f32>, tile: AtlasTile, sigma: f32) -> f32 {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let tile_min = vec2<f32>(tile.bounds.origin) / atlas_size;
+    let tile_max = (vec2<f32>(tile.bounds.origin) + vec2<f32>(tile.bounds.size)) / atlas_size;
+    let inset = vec2<f32>(0.5) / atlas_size;
+    var clamp_min = tile_min + inset;
+    var clamp_max = tile_max - inset;
+    let tile_mid = 0.5 * (tile_min + tile_max);
+    if (clamp_min.x > clamp_max.x) {
+        clamp_min.x = tile_mid.x;
+        clamp_max.x = tile_mid.x;
+    }
+    if (clamp_min.y > clamp_max.y) {
+        clamp_min.y = tile_mid.y;
+        clamp_max.y = tile_mid.y;
+    }
+
+    let radius = min(i32(ceil(3.0 * sigma)), BLUR_MAX_TAP_RADIUS);
+    let two_sigma_squared = 2.0 * sigma * sigma;
+    var accumulated = 0.0;
+    var total_weight = 0.0;
+    for (var y = -radius; y <= radius; y++) {
+        for (var x = -radius; x <= radius; x++) {
+            let weight = exp(-f32(x * x + y * y) / two_sigma_squared);
+            total_weight += weight;
+            let tap = center + vec2<f32>(f32(x), f32(y)) / atlas_size;
+            if (all(tap >= tile_min) && all(tap <= tile_max)) {
+                accumulated += weight * textureSampleLevel(t_sprite, s_sprite, clamp(tap, clamp_min, clamp_max), 0.0).r;
+            }
+        }
+    }
+    return accumulated / max(total_weight, BLUR_EPSILON);
 }
 
 @vertex
@@ -1238,15 +1488,28 @@ fn vs_mono_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     var out = MonoSpriteVarying();
     out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
 
-    out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    if (sprite.blur > 0.0) {
+        out.tile_position = to_blurred_tile_position(unit_vertex, sprite.bounds, sprite.tile, sprite.blur);
+    } else {
+        out.tile_position = to_tile_position(unit_vertex, sprite.tile);
+    }
+    out.blur = sprite.blur;
     out.color = hsla_to_rgba(sprite.color);
+    out.sprite_id = instance_id;
+    out.scope_active = select(0u, 1u, scope_is_active(sprite.scope));
+    out.curved_clip = sprite.scope.curved_clip;
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     return out;
 }
 
 @fragment
 fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position).r;
+    // The ordinary sample is taken unconditionally: textureSample needs uniform control flow.
+    var sample = textureSample(t_sprite, s_sprite, input.tile_position).r;
+    if (input.blur > 0.0) {
+        sample = blurred_mono_coverage(input.tile_position, load_mono_sprite(input.sprite_id).tile, input.blur);
+    }
+    // Correction first, on the (blurred) scalar coverage; the scoped factor follows (RND-005 R10).
     let alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, gamma_params.grayscale_enhanced_contrast, gamma_params.gamma_ratios);
 
     // Alpha clip after using the derivatives.
@@ -1254,7 +1517,11 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    return blend_color(input.color, alpha_corrected);
+    var scope_f = 1.0;
+    if (input.scope_active != 0u) {
+        scope_f = scope_factor(load_mono_sprite(input.sprite_id).scope, input.position.xy);
+    }
+    return apply_curved_clip(blend_color(input.color, alpha_corrected * scope_f), input.curved_clip, input.position.xy);
 }
 
 // --- polychrome sprites --- //
@@ -1268,7 +1535,25 @@ struct PolychromeSprite {
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
+    scope: ScopeParams,
+    effects: ImageEffects,
 }
+
+// Per-draw image effects (RND-004 feathered mask, RND-007 nearest sampling).
+struct ImageEffects {
+    mask_bounds: array<f32, 4>,
+    mask_radius: f32,
+    mask_feather: f32,
+    mask_clearance: f32,
+    mask_bottom_reference: f32,
+    mask_bottom_feather: f32,
+    flags: u32,
+    reserved0: u32,
+    reserved1: u32,
+}
+
+// ImageEffects.flags bit 0: nearest-neighbor texel selection (mirrors ImageEffects::NEAREST).
+const IMAGE_FLAG_NEAREST: u32 = 1u;
 
 
 struct PolySpriteVarying {
@@ -1291,15 +1576,51 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     return out;
 }
 
+// Feathered inverse rounded-rectangle mask coverage at a device-space point (RND-004 R1-R5).
+// A feather that is not positive disables the whole mask; a bottom feather that is not
+// positive disables only the bottom ramp. The radius is used as supplied (no clamp).
+fn image_mask_coverage(effects: ImageEffects, point: vec2<f32>) -> f32 {
+    let feather = effects.mask_feather;
+    if (feather <= 0.0) {
+        return 1.0;
+    }
+    let mask_origin = vec2<f32>(effects.mask_bounds[0], effects.mask_bounds[1]);
+    let half_size = vec2<f32>(effects.mask_bounds[2], effects.mask_bounds[3]) / 2.0;
+    let radius = effects.mask_radius;
+    let e = abs(point - (mask_origin + half_size)) - half_size + vec2<f32>(radius);
+    let distance = length(max(e, vec2<f32>(0.0))) + min(max(e.x, e.y), 0.0) - radius;
+    var coverage = smoothstep(0.0, feather, distance - effects.mask_clearance);
+    if (effects.mask_bottom_feather > 0.0) {
+        coverage = min(
+            coverage,
+            smoothstep(0.0, effects.mask_bottom_feather, effects.mask_bottom_reference - point.y));
+    }
+    return coverage;
+}
+
 @fragment
 fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    let sprite = load_poly_sprite(input.sprite_id);
+    // Linear filtering is the unchanged shared atlas sampler: it does not clamp at the tile
+    // edge, so the outer half texel blends with whatever the atlas holds next to the tile
+    // (RND-007; no gutter, padding or edge clamping is added). Sampled unconditionally:
+    // filtered sampling needs uniform control flow.
+    var sample = textureSample(t_sprite, s_sprite, input.tile_position);
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
 
-    let sprite = load_poly_sprite(input.sprite_id);
+    if ((sprite.effects.flags & IMAGE_FLAG_NEAREST) != 0u) {
+        // The texel containing the coordinate: truncate toward zero, cap at the last texel,
+        // level zero, no interpolation (RND-007 R4).
+        let atlas_dimensions = vec2<i32>(textureDimensions(t_sprite, 0));
+        let texel = clamp(
+            vec2<i32>(input.tile_position * vec2<f32>(atlas_dimensions)),
+            vec2<i32>(0),
+            atlas_dimensions - vec2<i32>(1));
+        sample = textureLoad(t_sprite, texel, 0);
+    }
     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
 
     var color = sample;
@@ -1307,5 +1628,13 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, sprite.opacity * saturate(0.5 - distance));
+    var scope_f = 1.0;
+    if (scope_is_active(sprite.scope)) {
+        scope_f = scope_factor(sprite.scope, input.position.xy);
+    }
+    let mask_f = image_mask_coverage(sprite.effects, input.position.xy);
+    return apply_curved_clip(
+        blend_color(color, sprite.opacity * saturate(0.5 - distance) * scope_f * mask_f),
+        sprite.scope.curved_clip,
+        input.position.xy);
 }

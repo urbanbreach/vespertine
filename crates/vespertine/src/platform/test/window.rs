@@ -58,6 +58,7 @@ pub(crate) struct TestWindowState {
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
+    subpixel_rendering_supported: bool,
 }
 
 #[derive(Clone)]
@@ -133,6 +134,7 @@ impl TestWindow {
             appearance: WindowAppearance::Light,
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
+            subpixel_rendering_supported: false,
         })))
     }
     pub fn simulate_scheduled_frame(&self) -> bool {
@@ -303,6 +305,11 @@ impl TestWindow {
     pub fn set_start_external_drag_result(&self, result: bool) {
         self.0.lock().start_external_drag_result = result;
     }
+
+    /// Makes the window report support for subpixel text rendering (default: unsupported).
+    pub fn set_subpixel_rendering_supported(&self, supported: bool) {
+        self.0.lock().subpixel_rendering_supported = supported;
+    }
 }
 
 impl PlatformWindow for TestWindow {
@@ -437,7 +444,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
-        false
+        self.0.lock().subpixel_rendering_supported
     }
 
     fn set_title(&mut self, title: &str) {

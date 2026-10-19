@@ -38,6 +38,8 @@ mod apple_build {
             "Bounds".into(),
             "Corners".into(),
             "Edges".into(),
+            "ScopeParams".into(),
+            "ImageEffects".into(),
             "Size".into(),
             "Pixels".into(),
             "PointF".into(),
@@ -73,6 +75,7 @@ mod apple_build {
         // Source files from vespertine that define types used in shaders
         let vespertine_src_paths = [
             vespertine_dir.join("src/scene.rs"),
+            vespertine_dir.join("src/paint_scope.rs"),
             vespertine_dir.join("src/geometry.rs"),
             vespertine_dir.join("src/color.rs"),
             vespertine_dir.join("src/window.rs"),

@@ -6,8 +6,8 @@ use crate::Inspector;
 use crate::profiler;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropBlur, Background, BorderStyle, Bounds,
-    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    AsyncWindowContext, AvailableSpace, BackdropBlur, Background, BorderStyle, Bounds, BoxShadow,
+    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
@@ -28,6 +28,7 @@ use crate::{
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
 use crate::interactive::TouchEvent;
+use crate::{EdgeFade, ImageAlphaMask, ImageEffects, ScopeParams};
 use anyhow::{Context as _, Result, anyhow};
 use derive_more::{Deref, DerefMut};
 use futures::channel::oneshot;
@@ -67,6 +68,8 @@ use vespertine_util::post_inc;
 use vespertine_util::{ResultExt, measure};
 
 pub(crate) mod a11y;
+#[cfg(test)]
+mod glyph_blur_tests;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
@@ -1247,6 +1250,10 @@ pub struct Window {
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
+    /// Scoped edge fade / rounded clip parameters stamped into every primitive.
+    pub(crate) paint_scope: ScopeParams,
+    /// The active edge fade, for the conservative fade of paths, shadows and decorations.
+    pub(crate) edge_fade: Option<EdgeFade>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -2160,6 +2167,8 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            paint_scope: ScopeParams::default(),
+            edge_fade: None,
             requested_autoscroll: None,
             last_text_input_configuration: None,
             focused_text_input: None,
@@ -2910,6 +2919,20 @@ impl Window {
         self.rendered_frame.scene.underlines.clone()
     }
 
+    /// Returns the scene of the most recently drawn frame: every primitive array with its
+    /// paint order, for tests asserting on what was painted and in which order.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn painted_scene(&self) -> &Scene {
+        &self.rendered_frame.scene
+    }
+
+    /// Returns the polychrome sprites (images) in the most recently rendered frame's scene,
+    /// in scene order, so tests can assert on painted images without rasterizing the frame.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn painted_polychrome_sprites(&self) -> Vec<PolychromeSprite> {
+        self.rendered_frame.scene.polychrome_sprites.clone()
+    }
+
     /// Set the content size of the window.
     pub fn resize(&mut self, size: Size<Pixels>) {
         self.platform_window.resize(size);
@@ -3295,13 +3318,13 @@ impl Window {
     fn underline(&self, origin: Point<Pixels>, width: Pixels, style: &UnderlineStyle) -> Underline {
         Underline {
             order: 0,
-            pad: 0,
+            curved_clip: 0,
             bounds: self.underline_bounds(origin, width, style),
             content_mask: self.snapped_content_mask(),
             color: style
                 .color
                 .unwrap_or_default()
-                .opacity(self.element_opacity()),
+                .opacity(self.element_opacity() * self.conservative_fade_at(origin)),
             thickness: self.snap_stroke(style.thickness),
             wavy: style.wavy.into(),
         }
@@ -4276,6 +4299,115 @@ impl Window {
         result
     }
 
+    /// Runs `f` with an edge fade scope active (RND-001): everything painted inside fades,
+    /// per fragment for quads, glyphs, emoji, images and vector icons, and conservatively
+    /// (one factor from the primitive's logical bounds) for paths, shadows and decorations,
+    /// as it approaches the enabled edges of `fade.bounds`.
+    ///
+    /// A `None` fade, or one with no enabled edge, leaves the enclosing fade untouched; a
+    /// fade with at least one enabled edge replaces the enclosing fade entirely while `f`
+    /// runs and the enclosing fade is restored afterwards. The scope does not change the
+    /// content mask, layout or hit testing. It modulates alpha and never paints a cover.
+    ///
+    /// The conservative factor of a path, shadow or decoration is one scalar from its logical
+    /// bounding rectangle (a decoration's unsnapped origin point), so a path or shadow whose
+    /// box merely touches an active edge is fully transparent; this approximation is not
+    /// per-fragment coverage. External or embedded surfaces and backdrop blur are not faded.
+    ///
+    /// This method should only be called during the prepaint or paint phase.
+    pub fn with_edge_fade<R>(
+        &mut self,
+        fade: Option<EdgeFade>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let Some(fade) = fade.filter(EdgeFade::is_enabled) else {
+            return f(self);
+        };
+        let previous_scope = self.paint_scope;
+        let previous_fade = self.edge_fade.replace(fade);
+        fade.scaled(self.scale_factor(), &mut self.paint_scope);
+        let result = f(self);
+        self.paint_scope.fade_edges = previous_scope.fade_edges;
+        self.paint_scope.fade_bands = previous_scope.fade_bands;
+        self.edge_fade = previous_fade;
+        result
+    }
+
+    /// Whether an explicit rounded clip scope ([`Self::with_rounded_clip`]) with non-empty
+    /// bounds encloses the code being painted. External and embedded surfaces keep only the
+    /// rectangular content mask under such a scope (RND-002 R7), so painters that need the
+    /// rounded cut (for example an element that can fall back to painting an image) read this
+    /// to choose their path. Curved overflow clips of opted-in elements are not reported:
+    /// they cut every primitive class, surfaces included.
+    pub fn rounded_clip_active(&self) -> bool {
+        self.paint_scope.rounded_clip_active()
+    }
+
+    /// Runs `f` with an explicit rounded clip scope active (RND-002): the rectangular
+    /// content mask is narrowed to `bounds` (so hitboxes inside are clipped like paint), and
+    /// quads, glyphs, emoji, images and vector icons are additionally cut along the
+    /// antialiased rounded rectangle `bounds` with the uniform logical `radius`.
+    ///
+    /// The rounded geometry is multiplied by the scale factor but never snapped to device
+    /// pixels. A nested scope replaces the enclosing rounded geometry while rectangular
+    /// masks intersect; leaving the scope restores the previous geometry and mask. The
+    /// rounded shape never cuts hit testing.
+    ///
+    /// Limits: the renderer picks the quad shading route per draw batch. A quad with a single
+    /// solid fill, square corners, no border and no active fade edge (a simple solid quad)
+    /// bypasses the rounded coverage and is cut only by the rectangular mask when every quad
+    /// of its draw batch (consecutive quads below the next primitive of another kind in paint
+    /// order, whether or not they overlap) is a simple solid quad; when the batch also holds
+    /// any other quad, the whole batch is shaded by the general route and the solid quad is
+    /// rounded like every other quad. Do not rely on a rounded-only scope to round such a
+    /// fill, nor to leave it square: force the general route (gradient fill, nonzero radius
+    /// or border, or an enabled fade edge) if a rounded cut is required. On software
+    /// rasterizer adapters the interior of a large bordered, rounded or faded solid quad is
+    /// shaded by the plain solid route as well. Paths, underlines, strikethroughs, drop and inset shadows
+    /// and surfaces keep only the rectangular content mask.
+    ///
+    /// This method should only be called during the prepaint or paint phase.
+    pub fn with_rounded_clip<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        radius: Pixels,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint_or_prepaint();
+        let previous_scope = self.paint_scope;
+        let scale_factor = self.scale_factor();
+        self.paint_scope.clip_bounds = [
+            bounds.left().0 * scale_factor,
+            bounds.top().0 * scale_factor,
+            bounds.right().0 * scale_factor,
+            bounds.bottom().0 * scale_factor,
+        ];
+        self.paint_scope.clip_radius = radius.0 * scale_factor;
+        let result = self.with_content_mask(Some(ContentMask { bounds }), f);
+        self.paint_scope.clip_bounds = previous_scope.clip_bounds;
+        self.paint_scope.clip_radius = previous_scope.clip_radius;
+        result
+    }
+
+    /// The conservative fade factor of a primitive with the logical bounding rectangle
+    /// `rect` under the active edge fade; `1.0` without one.
+    #[inline]
+    fn conservative_fade_factor(&self, rect: Bounds<Pixels>) -> f32 {
+        self.edge_fade
+            .as_ref()
+            .map_or(1.0, |fade| fade.conservative_factor(rect))
+    }
+
+    /// The conservative fade factor of a decoration evaluated at its unsnapped origin.
+    #[inline]
+    fn conservative_fade_at(&self, origin: Point<Pixels>) -> f32 {
+        self.conservative_fade_factor(Bounds {
+            origin,
+            size: Size::default(),
+        })
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -4672,6 +4804,7 @@ impl Window {
         let content_mask = self.snapped_content_mask();
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
+        let fade_factor = self.conservative_fade_factor(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
         for shadow in shadows {
             if shadow.inset {
@@ -4684,11 +4817,11 @@ impl Window {
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
                 corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity),
+                color: shadow.color.opacity(opacity * fade_factor),
                 element_bounds,
                 element_corner_radii,
                 inset: 0,
-                pad: 0,
+                curved_clip: 0,
             });
         }
     }
@@ -4708,6 +4841,7 @@ impl Window {
         let content_mask = self.snapped_content_mask();
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
+        let fade_factor = self.conservative_fade_factor(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
         for shadow in shadows {
             if !shadow.inset {
@@ -4729,11 +4863,11 @@ impl Window {
                 bounds: self.cover_bounds(hole),
                 content_mask,
                 corner_radii: hole_corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity),
+                color: shadow.color.opacity(opacity * fade_factor),
                 element_bounds,
                 element_corner_radii,
                 inset: 1,
-                pad: 0,
+                curved_clip: 0,
             });
         }
     }
@@ -4801,6 +4935,7 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
+            scope: self.paint_scope,
         };
 
         if !quad.background.is_transparent() {
@@ -4865,7 +5000,8 @@ impl Window {
         let opacity = self.element_opacity();
         path.content_mask = content_mask;
         let color: Background = color.into();
-        path.color = color.opacity(opacity);
+        let fade_factor = self.conservative_fade_factor(path.bounds);
+        path.color = color.opacity(opacity * fade_factor);
         self.next_frame
             .scene
             .insert_primitive(path.scale(scale_factor));
@@ -4904,13 +5040,17 @@ impl Window {
         };
         let opacity = self.element_opacity();
 
+        let fade_factor = self.conservative_fade_at(origin);
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
-            pad: 0,
+            curved_clip: 0,
             bounds,
             content_mask: self.snapped_content_mask(),
             thickness: self.snap_stroke(style.thickness),
-            color: style.color.unwrap_or_default().opacity(opacity),
+            color: style
+                .color
+                .unwrap_or_default()
+                .opacity(opacity * fade_factor),
             wavy: false.into(),
         });
     }
@@ -4985,16 +5125,18 @@ impl Window {
                     color: color.opacity(element_opacity),
                     tile,
                     transformation: TransformationMatrix::unit(),
+                    scope: self.paint_scope,
                 });
             } else {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
-                    pad: 0,
+                    blur: 0.0,
                     bounds,
                     content_mask,
                     color: color.opacity(element_opacity),
                     tile,
                     transformation: TransformationMatrix::unit(),
+                    scope: self.paint_scope,
                 });
             }
         }
@@ -5018,6 +5160,124 @@ impl Window {
         };
 
         mode == TextRenderingMode::Subpixel
+    }
+
+    /// Paints a monochrome glyph with an affine transformation and a Gaussian blur applied at
+    /// composite time, after rasterization (RND-005).
+    ///
+    /// The glyph is rasterized and cached exactly as [`paint_glyph`](Self::paint_glyph)
+    /// would for the same arguments (monochrome alpha mask, origin quantized to quarter
+    /// pixels horizontally and whole pixels vertically, foreground-color dependent
+    /// dilation); the transformation and the blur are not part of the raster identity, so
+    /// changing only `transformation` or `blur` between frames reuses the cached tile:
+    /// nothing is rasterized, allocated or uploaded. This always uses the monochrome mask,
+    /// never the subpixel or emoji pipelines, even when subpixel text is enabled.
+    ///
+    /// The y component of `origin` is the baseline of the glyph. Shaping, layout and hit
+    /// testing are unaffected.
+    ///
+    /// `transformation` acts in **device pixels** (window coordinates after the scale factor
+    /// is applied), on every vertex of the glyph quad: `p' = M p + t`. A positive rotation
+    /// angle turns the glyph clockwise on screen. The pivot is the caller's business: to
+    /// transform about the device-space point `c`, use `t = c - M c`, for instance
+    /// `TransformationMatrix::unit().translate(c).rotate(angle).translate(-c)`. Logical
+    /// pivots and translations must be multiplied by the scale factor by the caller.
+    ///
+    /// `blur` is the Gaussian sigma in **logical** pixels (clamped at zero from below),
+    /// multiplied by the scale factor to the device sigma `sigma_d`. For a positive sigma the
+    /// sprite is inflated by `3 * sigma_d` device pixels on every side before the
+    /// transformation while the glyph keeps its size and alignment inside it, and each
+    /// fragment averages a Gaussian neighborhood of `min(ceil(3 * sigma_d), 12)` texel taps
+    /// of the glyph's own atlas tile only (see [`blurred_coverage`]). The blurred coverage
+    /// then receives the usual contrast and gamma correction, then the scoped fade and
+    /// rounded clip of [`with_edge_fade`](Self::with_edge_fade) and
+    /// [`with_rounded_clip`](Self::with_rounded_clip), which are evaluated at final
+    /// device-space positions and therefore do not rotate or scale with the glyph. Zero blur
+    /// takes the ordinary mask-sampling path and an identity transformation is then
+    /// pixel-identical to [`paint_glyph`](Self::paint_glyph).
+    ///
+    /// The sprite recorded in the scene has the expanded (halo included), untransformed
+    /// bounds; scene ordering and culling against the content mask use the axis-aligned
+    /// box of the transformed quad. Element opacity and the rectangular content mask apply
+    /// as for any glyph.
+    ///
+    /// Platforms: only the wgpu (Linux) renderer evaluates the blur kernel. The Metal and
+    /// Direct3D shaders keep the ordinary tile mapping, so on macOS and Windows the blur is
+    /// treated as zero ([`GLYPH_BLUR_SUPPORTED`]): the glyph is painted transformed and
+    /// unblurred.
+    ///
+    /// Empty raster bounds paint nothing and succeed; font, rasterization and atlas errors
+    /// are returned. This method should only be called as part of the paint phase of
+    /// element drawing.
+    pub fn paint_glyph_transformed(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+        transformation: TransformationMatrix,
+        blur: Pixels,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+
+        let element_opacity = self.element_opacity();
+        let scale_factor = self.scale_factor();
+        let sigma = if crate::GLYPH_BLUR_SUPPORTED {
+            crate::device_blur_sigma(blur, scale_factor)
+        } else {
+            0.0
+        };
+        let glyph_origin = origin.scale(scale_factor);
+
+        let quantized_origin = Point::new(
+            round_half_toward_zero(glyph_origin.x.0 * SUBPIXEL_VARIANTS_X as f32)
+                / SUBPIXEL_VARIANTS_X as f32,
+            round_half_toward_zero(glyph_origin.y.0 * SUBPIXEL_VARIANTS_Y as f32)
+                / SUBPIXEL_VARIANTS_Y as f32,
+        );
+        let subpixel_variant = Point::new(
+            (quantized_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
+            (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
+        );
+        let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
+        let dilation = self.text_system().glyph_dilation_for_color(color);
+        let params = RenderGlyphParams {
+            font_id,
+            glyph_id,
+            font_size,
+            subpixel_variant,
+            scale_factor,
+            is_emoji: false,
+            subpixel_rendering: false,
+            dilation,
+        };
+
+        let raster_bounds = self.text_system().raster_bounds(&params)?;
+        if !raster_bounds.is_zero() {
+            let tile = self
+                .sprite_atlas
+                .get_or_insert_with(params.clone().into(), &mut || {
+                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                    Ok(Some((size, Cow::Owned(bytes))))
+                })?
+                .expect("Callback above only errors or returns Some");
+            let bounds = Bounds {
+                origin: integer_origin + raster_bounds.origin.map(Into::into),
+                size: tile.bounds.size.map(Into::into),
+            };
+            self.next_frame.scene.insert_primitive(MonochromeSprite {
+                order: 0,
+                blur: sigma,
+                bounds: crate::blur_expanded_bounds(bounds, sigma),
+                content_mask: self.snapped_content_mask(),
+                color: color.opacity(element_opacity),
+                tile,
+                transformation,
+                scope: self.paint_scope,
+            });
+        }
+        Ok(())
     }
 
     /// Paints an emoji glyph into the scene for the next frame at the current z-index.
@@ -5077,6 +5337,8 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                scope: self.paint_scope,
+                effects: Default::default(),
             });
         }
         Ok(())
@@ -5136,12 +5398,13 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
-            pad: 0,
+            blur: 0.0,
             bounds: final_bounds,
             content_mask,
             color: color.opacity(element_opacity),
             tile,
             transformation,
+            scope: self.paint_scope,
         });
 
         Ok(())
@@ -5154,7 +5417,9 @@ impl Window {
     /// Paint an image into `bounds`, positioning and scaling it according to `image_bounds`.
     ///
     /// The visible region rendered is `bounds.intersect(&image_bounds)`, with `corner_radii`
-    /// applied to `bounds`.
+    /// applied to that region (clamped to half its shorter side). This is
+    /// [`Window::paint_image_fitted`] with that visible region and `image_bounds` as the
+    /// fitted rectangle. Sampling is linear.
     pub fn paint_image(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -5165,12 +5430,129 @@ impl Window {
         grayscale: bool,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
+        self.paint_image_with_effects(
+            bounds.intersect(&image_bounds),
+            image_bounds,
+            corner_radii,
+            data,
+            frame_index,
+            grayscale,
+            ImageEffects::default(),
+        )
+    }
 
-        let visible_bounds = bounds.intersect(&image_bounds);
-        if visible_bounds.size.width <= Pixels::ZERO || visible_bounds.size.height <= Pixels::ZERO {
+    /// Paint an image with explicit nearest-neighbor texel selection (RND-007).
+    ///
+    /// The arguments, early returns, frame-index contract, atlas tile, rounded corners,
+    /// content mask, grayscale and opacity are exactly those of [`Window::paint_image`]; only
+    /// the texel selection differs: each fragment reads the single source texel containing
+    /// its atlas coordinate instead of interpolating neighbors. Ordinary images, glyphs and
+    /// emoji keep linear filtering. Paint order is preserved.
+    ///
+    /// The Metal and Direct3D renderers ignore the nearest flag and filter linearly.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_image_nearest(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        image_bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+        let effects = ImageEffects {
+            flags: ImageEffects::NEAREST,
+            ..ImageEffects::default()
+        };
+        self.paint_image_with_effects(
+            bounds.intersect(&image_bounds),
+            image_bounds,
+            corner_radii,
+            data,
+            frame_index,
+            grayscale,
+            effects,
+        )
+    }
+
+    /// Paint an image into the `visible` rectangle while the whole image is laid out in the
+    /// `fitted` rectangle (RND-004), for example an object-fit cover rectangle larger than the
+    /// element. The painted sprite is exactly `visible` (snapped to device pixels), showing
+    /// the proportional crop of the image; `corner_radii` apply to `visible` and are clamped
+    /// to half its shorter side. A non-positive `visible` or `fitted` size paints nothing.
+    ///
+    /// This method will panic if the frame_index is not valid. It should only be called as
+    /// part of the paint phase of element drawing.
+    pub fn paint_image_fitted(
+        &mut self,
+        visible: Bounds<Pixels>,
+        fitted: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+    ) -> Result<()> {
+        self.paint_image_fitted_masked(
+            visible,
+            fitted,
+            corner_radii,
+            data,
+            frame_index,
+            grayscale,
+            None,
+        )
+    }
+
+    /// [`Window::paint_image_fitted`] with an optional feathered inverse rounded-rectangle
+    /// [`ImageAlphaMask`] (RND-004). The mask is in window-space logical pixels, evaluated
+    /// per fragment in device space, and only changes per-draw parameters: the texture is
+    /// shared and never re-uploaded. An absent mask, or one with a zero effective feather,
+    /// paints exactly like [`Window::paint_image_fitted`].
+    ///
+    /// The Metal and Direct3D renderers ignore the mask and paint the image unmasked.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_image_fitted_masked(
+        &mut self,
+        visible: Bounds<Pixels>,
+        fitted: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+        mask: Option<ImageAlphaMask>,
+    ) -> Result<()> {
+        self.invalidator.debug_assert_paint();
+        let effects = mask
+            .map(|mask| mask.to_effects(self.scale_factor()))
+            .unwrap_or_default();
+        self.paint_image_with_effects(
+            visible,
+            fitted,
+            corner_radii,
+            data,
+            frame_index,
+            grayscale,
+            effects,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_image_with_effects(
+        &mut self,
+        visible: Bounds<Pixels>,
+        fitted: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+        effects: ImageEffects,
+    ) -> Result<()> {
+        if visible.size.width <= Pixels::ZERO || visible.size.height <= Pixels::ZERO {
             return Ok(());
         }
-        if image_bounds.size.width <= Pixels::ZERO || image_bounds.size.height <= Pixels::ZERO {
+        if fitted.size.width <= Pixels::ZERO || fitted.size.height <= Pixels::ZERO {
             return Ok(());
         }
 
@@ -5192,51 +5574,12 @@ impl Window {
             })?
             .expect("Callback above only returns Some");
 
-        let visible_bounds_snapped = self.snap_bounds(visible_bounds);
-
-        let sub_tile = if visible_bounds == image_bounds {
-            tile
-        } else {
-            let x_offset_ratio =
-                (visible_bounds.origin.x - image_bounds.origin.x) / image_bounds.size.width;
-            let y_offset_ratio =
-                (visible_bounds.origin.y - image_bounds.origin.y) / image_bounds.size.height;
-            let width_ratio = visible_bounds.size.width / image_bounds.size.width;
-            let height_ratio = visible_bounds.size.height / image_bounds.size.height;
-
-            let tile_origin_x = tile.bounds.origin.x.0;
-            let tile_origin_y = tile.bounds.origin.y.0;
-            let tile_width = tile.bounds.size.width.0;
-            let tile_height = tile.bounds.size.height.0;
-
-            let sub_origin_x = tile_origin_x + (x_offset_ratio * tile_width as f32).round() as i32;
-            let sub_origin_y = tile_origin_y + (y_offset_ratio * tile_height as f32).round() as i32;
-            let sub_width = (width_ratio * tile_width as f32).round() as i32;
-            let sub_height = (height_ratio * tile_height as f32).round() as i32;
-
-            let max_x = tile_origin_x + tile_width;
-            let max_y = tile_origin_y + tile_height;
-
-            let clamped_origin_x = sub_origin_x.clamp(tile_origin_x, max_x);
-            let clamped_origin_y = sub_origin_y.clamp(tile_origin_y, max_y);
-            let clamped_width = sub_width.min(max_x - clamped_origin_x).max(0);
-            let clamped_height = sub_height.min(max_y - clamped_origin_y).max(0);
-
-            AtlasTile {
-                bounds: Bounds {
-                    origin: point(
-                        DevicePixels(clamped_origin_x),
-                        DevicePixels(clamped_origin_y),
-                    ),
-                    size: size(DevicePixels(clamped_width), DevicePixels(clamped_height)),
-                },
-                ..tile
-            }
-        };
+        let visible_snapped = self.snap_bounds(visible);
+        let sub_tile = crate::image_fit::crop_tile(tile, visible, fitted);
 
         let content_mask = self.snapped_content_mask();
         let corner_radii = corner_radii
-            .clamp_radii_for_quad_size(visible_bounds.size)
+            .clamp_radii_for_quad_size(visible.size)
             .scale(self.scale_factor());
         let opacity = self.element_opacity();
 
@@ -5244,11 +5587,13 @@ impl Window {
             order: 0,
             pad: 0,
             grayscale: grayscale.into(),
-            bounds: visible_bounds_snapped,
+            bounds: visible_snapped,
             content_mask,
             corner_radii,
             tile: sub_tile,
             opacity,
+            scope: self.paint_scope,
+            effects,
         });
         Ok(())
     }
@@ -5274,6 +5619,7 @@ impl Window {
             bounds,
             content_mask,
             opacity,
+            curved_clip: 0,
             image_buffer,
         });
     }
@@ -5337,6 +5683,7 @@ impl Window {
             bounds,
             content_mask,
             opacity,
+            curved_clip: 0,
             texture,
         });
     }
@@ -9892,7 +10239,7 @@ mod tests {
         assert_eq!(actual.thickness, expected.thickness);
         assert_eq!(actual.wavy, expected.wavy);
         assert_eq!(actual.color, expected.color);
-        assert_eq!(actual.pad, expected.pad);
+        assert_eq!(actual.curved_clip, expected.curved_clip);
     }
 
     fn underline_device_columns(underlines: &[Underline]) -> Vec<i32> {

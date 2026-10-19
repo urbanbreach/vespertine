@@ -164,7 +164,8 @@ vespertine_collections = { workspace = true, features = ["test-support"] }
 env_logger.workspace = true
 futures-concurrency.workspace = true
 postage = { workspace = true, features = ["blocking"] }
-vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
+vespertine_wgpu = { workspace = true, features = ["test-support"] }
 vespertine_util.workspace = true
 lyon = { version = "1.0", features = ["extra"] }
 rand = { workspace = true, default-features = true }
@@ -294,3 +295,28 @@ path = "examples/view_example/view_example_main.rs"
 [[example]]
 name = "toggle_headless"
 path = "examples/toggle_headless.rs"
+
+[[example]]
+name = "surface_plate"
+path = "examples/surface_plate.rs"
+required-features = ["test-support"]
+
+[[example]]
+name = "canvas_text"
+path = "examples/canvas_text.rs"
+required-features = ["test-support"]
+
+[[example]]
+name = "rounded_clip"
+path = "examples/rounded_clip.rs"
+required-features = ["test-support"]
+
+[[example]]
+name = "rounded_clip_plain_solid"
+path = "examples/rounded_clip_plain_solid.rs"
+required-features = ["test-support"]
+
+[[example]]
+name = "rounded_clip_limits"
+path = "examples/rounded_clip_limits.rs"
+required-features = ["test-support"]

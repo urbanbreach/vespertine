@@ -46,6 +46,7 @@ pub(super) fn quad(
         border_color: color,
         corner_radii: radii,
         border_widths: Edges::default(),
+        scope: Default::default(),
     }
 }
 
@@ -755,7 +756,7 @@ fn boundary_primitive_alone_is_invisible_and_a_trailing_effect_still_renders() -
         element_bounds: bounds,
         element_corner_radii: Corners::default(),
         inset: 0,
-        pad: 0,
+        curved_clip: 0,
     });
     assert_eq!(render(&mut renderer, boundary_only, 100, 80), reference);
 
@@ -844,7 +845,7 @@ fn a_nested_overlay_layer_draws_above_the_card_even_for_earlier_primitive_kinds(
     // An underline sorts after quads within one layer order.
     scene.insert_primitive(vespertine::Underline {
         order: 0,
-        pad: 0,
+        curved_clip: 0,
         bounds: rect(40.0, 50.0, 100.0, 6.0),
         content_mask: ContentMask {
             bounds: rect(-1e6, -1e6, 2e6, 2e6),

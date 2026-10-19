@@ -6,10 +6,10 @@ use std::{
 
 use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
-    CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
-    point, px, quad, rems, size,
+    CornersRefinement, CursorStyle, CurvedClipShape, DefiniteLength, DevicePixels, Edges,
+    EdgesRefinement, Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla,
+    Length, Pixels, Point, PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled,
+    TextRun, Window, black, phi, point, px, quad, rems, size,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -192,6 +192,12 @@ pub struct Style {
     pub scrollbar_width: AbsoluteLength,
     /// Whether both x and y axis should be scrollable at the same time.
     pub allow_concurrent_scroll: bool,
+    /// Clip the element's descendants to its own curved padding edge (RND-002 R11).
+    ///
+    /// Off by default. Effective only when the overflow is non-visible on both axes and at
+    /// least one outer corner radius is positive; otherwise the ordinary rectangular
+    /// overflow mask is the only clip.
+    pub curved_overflow_clip: bool,
     /// Whether scrolling should be restricted to the input gesture's axis.
     ///
     /// Pixel-based scroll gestures are locked to their initially dominant axis. The lock may be
@@ -684,6 +690,57 @@ impl Style {
         }
     }
 
+    /// The curved padding-edge clip shape of an element opted into
+    /// [`Style::curved_overflow_clip`], in device pixels (RND-002 R11, R12), or `None` when
+    /// the flag is off, the overflow is visible on either axis, or no outer corner radius is
+    /// positive. The shape is the border box inset by the visible border widths, with the
+    /// elliptical inner radii `max(r - width, 0)` per corner; the geometry is fractional and
+    /// never snapped.
+    pub fn curved_overflow_clip_shape(
+        &self,
+        bounds: Bounds<Pixels>,
+        rem_size: Pixels,
+        scale_factor: f32,
+    ) -> Option<CurvedClipShape> {
+        if !self.curved_overflow_clip
+            || self.overflow.x == Overflow::Visible
+            || self.overflow.y == Overflow::Visible
+        {
+            return None;
+        }
+        let radii = self
+            .corner_radii
+            .to_pixels(rem_size)
+            .clamp_radii_for_quad_size(bounds.size);
+        if !(radii.top_left > Pixels::ZERO
+            || radii.top_right > Pixels::ZERO
+            || radii.bottom_right > Pixels::ZERO
+            || radii.bottom_left > Pixels::ZERO)
+        {
+            return None;
+        }
+        let widths = if self.is_border_visible() {
+            self.border_widths.to_pixels(rem_size)
+        } else {
+            Edges::default()
+        };
+        Some(CurvedClipShape::from_padding_edge(
+            bounds.scale(scale_factor),
+            [
+                radii.top_left.0 * scale_factor,
+                radii.top_right.0 * scale_factor,
+                radii.bottom_right.0 * scale_factor,
+                radii.bottom_left.0 * scale_factor,
+            ],
+            [
+                widths.top.0 * scale_factor,
+                widths.right.0 * scale_factor,
+                widths.bottom.0 * scale_factor,
+                widths.left.0 * scale_factor,
+            ],
+        ))
+    }
+
     /// Paints the background of an element styled with this style.
     pub fn paint(
         &self,
@@ -778,6 +835,7 @@ impl Default for Style {
                 y: Overflow::Visible,
             },
             allow_concurrent_scroll: false,
+            curved_overflow_clip: false,
             restrict_scroll_to_axis: false,
             scrollbar_width: AbsoluteLength::default(),
             position: Position::Relative,

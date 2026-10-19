@@ -8,6 +8,7 @@ struct SubpixelSprite {
     color: Hsla,
     tile: AtlasTile,
     transformation: TransformationMatrix,
+    scope: ScopeParams,
 }
 @group(1) @binding(0) var<storage, read> b_subpixel_sprites: array<SubpixelSprite>;
 
@@ -15,7 +16,10 @@ struct SubpixelSpriteOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) sprite_id: u32,
     @location(3) clip_distances: vec4<f32>,
+    @location(4) @interpolate(flat) scope_active: u32,
+    @location(5) @interpolate(flat) curved_clip: u32,
 }
 
 struct SubpixelSpriteFragmentOutput {
@@ -32,6 +36,9 @@ fn vs_subpixel_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_i
     out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.color = hsla_to_rgba(sprite.color);
+    out.sprite_id = instance_id;
+    out.scope_active = select(0u, 1u, scope_is_active(sprite.scope));
+    out.curved_clip = sprite.scope.curved_clip;
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     return out;
 }
@@ -49,8 +56,18 @@ fn fs_subpixel_sprite(input: SubpixelSpriteOutput) -> SubpixelSpriteFragmentOutp
         return SubpixelSpriteFragmentOutput(vec4<f32>(0.0), vec4<f32>(0.0));
     }
 
+    // The scoped fade/clip factor and the curved clip coverage multiply all three
+    // dual-source alpha channels equally, keeping the channel ordering.
+    var factor = 1.0;
+    if (input.scope_active != 0u) {
+        factor = scope_factor(b_subpixel_sprites[input.sprite_id].scope, input.position.xy);
+    }
+    if (input.curved_clip != 0u) {
+        factor = factor * curved_clip_coverage(input.curved_clip, input.position.xy);
+    }
+
     var out = SubpixelSpriteFragmentOutput();
     out.foreground = vec4<f32>(input.color.rgb, 1.0);
-    out.alpha = vec4<f32>(input.color.a * alpha_corrected, 1.0);
+    out.alpha = vec4<f32>(input.color.a * alpha_corrected * factor, 1.0);
     return out;
 }

@@ -84,6 +84,27 @@ impl RenderImage {
         }
     }
 
+    /// Create a single-frame image from tightly packed straight-alpha BGRA bytes (blue,
+    /// green, red, alpha per pixel, row-major from the top-left, no row padding).
+    ///
+    /// The bytes are kept exactly as given (RND-007): no swizzling, premultiplication or
+    /// decoding. The image has a fresh identity, scale factor 1 and no frame delay.
+    /// Returns `None` when `bytes.len()` is not `width * height * 4` (computed with
+    /// overflow checks) or when `width` or `height` is zero.
+    pub fn from_bgra(width: u32, height: u32, bytes: Vec<u8>) -> Option<RenderImage> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let expected = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        if bytes.len() != expected {
+            return None;
+        }
+        let buffer = image::RgbaImage::from_raw(width, height, bytes)?;
+        Some(Self::new(SmallVec::from_buf([Frame::new(buffer)])))
+    }
+
     /// Convert this image into a byte slice.
     pub fn as_bytes(&self, frame_index: usize) -> Option<&[u8]> {
         self.data
@@ -241,5 +262,27 @@ mod tests {
         // Bytes that do not match the reported size are a backend error.
         let short = [0u8; 3];
         update_image_frames(&atlas, image.id, 1, |_| Ok((image.size(0), &short[..]))).unwrap_err();
+    }
+
+    #[test]
+    fn from_bgra_keeps_bytes_and_rejects_bad_shapes() {
+        let bytes = vec![16, 32, 48, 255, 170, 187, 204, 255];
+        let image = RenderImage::from_bgra(2, 1, bytes.clone()).expect("valid 2x1 image");
+        assert_eq!(image.frame_count(), 1);
+        assert_eq!(image.size(0), size(DevicePixels(2), DevicePixels(1)));
+        assert_eq!(image.as_bytes(0), Some(bytes.as_slice()));
+        assert_eq!(image.as_bytes(1), None);
+        assert_eq!(image.scale_factor, 1.0);
+        assert_eq!(image.delay(0), Delay::from_numer_denom_ms(0, 1));
+        assert_eq!(image.render_size(0), size(Pixels(2.0), Pixels(1.0)));
+        let other = RenderImage::from_bgra(2, 1, bytes).unwrap();
+        assert_ne!(image.id, other.id, "every image gets a fresh identity");
+
+        assert!(RenderImage::from_bgra(2, 1, vec![0; 4]).is_none());
+        assert!(RenderImage::from_bgra(2, 1, vec![0; 9]).is_none());
+        assert!(RenderImage::from_bgra(0, 1, vec![]).is_none());
+        assert!(RenderImage::from_bgra(2, 0, vec![]).is_none());
+        assert!(RenderImage::from_bgra(u32::MAX, u32::MAX, vec![0; 8]).is_none());
+        assert!(RenderImage::from_bgra(1 << 31, 1 << 31, vec![0; 4]).is_none());
     }
 }

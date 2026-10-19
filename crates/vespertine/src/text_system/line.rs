@@ -1719,7 +1719,7 @@ mod tests {
             assert_eq!(actual.thickness, expected.thickness);
             assert_eq!(actual.wavy, expected.wavy);
             assert_eq!(actual.order, expected.order);
-            assert_eq!(actual.pad, expected.pad);
+            assert_eq!(actual.curved_clip, expected.curved_clip);
         }
     }
 

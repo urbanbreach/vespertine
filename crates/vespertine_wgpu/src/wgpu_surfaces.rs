@@ -43,7 +43,9 @@ struct SurfaceParams {
     bounds: PodBounds,
     content_mask: PodBounds,
     opacity: f32,
-    _pad: [f32; 3],
+    /// Chain of curved overflow clips (RND-002 R15); `0` for none.
+    curved_clip: u32,
+    _pad: [u32; 2],
 }
 
 const PARAMS_SIZE: usize = std::mem::size_of::<SurfaceParams>();
@@ -221,7 +223,8 @@ impl SurfaceBatcher {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
                 opacity: surface.opacity,
-                _pad: [0.0; 3],
+                curved_clip: surface.curved_clip,
+                _pad: [0; 2],
             };
             let offset = index * stride;
             self.staging[offset..offset + PARAMS_SIZE].copy_from_slice(bytemuck::bytes_of(&params));

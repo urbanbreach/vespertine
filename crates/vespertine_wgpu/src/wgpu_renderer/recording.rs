@@ -23,6 +23,8 @@ const MIN_SECTION_SIZE: u64 = 16;
 /// Binding identities of the two global bind groups.
 const GLOBALS_BINDING: u64 = 1;
 const PATH_GLOBALS_BINDING: u64 = 2;
+/// Identity of the globals bind group of a frame whose scene has curved overflow clip shapes.
+const CLIP_GLOBALS_BINDING: u64 = 3;
 /// First identity handed out to cached bind groups.
 const FIRST_CACHED_BINDING: u64 = 16;
 
@@ -37,6 +39,8 @@ const PATH_SEPARATION_MARGIN: f32 = 2.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PipelineKind {
     Quads,
+    QuadsClippedSolid,
+    QuadsOpaqueSolid,
     Shadows,
     Underlines,
     PathRasterization,
@@ -60,6 +64,8 @@ impl PipelineKind {
         use SlotLayout::*;
         match self {
             PipelineKind::Quads
+            | PipelineKind::QuadsClippedSolid
+            | PipelineKind::QuadsOpaqueSolid
             | PipelineKind::Shadows
             | PipelineKind::Underlines
             | PipelineKind::PathRasterization => [Globals, Instances, None, None],
@@ -187,6 +193,207 @@ impl UniformCache {
     pub(super) fn invalidate(&mut self) {
         *self = Self::default();
     }
+}
+
+/// Largest absolute coordinate the specialized solid routes trust (PRF-008 R2, R5).
+const SOLID_COORDINATE_LIMIT: f32 = 1_048_576.0;
+/// Smallest integer interior area, in device pixels, that is split off a quad (PRF-008 R6).
+const LARGE_INTERIOR_AREA: u64 = 16_384;
+
+/// The shading route of a quad or quad batch (PRF-008 R1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillClass {
+    /// The general quad shader.
+    General,
+    /// Clipped solid shading: simple solid quads, clipped by the rectangular content mask.
+    ClippedSolid,
+    /// Opaque solid shading: blending disabled, no per-fragment clipping.
+    OpaqueSolid,
+}
+
+/// One recorded quad draw sequence, for tests (PRF-008 test-support access).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FillRecord {
+    /// Quads of the scene covered by the sequence.
+    pub quads: Range<usize>,
+    /// Route of the sequence. A split quad reports the route of its interior.
+    pub class: FillClass,
+    /// Draw calls issued.
+    pub draws: u32,
+    /// Scissor rectangles set, the restoring one included.
+    pub scissors: u32,
+    /// Whether the quad was split into exterior strips and an interior (software adapters).
+    pub split: bool,
+}
+
+/// Whether `quad` has a solid background, square corners, no border and no fade band with a
+/// positive width. The scoped rounded clip fields are deliberately not inspected (the
+/// plain solid quirk of RND-001 R11a, RND-002 R6, PRF-008 R2).
+pub(super) fn is_simple_solid(quad: &Quad) -> bool {
+    let radii = quad.corner_radii;
+    let widths = quad.border_widths;
+    quad.background.as_solid().is_some()
+        && radii.top_left.0 == 0.0
+        && radii.top_right.0 == 0.0
+        && radii.bottom_right.0 == 0.0
+        && radii.bottom_left.0 == 0.0
+        && widths.top.0 == 0.0
+        && widths.right.0 == 0.0
+        && widths.bottom.0 == 0.0
+        && widths.left.0 == 0.0
+        && !quad.scope.fade_active()
+}
+
+/// A simple solid quad of alpha exactly 1 whose outward-rounded bounds lie inside its
+/// rectangular content mask, with finite, bounded geometry (PRF-008 R2). A quad inside a
+/// curved overflow clip never qualifies: that clip needs the per-fragment route.
+pub(super) fn is_opaque_solid(quad: &Quad) -> bool {
+    if !is_simple_solid(quad) || quad.scope.curved_clip != 0 {
+        return false;
+    }
+    if quad.background.as_solid().map(|color| color.a) != Some(1.0) {
+        return false;
+    }
+    let bounds = quad.bounds;
+    let mask = quad.content_mask.bounds;
+    let (x, y) = (bounds.origin.x.0, bounds.origin.y.0);
+    let (width, height) = (bounds.size.width.0, bounds.size.height.0);
+    let (mask_x, mask_y) = (mask.origin.x.0, mask.origin.y.0);
+    let (mask_width, mask_height) = (mask.size.width.0, mask.size.height.0);
+    let finite = [x, y, width, height, mask_x, mask_y, mask_width, mask_height]
+        .iter()
+        .all(|value| value.is_finite());
+    if !finite || width <= 0.0 || height <= 0.0 {
+        return false;
+    }
+    if [x, y, width, height]
+        .iter()
+        .any(|value| value.abs() > SOLID_COORDINATE_LIMIT)
+    {
+        return false;
+    }
+    x.floor() >= mask_x
+        && y.floor() >= mask_y
+        && (x + width).ceil() <= mask_x + mask_width
+        && (y + height).ceil() <= mask_y + mask_height
+}
+
+/// The route of one quad on its own.
+pub(super) fn quad_fill_class(quad: &Quad) -> FillClass {
+    if is_opaque_solid(quad) {
+        FillClass::OpaqueSolid
+    } else if is_simple_solid(quad) {
+        FillClass::ClippedSolid
+    } else {
+        FillClass::General
+    }
+}
+
+/// The route of a whole hardware-adapter batch: opaque only when every member is opaque
+/// solid, clipped solid only when every member is simple solid, general otherwise
+/// (PRF-008 R3).
+pub(super) fn batch_fill_class(quads: &[Quad]) -> FillClass {
+    let mut class = FillClass::OpaqueSolid;
+    for quad in quads {
+        match quad_fill_class(quad) {
+            FillClass::General => return FillClass::General,
+            FillClass::ClippedSolid => class = FillClass::ClippedSolid,
+            FillClass::OpaqueSolid => {}
+        }
+    }
+    class
+}
+
+/// The integer interior of a large-interior candidate (PRF-008 R5, R6): the device-pixel
+/// rectangle `[left, top, right, bottom)` that general shading would color with the plain
+/// solid fill, when it covers at least 16,384 pixels.
+pub(super) fn large_interior(quad: &Quad, drawable: (u32, u32)) -> Option<[u32; 4]> {
+    if quad.background.as_solid().is_none() || is_simple_solid(quad) {
+        return None;
+    }
+    let bounds = quad.bounds;
+    let mask = quad.content_mask.bounds;
+    let scope = &quad.scope;
+    let radii = quad.corner_radii;
+    let widths = quad.border_widths;
+    let radii = [
+        radii.top_left.0,
+        radii.top_right.0,
+        radii.bottom_right.0,
+        radii.bottom_left.0,
+    ];
+    let widths = [widths.top.0, widths.right.0, widths.bottom.0, widths.left.0];
+    let geometry = [
+        bounds.origin.x.0,
+        bounds.origin.y.0,
+        bounds.size.width.0,
+        bounds.size.height.0,
+    ];
+    let mask_values = [
+        mask.origin.x.0,
+        mask.origin.y.0,
+        mask.size.width.0,
+        mask.size.height.0,
+    ];
+    let finite = geometry
+        .iter()
+        .chain(&mask_values)
+        .chain(&scope.fade_edges)
+        .chain(&scope.fade_bands)
+        .chain(&radii)
+        .chain(&widths)
+        .all(|value| value.is_finite());
+    if !finite {
+        return None;
+    }
+    if geometry
+        .iter()
+        .chain(&scope.fade_edges)
+        .chain(&scope.fade_bands)
+        .any(|value| value.abs() > SOLID_COORDINATE_LIMIT)
+    {
+        return None;
+    }
+    let g = radii
+        .iter()
+        .chain(&widths)
+        .fold(0.0_f32, |acc, value| acc.max(*value))
+        + 1.0;
+    let mut left = geometry[0] + g;
+    let mut top = geometry[1] + g;
+    let mut right = geometry[0] + geometry[2] - g;
+    let mut bottom = geometry[1] + geometry[3] - g;
+    let [edge_top, edge_bottom, edge_left, edge_right] = scope.fade_edges;
+    let [band_top, band_bottom, band_left, band_right] = scope.fade_bands;
+    if band_top > 0.0 {
+        top = top.max(edge_top + band_top + 1.0);
+    }
+    if band_bottom > 0.0 {
+        bottom = bottom.min(edge_bottom - band_bottom - 1.0);
+    }
+    if band_left > 0.0 {
+        left = left.max(edge_left + band_left + 1.0);
+    }
+    if band_right > 0.0 {
+        right = right.min(edge_right - band_right - 1.0);
+    }
+    left = left.max(mask_values[0]);
+    top = top.max(mask_values[1]);
+    right = right.min(mask_values[0] + mask_values[2]);
+    bottom = bottom.min(mask_values[1] + mask_values[3]);
+    if ![left, top, right, bottom]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return None;
+    }
+    let (width, height) = (drawable.0 as f32, drawable.1 as f32);
+    let x0 = left.ceil().clamp(0.0, width) as u32;
+    let y0 = top.ceil().clamp(0.0, height) as u32;
+    let x1 = right.floor().clamp(0.0, width) as u32;
+    let y1 = bottom.floor().clamp(0.0, height) as u32;
+    let area = u64::from(x1.saturating_sub(x0)) * u64::from(y1.saturating_sub(y0));
+    (area >= LARGE_INTERIOR_AREA).then_some([x0, y0, x1, y1])
 }
 
 struct PathBatchPlan {
@@ -470,9 +677,16 @@ impl WgpuRendererCore {
                 .path_sprites
                 .extend(paths.iter().map(|p| PathSprite {
                     bounds: p.clipped_bounds(),
+                    // Paths of one order are separate sprites, each cut by its own chain.
+                    curved_clip: p.curved_clip,
+                    pad: 0,
                 }));
         } else {
-            scratch.path_sprites.push(PathSprite { bounds });
+            scratch.path_sprites.push(PathSprite {
+                bounds,
+                curved_clip: first.curved_clip,
+                pad: 0,
+            });
         }
         let sprite_end = scratch.path_sprites.len() as u32;
 
@@ -805,6 +1019,15 @@ impl WgpuRendererCore {
         fe.end_pass();
     }
 
+    /// Identity of the frame's globals bind group.
+    fn globals_binding(&self) -> u64 {
+        if self.resources.clip_bound {
+            CLIP_GLOBALS_BINDING
+        } else {
+            GLOBALS_BINDING
+        }
+    }
+
     fn instance_entry(&self, section: Section) -> Option<&BindingEntry> {
         self.bindings.instances.get(&InstanceKey {
             buffer_generation: self.instance_buffer_generation,
@@ -828,9 +1051,158 @@ impl WgpuRendererCore {
             return;
         };
         fe.set_pipeline(kind, pipeline);
-        fe.set_bind_group(0, GLOBALS_BINDING, &self.resources.globals_bind_group);
+        fe.set_bind_group(
+            0,
+            self.globals_binding(),
+            &self.resources.globals_bind_group,
+        );
         fe.set_bind_group(1, binding.id, &binding.bind_group);
         fe.pass().draw(0..4, range);
+    }
+
+    /// Draws one fill class of a quad range with its pipeline.
+    fn draw_quad_run(
+        &self,
+        fe: &mut FrameEncoder,
+        class: FillClass,
+        section: Section,
+        range: Range<usize>,
+    ) {
+        let pipelines = &self.resources.pipelines;
+        let (kind, pipeline) = match class {
+            FillClass::General => (PipelineKind::Quads, &pipelines.quads),
+            FillClass::ClippedSolid => (
+                PipelineKind::QuadsClippedSolid,
+                &pipelines.quads_solid_clipped,
+            ),
+            FillClass::OpaqueSolid => (
+                PipelineKind::QuadsOpaqueSolid,
+                &pipelines.quads_solid_opaque,
+            ),
+        };
+        self.draw_instances(fe, kind, pipeline, section, instance_range(range));
+    }
+
+    /// Draws a quad batch (PRF-008). Hardware adapters keep the batch whole and pick one route
+    /// for it; software adapters draw contiguous runs of one class in paint order and split
+    /// large bordered, rounded or faded solid quads into exterior strips and a solid interior.
+    fn draw_quad_batch(
+        &self,
+        fe: &mut FrameEncoder,
+        scene: &Scene,
+        range: Range<usize>,
+        section: Section,
+        drawable: (u32, u32),
+        fills: &mut Option<Vec<FillRecord>>,
+    ) {
+        let quads = &scene.quads[range.clone()];
+        if !self.software_quad_fills {
+            let class = batch_fill_class(quads);
+            self.draw_quad_run(fe, class, section, range.clone());
+            if let Some(fills) = fills {
+                fills.push(FillRecord {
+                    quads: range,
+                    class,
+                    draws: 1,
+                    scissors: 0,
+                    split: false,
+                });
+            }
+            return;
+        }
+
+        let mut run: Option<(usize, FillClass)> = None;
+        let flush = |fe: &mut FrameEncoder,
+                     run: &mut Option<(usize, FillClass)>,
+                     end: usize,
+                     fills: &mut Option<Vec<FillRecord>>| {
+            if let Some((start, class)) = run.take() {
+                self.draw_quad_run(fe, class, section, start..end);
+                if let Some(fills) = fills {
+                    fills.push(FillRecord {
+                        quads: start..end,
+                        class,
+                        draws: 1,
+                        scissors: 0,
+                        split: false,
+                    });
+                }
+            }
+        };
+        for (offset, quad) in quads.iter().enumerate() {
+            let index = range.start + offset;
+            if let Some(interior) = large_interior(quad, drawable) {
+                flush(fe, &mut run, index, fills);
+                self.draw_split_quad(fe, quad, index, section, interior, drawable, fills);
+                continue;
+            }
+            let class = quad_fill_class(quad);
+            match run {
+                Some((_, current)) if current == class => {}
+                _ => {
+                    flush(fe, &mut run, index, fills);
+                    run = Some((index, class));
+                }
+            }
+        }
+        flush(fe, &mut run, range.end, fills);
+    }
+
+    /// Draws one quad as general shading through up to four disjoint exterior scissors and
+    /// one solid draw limited to its integer interior, then restores the full scissor
+    /// (PRF-008 R7).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_split_quad(
+        &self,
+        fe: &mut FrameEncoder,
+        quad: &Quad,
+        index: usize,
+        section: Section,
+        interior: [u32; 4],
+        drawable: (u32, u32),
+        fills: &mut Option<Vec<FillRecord>>,
+    ) {
+        let [x0, y0, x1, y1] = interior;
+        let (width, height) = drawable;
+        // Left and right strips span the drawable's height; top and bottom strips the
+        // interior's width.
+        let strips = [
+            [0, 0, x0, height],
+            [x1, 0, width, height],
+            [x0, 0, x1, y0],
+            [x0, y1, x1, height],
+        ];
+        let mut draws = 0;
+        let mut scissors = 0;
+        for [left, top, right, bottom] in strips {
+            if right <= left || bottom <= top {
+                continue;
+            }
+            fe.pass()
+                .set_scissor_rect(left, top, right - left, bottom - top);
+            self.draw_quad_run(fe, FillClass::General, section, index..index + 1);
+            draws += 1;
+            scissors += 1;
+        }
+        let class = if quad.background.as_solid().map(|color| color.a) == Some(1.0)
+            && quad.scope.curved_clip == 0
+        {
+            FillClass::OpaqueSolid
+        } else {
+            FillClass::ClippedSolid
+        };
+        fe.pass().set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+        self.draw_quad_run(fe, class, section, index..index + 1);
+        fe.pass().set_scissor_rect(0, 0, width, height);
+        if let Some(fills) = fills {
+            fills.push(FillRecord {
+                quads: index..index + 1,
+                class,
+                draws: draws + 1,
+                scissors: scissors + 2,
+                split: true,
+            });
+        }
     }
 
     fn draw_textured(
@@ -854,7 +1226,11 @@ impl WgpuRendererCore {
             return;
         };
         fe.set_pipeline(kind, pipeline);
-        fe.set_bind_group(0, GLOBALS_BINDING, &self.resources.globals_bind_group);
+        fe.set_bind_group(
+            0,
+            self.globals_binding(),
+            &self.resources.globals_bind_group,
+        );
         fe.set_bind_group(1, binding.id, &binding.bind_group);
         fe.set_bind_group(2, texture.id, &texture.bind_group);
         fe.pass().draw(0..4, range);
@@ -943,6 +1319,7 @@ impl WgpuRendererCore {
         clear_color: wgpu::Color,
         present_to: Option<&wgpu::TextureView>,
     ) -> Result<wgpu::SubmissionIndex> {
+        self.prepare_clip_buffers(scene);
         Self::plan_batches(scene, scratch, self.path_group_limit);
         let has_paths = !scratch.path_batches.is_empty();
         if has_paths {
@@ -991,6 +1368,11 @@ impl WgpuRendererCore {
         }
         fe.begin_main_pass(target_view, wgpu::LoadOp::Clear(clear_color));
 
+        let drawable = (target_texture.width(), target_texture.height());
+        let mut fills = self.fill_log.take();
+        if let Some(fills) = &mut fills {
+            fills.clear();
+        }
         let mut pending_blurs = scene.backdrop_blurs.iter().peekable();
         let mut path_batch_index = 0;
         let sections = layout.sections;
@@ -1012,12 +1394,13 @@ impl WgpuRendererCore {
             }
 
             match batch {
-                PrimitiveBatch::Quads(range) => self.draw_instances(
+                PrimitiveBatch::Quads(range) => self.draw_quad_batch(
                     &mut fe,
-                    PipelineKind::Quads,
-                    &self.resources.pipelines.quads,
+                    scene,
+                    range.clone(),
                     sections[SECTION_QUADS],
-                    instance_range(range.clone()),
+                    drawable,
+                    &mut fills,
                 ),
                 PrimitiveBatch::Shadows(range) => self.draw_instances(
                     &mut fe,
@@ -1113,6 +1496,7 @@ impl WgpuRendererCore {
             }
         }
         fe.end_pass();
+        self.fill_log = fills;
 
         if let Some(present_to) = present_to {
             self.resources
@@ -1204,7 +1588,7 @@ impl WgpuRendererCore {
             return;
         };
         fe.set_pipeline(PipelineKind::Paths, &resources.pipelines.paths);
-        fe.set_bind_group(0, GLOBALS_BINDING, &resources.globals_bind_group);
+        fe.set_bind_group(0, self.globals_binding(), &resources.globals_bind_group);
         fe.set_bind_group(1, sprites.id, &sprites.bind_group);
         fe.set_bind_group(2, texture.id, &texture.bind_group);
         fe.pass().draw(0..4, plan.sprites.clone());

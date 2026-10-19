@@ -18,11 +18,24 @@ use vespertine::{
 use vespertine_collections::FxHashMap;
 
 mod recording;
-pub use recording::RecordStats;
+pub use recording::{FillClass, FillRecord, RecordStats};
+
+/// Counters of the curved overflow clip data (RND-002 A12). Plain increments; production
+/// code never depends on them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClipStats {
+    /// Bytes of curved overflow clip shapes and chain links written to the GPU (48 bytes per
+    /// shape plus 4 bytes of parent link).
+    pub upload_bytes: u64,
+    /// Curved clip buffer allocations: a scene without opted-in elements allocates none.
+    pub buffer_allocations: u64,
+}
 #[cfg(test)]
 mod blur_tests;
 #[cfg(test)]
 mod recording_tests;
+#[cfg(test)]
+mod solid_tests;
 use recording::{BindingCache, FrameScratch, UniformCache};
 
 const MAX_INSTANCE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
@@ -72,6 +85,8 @@ struct GammaParams {
 #[repr(C)]
 struct PathSprite {
     bounds: Bounds<ScaledPixels>,
+    curved_clip: u32,
+    pad: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +112,10 @@ pub struct WgpuSurfaceConfig {
 
 struct WgpuPipelines {
     quads: wgpu::RenderPipeline,
+    /// Clipped solid shading of simple solid quad batches (PRF-008 R1b).
+    quads_solid_clipped: wgpu::RenderPipeline,
+    /// Opaque solid shading, blending disabled (PRF-008 R1c).
+    quads_solid_opaque: wgpu::RenderPipeline,
     shadows: wgpu::RenderPipeline,
     path_rasterization: wgpu::RenderPipeline,
     paths: wgpu::RenderPipeline,
@@ -127,6 +146,14 @@ struct WgpuResources {
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
     path_globals_bind_group: wgpu::BindGroup,
+    /// Globals bind group with the disabled-clip binding, used while the scene has no
+    /// curved overflow clip shapes.
+    no_clip_globals_bind_group: wgpu::BindGroup,
+    /// Curved clip shape storage, allocated on the first scene that uses curved clips.
+    clip_buffers: Option<ClipBuffers>,
+    /// Whether `globals_bind_group` is the clip-shape binding of the current frame; the pass
+    /// state tracks the two under distinct identities.
+    clip_bound: bool,
     instance_buffer: wgpu::Buffer,
     path_intermediate_texture: Option<wgpu::Texture>,
     path_intermediate_view: Option<wgpu::TextureView>,
@@ -134,6 +161,16 @@ struct WgpuResources {
     path_msaa_view: Option<wgpu::TextureView>,
     blur: BlurRenderer,
     surfaces: wgpu_surfaces::SurfaceBatcher,
+}
+
+/// Storage for the curved overflow clip chain of a scene: 48 bytes per shape and one parent
+/// link per shape.
+struct ClipBuffers {
+    shapes: wgpu::Buffer,
+    parents: wgpu::Buffer,
+    shapes_capacity: u64,
+    parents_capacity: u64,
+    bind_group: wgpu::BindGroup,
 }
 
 impl WgpuResources {
@@ -176,6 +213,12 @@ struct WgpuRendererCore {
     /// Atlas texture generations referenced by the frame being recorded.
     atlas_generations: FxHashMap<AtlasTextureId, u64>,
     stats: RecordStats,
+    clip_stats: ClipStats,
+    /// Quad draw sequences of the last frame, recorded when enabled (test-support access).
+    fill_log: Option<Vec<FillRecord>>,
+    /// Whether the adapter rasterizes on the CPU: quads are then drawn in same-class runs and
+    /// large solid quads are split into a rim and a solid interior (PRF-008 R4 to R7).
+    software_quad_fills: bool,
     /// Opt-in memory report scheduling (DEV-002).
     memory: crate::memory_report::MemoryReporter,
     /// Forces effect frames through the presentation intermediate even when the target can be
@@ -469,6 +512,26 @@ impl WgpuRendererCore {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -644,6 +707,35 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
+        let quads_solid_clipped = create_pipeline(
+            "quads_solid_clipped",
+            "vs_quad_solid",
+            "fs_quad_solid_clipped",
+            &layouts.globals,
+            &layouts.instances,
+            None,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
+        let quads_solid_opaque = create_pipeline(
+            "quads_solid_opaque",
+            "vs_quad_solid",
+            "fs_quad_solid_opaque",
+            &layouts.globals,
+            &layouts.instances,
+            None,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(wgpu::ColorTargetState {
+                blend: None,
+                ..color_target
+            })],
+            1,
+            &shader_module,
+        );
+
         let shadows = create_pipeline(
             "shadows",
             "vs_shadow",
@@ -774,6 +866,8 @@ impl WgpuRendererCore {
 
         WgpuPipelines {
             quads,
+            quads_solid_clipped,
+            quads_solid_opaque,
             shadows,
             path_rasterization,
             paths,
@@ -1100,50 +1194,39 @@ impl WgpuRendererCore {
             mapped_at_creation: false,
         });
         let instance_data_alignment = device.limits().min_storage_buffer_offset_alignment as u64;
-        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("globals_bind_group"),
-            layout: &bind_group_layouts.globals,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &globals_buffer,
-                        offset: 0,
-                        size: NonZeroU64::new(globals_size),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &globals_buffer,
-                        offset: gamma_offset,
-                        size: NonZeroU64::new(gamma_size),
-                    }),
-                },
-            ],
+        let dummy_shapes = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("no_clip_shapes"),
+            size: 64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
         });
-        let path_globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("path_globals_bind_group"),
-            layout: &bind_group_layouts.globals,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &globals_buffer,
-                        offset: path_globals_offset,
-                        size: NonZeroU64::new(globals_size),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &globals_buffer,
-                        offset: gamma_offset,
-                        size: NonZeroU64::new(gamma_size),
-                    }),
-                },
-            ],
+        let dummy_parents = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("no_clip_parents"),
+            size: 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
         });
+        let globals_bind_group = Self::create_globals_bind_group(
+            &device,
+            &bind_group_layouts.globals,
+            "globals_bind_group",
+            &globals_buffer,
+            0,
+            gamma_offset,
+            &dummy_shapes,
+            &dummy_parents,
+        );
+        let path_globals_bind_group = Self::create_globals_bind_group(
+            &device,
+            &bind_group_layouts.globals,
+            "path_globals_bind_group",
+            &globals_buffer,
+            path_globals_offset,
+            gamma_offset,
+            &dummy_shapes,
+            &dummy_parents,
+        );
+        let no_clip_globals_bind_group = globals_bind_group.clone();
         let max_texture_size = device.limits().max_texture_dimension_2d;
         let surfaces = wgpu_surfaces::SurfaceBatcher::new(&device);
 
@@ -1158,6 +1241,9 @@ impl WgpuRendererCore {
                 globals_buffer,
                 globals_bind_group,
                 path_globals_bind_group,
+                no_clip_globals_bind_group,
+                clip_buffers: None,
+                clip_bound: false,
                 instance_buffer,
                 path_intermediate_texture: None,
                 path_intermediate_view: None,
@@ -1182,6 +1268,9 @@ impl WgpuRendererCore {
             uniforms: UniformCache::default(),
             atlas_generations: FxHashMap::default(),
             stats: RecordStats::default(),
+            clip_stats: ClipStats::default(),
+            fill_log: None,
+            software_quad_fills: context.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
             memory: crate::memory_report::MemoryReporter::new(crate::memory_report::enabled()),
             force_presentation_intermediate: false,
             path_group_limit: recording::MAX_PATH_GROUP,
@@ -1191,6 +1280,116 @@ impl WgpuRendererCore {
             adapter_info: context.adapter.get_info(),
             target_format,
             max_texture_size,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_globals_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        label: &str,
+        globals_buffer: &wgpu::Buffer,
+        globals_offset: u64,
+        gamma_offset: u64,
+        clip_shapes: &wgpu::Buffer,
+        clip_parents: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: globals_buffer,
+                        offset: globals_offset,
+                        size: NonZeroU64::new(std::mem::size_of::<GlobalParams>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: globals_buffer,
+                        offset: gamma_offset,
+                        size: NonZeroU64::new(std::mem::size_of::<GammaParams>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: clip_shapes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: clip_parents.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Selects the globals binding for the frame: the disabled-clip binding for scenes
+    /// without curved overflow clips (no curved-clip data is allocated for them), otherwise
+    /// the shape and parent buffers filled from the scene.
+    fn prepare_clip_buffers(&mut self, scene: &Scene) {
+        let resources = &mut self.resources;
+        if scene.curved_clips.is_empty() {
+            resources.globals_bind_group = resources.no_clip_globals_bind_group.clone();
+            resources.clip_bound = false;
+            return;
+        }
+        // Safety: `CurvedClipShape` is `repr(C)` plain data that the shaders read back with
+        // the same layout.
+        let shapes = unsafe {
+            std::slice::from_raw_parts(
+                scene.curved_clips.as_ptr() as *const u8,
+                std::mem::size_of_val(scene.curved_clips.as_slice()),
+            )
+        };
+        let parents = bytemuck::cast_slice::<u32, u8>(&scene.curved_clip_parents);
+        let shapes_size = shapes.len() as u64;
+        let parents_size = parents.len() as u64;
+        let fits = resources.clip_buffers.as_ref().is_some_and(|buffers| {
+            buffers.shapes_capacity >= shapes_size && buffers.parents_capacity >= parents_size
+        });
+        if !fits {
+            self.clip_stats.buffer_allocations += 1;
+            let shapes_capacity = shapes_size.next_power_of_two().max(64);
+            let parents_capacity = parents_size.next_power_of_two().max(16);
+            let shapes_buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("clip_shapes"),
+                size: shapes_capacity,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let parents_buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("clip_parents"),
+                size: parents_capacity,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = Self::create_globals_bind_group(
+                &resources.device,
+                &resources.bind_group_layouts.globals,
+                "clip_globals_bind_group",
+                &resources.globals_buffer,
+                0,
+                self.gamma_offset,
+                &shapes_buffer,
+                &parents_buffer,
+            );
+            resources.clip_buffers = Some(ClipBuffers {
+                shapes: shapes_buffer,
+                parents: parents_buffer,
+                shapes_capacity,
+                parents_capacity,
+                bind_group,
+            });
+        }
+        if let Some(buffers) = &resources.clip_buffers {
+            resources.queue.write_buffer(&buffers.shapes, 0, shapes);
+            resources.queue.write_buffer(&buffers.parents, 0, parents);
+            self.clip_stats.upload_bytes += shapes_size + parents_size;
+            resources.globals_bind_group = buffers.bind_group.clone();
+            resources.clip_bound = true;
         }
     }
 
@@ -1468,23 +1667,40 @@ pub struct WgpuHeadlessRenderer {
     observed_error_generation: u64,
     readback_bytes: u64,
     clear_color: wgpu::Color,
+    /// Renders into a target composited as premultiplied alpha (a transparent window).
+    transparent: bool,
 }
 
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 impl WgpuHeadlessRenderer {
     pub fn new() -> anyhow::Result<Self> {
         let (context, target_format) = WgpuContext::new_headless()?;
-        Ok(Self::from_context(context, target_format))
+        Ok(Self::from_context(context, target_format, false))
+    }
+
+    /// A headless renderer for a transparent window: the target is cleared to transparent
+    /// black and blends as premultiplied alpha, exactly like a window composited with
+    /// `PreMultiplied` alpha. The read-back image holds premultiplied RGBA, so a pixel that
+    /// nothing painted is `[0, 0, 0, 0]` (RND-002 A7).
+    pub fn new_transparent() -> anyhow::Result<Self> {
+        let (context, target_format) = WgpuContext::new_headless()?;
+        let mut renderer = Self::from_context(context, target_format, true);
+        renderer.clear_color = wgpu::Color::TRANSPARENT;
+        Ok(renderer)
     }
 
     /// A renderer on its own private device instead of the process-wide shared one, so a
     /// test may lose that device without disturbing other headless renderers.
     pub fn new_isolated() -> anyhow::Result<Self> {
         let (context, target_format) = WgpuContext::create_headless()?;
-        Ok(Self::from_context(context, target_format))
+        Ok(Self::from_context(context, target_format, false))
     }
 
-    fn from_context(context: WgpuContext, target_format: wgpu::TextureFormat) -> Self {
+    fn from_context(
+        context: WgpuContext,
+        target_format: wgpu::TextureFormat,
+        transparent: bool,
+    ) -> Self {
         // The device may be shared with earlier renderers; observe only errors raised from
         // here on, including any while this renderer builds its pipelines.
         let observed_error_generation = context.errors().current_generation();
@@ -1493,7 +1709,11 @@ impl WgpuHeadlessRenderer {
             &context,
             atlas,
             target_format,
-            wgpu::CompositeAlphaMode::Opaque,
+            if transparent {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else {
+                wgpu::CompositeAlphaMode::Opaque
+            },
         );
 
         Self {
@@ -1503,6 +1723,7 @@ impl WgpuHeadlessRenderer {
             observed_error_generation,
             readback_bytes: 0,
             clear_color: wgpu::Color::BLACK,
+            transparent,
         }
     }
 
@@ -1556,8 +1777,21 @@ impl WgpuHeadlessRenderer {
     pub fn recover(&mut self) -> anyhow::Result<()> {
         let (context, target_format) = WgpuContext::create_headless()?;
         let clear_color = self.clear_color;
-        *self = Self::from_context(context, target_format);
+        *self = Self::from_context(context, target_format, self.transparent);
         self.clear_color = clear_color;
+        Ok(())
+    }
+
+    /// Blocks until the GPU has finished every frame submitted so far.
+    pub fn wait_for_gpu(&self) -> anyhow::Result<()> {
+        self.core
+            .resources
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(30)),
+            })
+            .map_err(|error| anyhow::anyhow!("Failed to wait for the GPU: {error}"))?;
         Ok(())
     }
 
@@ -1590,6 +1824,34 @@ impl WgpuHeadlessRenderer {
     /// Counters of the recording path (PRF-007).
     pub fn record_stats(&self) -> RecordStats {
         self.core.stats
+    }
+
+    /// Zeroes the counters of the recording path.
+    pub fn reset_record_stats(&mut self) {
+        self.core.stats = RecordStats::default();
+        self.core.clip_stats = ClipStats::default();
+    }
+
+    /// Starts or stops recording the quad draw sequences of every frame (PRF-008).
+    pub fn record_quad_fills(&mut self, enabled: bool) {
+        self.core.fill_log = enabled.then(Vec::new);
+    }
+
+    /// The quad draw sequences of the last frame; empty unless
+    /// [`Self::record_quad_fills`] is on.
+    pub fn quad_fills(&self) -> &[FillRecord] {
+        self.core.fill_log.as_deref().unwrap_or(&[])
+    }
+
+    /// Forces the software-adapter quad route (runs and large-interior splits) on or off,
+    /// whatever the adapter is (PRF-008 tests).
+    pub fn set_software_quad_fills(&mut self, software: bool) {
+        self.core.software_quad_fills = software;
+    }
+
+    /// Counters of the curved overflow clip data (RND-002 A12).
+    pub fn clip_stats(&self) -> ClipStats {
+        self.core.clip_stats
     }
 
     /// Counters of the backdrop-blur renderer (PRF-009).
@@ -1699,7 +1961,7 @@ impl WgpuHeadlessRenderer {
             .texture
             .clone();
         self.core
-            .render_frame(scene, &texture, size, false, clear_color, true)?;
+            .render_frame(scene, &texture, size, self.transparent, clear_color, true)?;
         Ok(())
     }
 
@@ -1937,6 +2199,7 @@ mod tests {
             border_color: color,
             corner_radii: Corners::default(),
             border_widths: Edges::default(),
+            scope: Default::default(),
         }
     }
 

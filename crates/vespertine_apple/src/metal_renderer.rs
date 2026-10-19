@@ -1776,6 +1776,8 @@ mod tests {
             order: 0,
             bounds,
             content_mask: ContentMask { bounds },
+            opacity: 1.0,
+            curved_clip: 0,
             image_buffer: image_buffer.clone(),
         });
         drop(image_buffer);

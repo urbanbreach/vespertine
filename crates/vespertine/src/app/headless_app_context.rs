@@ -170,6 +170,24 @@ impl HeadlessAppContext {
         app.update_window(window, |_, window, _| window.render_to_image())?
     }
 
+    /// Simulates the window moving to a display with a different scale factor, keeping its
+    /// logical size. Later screenshots are rendered at the new scale factor.
+    pub fn simulate_scale_factor_change(&mut self, window: AnyWindowHandle, scale_factor: f32) {
+        let test_window = {
+            let mut app = self.app.borrow_mut();
+            app.windows
+                .get_mut(window.id)
+                .and_then(|window| window.as_mut())
+                .and_then(|window| window.platform_window.as_test())
+                .cloned()
+        };
+        // The resize callback borrows the app again synchronously.
+        if let Some(mut test_window) = test_window {
+            test_window.simulate_scale_factor_change(scale_factor);
+        }
+        self.run_until_parked();
+    }
+
     /// Returns the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system

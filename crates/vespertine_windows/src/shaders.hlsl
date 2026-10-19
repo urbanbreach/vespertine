@@ -498,6 +498,32 @@ float quarter_ellipse_sdf(float2 pt, float2 radii) {
 **
 */
 
+// Scoped edge fade, rounded clip and curved overflow clip parameters (RND-001/RND-002).
+// The Direct3D renderer does not evaluate them (documented unsupported behavior: content
+// is cut only by the rectangular content mask); the fields keep the record layout in step
+// with the Rust primitive structs.
+struct ScopeParams {
+    float4 fade_edges;
+    float4 fade_bands;
+    float4 clip_bounds;
+    float clip_radius;
+    uint curved_clip;
+    uint2 reserved;
+};
+
+// Per-draw image effects (RND-004 mask, RND-007 nearest sampling); not evaluated by the
+// Direct3D renderer, present to keep the record layout in step with the Rust struct.
+struct ImageEffects {
+    float4 mask_bounds;
+    float mask_radius;
+    float mask_feather;
+    float mask_clearance;
+    float mask_bottom_reference;
+    float mask_bottom_feather;
+    uint flags;
+    uint2 reserved;
+};
+
 struct Quad {
     uint order;
     uint border_style;
@@ -507,6 +533,7 @@ struct Quad {
     Hsla border_color;
     Corners corner_radii;
     Edges border_widths;
+    ScopeParams scope;
 };
 
 struct QuadVertexOutput {
@@ -1139,12 +1166,16 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
 
 struct MonochromeSprite {
     uint order;
-    uint pad;
+    // Gaussian blur sigma in device pixels (RND-005). Layout-only on Direct3D: the shaders
+    // below ignore it because Window::paint_glyph_transformed always records a zero blur
+    // there (GLYPH_BLUR_SUPPORTED is false on Windows).
+    float blur;
     Bounds bounds;
     Bounds content_mask;
     Hsla color;
     AtlasTile tile;
     TransformationMatrix transformation;
+    ScopeParams scope;
 };
 
 struct MonochromeSpriteVertexOutput {
@@ -1219,6 +1250,8 @@ struct PolychromeSprite {
     Bounds content_mask;
     Corners corner_radii;
     AtlasTile tile;
+    ScopeParams scope;
+    ImageEffects effects;
 };
 
 struct PolychromeSpriteVertexOutput {

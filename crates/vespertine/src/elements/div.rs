@@ -2543,6 +2543,16 @@ impl Interactivity {
 
                 window.with_element_opacity(style.opacity, |window| {
                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
+                        // Opted-in curved padding-edge clip for the descendants only: the
+                        // element's own shadow, fill and border stay outside it.
+                        let curved_clip = style.curved_overflow_clip_shape(
+                            bounds,
+                            window.rem_size(),
+                            window.scale_factor(),
+                        );
+                        if let Some(shape) = curved_clip {
+                            window.next_frame.scene.push_curved_clip(shape);
+                        }
                         window.with_text_style(style.text_style().cloned(), |window| {
                             window.with_content_mask(
                                 style.overflow_mask(bounds, window.rem_size()),
@@ -2630,6 +2640,9 @@ impl Interactivity {
                                 },
                             );
                         });
+                        if curved_clip.is_some() {
+                            window.next_frame.scene.pop_curved_clip();
+                        }
                     });
                 });
 

@@ -8,6 +8,8 @@ struct SurfaceParams {
     bounds: Bounds,
     content_mask: Bounds,
     opacity: f32,
+    // Chain of curved overflow clips (RND-002 R15); 0 for none.
+    curved_clip: u32,
 }
 
 @group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
@@ -38,5 +40,8 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    return blend_color(sample, surface_locals.opacity);
+    return apply_curved_clip(
+        blend_color(sample, surface_locals.opacity),
+        surface_locals.curved_clip,
+        input.position.xy);
 }

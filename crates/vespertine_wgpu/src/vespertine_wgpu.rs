@@ -16,4 +16,33 @@ pub use wgpu_blur::{BlurResourceState, BlurStats};
 pub use wgpu_context::*;
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 pub use wgpu_renderer::WgpuHeadlessRenderer;
-pub use wgpu_renderer::{GpuContext, RecordStats, WgpuRenderer, WgpuSurfaceConfig};
+pub use wgpu_renderer::{
+    ClipStats, FillClass, FillRecord, GpuContext, RecordStats, WgpuRenderer, WgpuSurfaceConfig,
+};
+
+#[cfg(test)]
+mod tests_fade;
+#[cfg(test)]
+mod tests_scope;
+
+#[cfg(test)]
+mod tests_clip;
+#[cfg(test)]
+mod tests_clip_window;
+#[cfg(test)]
+mod tests_glyph_blur;
+
+#[cfg(test)]
+mod tests_host;
+
+#[cfg(test)]
+mod tests_plate;
+
+#[cfg(test)]
+mod tests_canvas;
+
+#[cfg(test)]
+mod tests_image_mask;
+
+#[cfg(test)]
+mod tests_nearest;

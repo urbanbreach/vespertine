@@ -5,8 +5,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, CurvedClipId,
+    CurvedClipShape, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, ScopeParams, Size,
+    bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -52,6 +53,11 @@ pub struct Scene {
     pub surfaces: Vec<PaintSurface>,
     /// Backdrop-blur effect records, ordered with the primitives (see [`BackdropBlur`]).
     pub backdrop_blurs: Vec<BackdropBlur>,
+    /// Curved overflow clip shapes referenced by [`CurvedClipId`] (index + 1).
+    pub curved_clips: Vec<CurvedClipShape>,
+    /// Parent chain node (`0` for none) of each entry of `curved_clips`.
+    pub curved_clip_parents: Vec<CurvedClipId>,
+    curved_clip_stack: Vec<CurvedClipScope>,
 }
 
 #[expect(missing_docs)]
@@ -69,6 +75,9 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.backdrop_blurs.clear();
+        self.curved_clips.clear();
+        self.curved_clip_parents.clear();
+        self.curved_clip_stack.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -89,8 +98,10 @@ impl Scene {
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
         let mut primitive = primitive.into();
+        let curved_clip = self.current_curved_clip();
+        primitive.set_curved_clip(curved_clip);
         let clipped_bounds = primitive
-            .bounds()
+            .painted_bounds()
             .intersect(&primitive.content_mask().bounds);
 
         if clipped_bounds.is_empty() {
@@ -168,22 +179,83 @@ impl Scene {
             element_bounds: blur.bounds,
             element_corner_radii: blur.corner_radii,
             inset: 0,
-            pad: 0,
+            curved_clip: 0,
         });
         self.backdrop_blurs.push(blur);
         self.paint_operations
             .push(PaintOperation::BackdropBlur(blur));
     }
 
+    /// Replays `range` of `prev_scene`'s paint operations into this scene.
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+        self.replay_translated(range, prev_scene, Point::default());
+    }
+
+    /// Replays `range` of `prev_scene`'s paint operations into this scene, moving the curved
+    /// overflow clip shapes the replayed range itself opens by `offset` (device pixels).
+    ///
+    /// Shapes opened before the range, by enclosing elements, are not part of the range:
+    /// replayed primitives take the destination's current chain of enclosing shapes. Primitive
+    /// geometry is replayed as recorded; callers that translate the primitives translate by
+    /// the same `offset` here.
+    pub fn replay_translated(
+        &mut self,
+        range: Range<usize>,
+        prev_scene: &Scene,
+        offset: Point<ScaledPixels>,
+    ) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::BackdropBlur(blur) => self.insert_backdrop_blur(*blur),
                 PaintOperation::EndLayer => self.pop_layer(),
+                PaintOperation::PushCurvedClip(shape) => {
+                    self.push_curved_clip(shape.translated(offset.x.0, offset.y.0))
+                }
+                PaintOperation::PopCurvedClip => self.pop_curved_clip(),
             }
         }
+    }
+
+    /// Opens a curved overflow clip shape: every primitive inserted until the matching
+    /// [`Self::pop_curved_clip`] is cut by it, together with every enclosing shape.
+    /// Shapes enter the GPU data only when a primitive is painted under them.
+    pub fn push_curved_clip(&mut self, shape: CurvedClipShape) {
+        self.curved_clip_stack
+            .push(CurvedClipScope { shape, node: 0 });
+        self.paint_operations
+            .push(PaintOperation::PushCurvedClip(shape));
+    }
+
+    /// Closes the innermost open curved overflow clip shape.
+    pub fn pop_curved_clip(&mut self) {
+        self.curved_clip_stack.pop();
+        self.paint_operations.push(PaintOperation::PopCurvedClip);
+    }
+
+    /// The chain node of the innermost open curved clip shape, materializing the chain on
+    /// first use; `0` when no shape is open.
+    pub fn current_curved_clip(&mut self) -> CurvedClipId {
+        let Some(last) = self.curved_clip_stack.last() else {
+            return 0;
+        };
+        if last.node != 0 {
+            return last.node;
+        }
+        let first_new = self
+            .curved_clip_stack
+            .partition_point(|scope| scope.node != 0);
+        let mut parent = first_new
+            .checked_sub(1)
+            .map_or(0, |index| self.curved_clip_stack[index].node);
+        for scope in &mut self.curved_clip_stack[first_new..] {
+            self.curved_clips.push(scope.shape);
+            self.curved_clip_parents.push(parent);
+            scope.node = self.curved_clips.len() as CurvedClipId;
+            parent = scope.node;
+        }
+        parent
     }
 
     pub fn finish(&mut self) {
@@ -253,11 +325,19 @@ pub(crate) enum PrimitiveKind {
     Surface,
 }
 
+#[derive(Clone, Copy)]
+struct CurvedClipScope {
+    shape: CurvedClipShape,
+    node: CurvedClipId,
+}
+
 pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
     BackdropBlur(BackdropBlur),
+    PushCurvedClip(CurvedClipShape),
+    PopCurvedClip,
 }
 
 #[derive(Clone)]
@@ -288,6 +368,42 @@ impl Primitive {
         }
     }
 
+    /// The device-space rectangle the primitive covers once painted: its bounds, or for a
+    /// monochrome sprite with a non-identity transformation (RND-005) the axis-aligned box
+    /// of the transformed quad. Ordering and content-mask culling use this rectangle so a
+    /// translated or rotated sprite is neither culled nor ordered by where it was recorded.
+    pub fn painted_bounds(&self) -> Bounds<ScaledPixels> {
+        let Primitive::MonochromeSprite(sprite) = self else {
+            return *self.bounds();
+        };
+        if sprite.transformation == TransformationMatrix::unit() {
+            return sprite.bounds;
+        }
+        let [[a, b], [c, d]] = sprite.transformation.rotation_scale;
+        let [tx, ty] = sprite.transformation.translation;
+        let (left, top) = (sprite.bounds.origin.x.0, sprite.bounds.origin.y.0);
+        let (right, bottom) = (
+            left + sprite.bounds.size.width.0,
+            top + sprite.bounds.size.height.0,
+        );
+        let mut min = [f32::INFINITY; 2];
+        let mut max = [f32::NEG_INFINITY; 2];
+        for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
+            let transformed = [a * x + b * y + tx, c * x + d * y + ty];
+            for axis in 0..2 {
+                min[axis] = min[axis].min(transformed[axis]);
+                max[axis] = max[axis].max(transformed[axis]);
+            }
+        }
+        Bounds {
+            origin: Point::new(ScaledPixels(min[0]), ScaledPixels(min[1])),
+            size: Size {
+                width: ScaledPixels(max[0] - min[0]),
+                height: ScaledPixels(max[1] - min[1]),
+            },
+        }
+    }
+
     pub fn content_mask(&self) -> &ContentMask<ScaledPixels> {
         match self {
             Primitive::Shadow(shadow) => &shadow.content_mask,
@@ -298,6 +414,21 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
+        }
+    }
+
+    /// Stamps the curved overflow clip chain that applies to this primitive. Surfaces keep
+    /// only the rectangular content mask.
+    pub fn set_curved_clip(&mut self, curved_clip: CurvedClipId) {
+        match self {
+            Primitive::Shadow(shadow) => shadow.curved_clip = curved_clip,
+            Primitive::Quad(quad) => quad.scope.curved_clip = curved_clip,
+            Primitive::Path(path) => path.curved_clip = curved_clip,
+            Primitive::Underline(underline) => underline.curved_clip = curved_clip,
+            Primitive::MonochromeSprite(sprite) => sprite.scope.curved_clip = curved_clip,
+            Primitive::SubpixelSprite(sprite) => sprite.scope.curved_clip = curved_clip,
+            Primitive::PolychromeSprite(sprite) => sprite.scope.curved_clip = curved_clip,
+            Primitive::Surface(surface) => surface.curved_clip = curved_clip,
         }
     }
 }
@@ -416,10 +547,29 @@ impl<'a> Iterator for BatchIterator<'a> {
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
                 let mut paths_end = paths_start + 1;
-                self.paths_iter.next();
+                // A batch is composited from one rasterized intermediate. Paths of one draw
+                // order are composited as separate sprites, each cut by its own curved clip
+                // chain; paths of several orders share one union sprite, so they must share
+                // a chain (RND-002 R15, R16). Splitting on every chain change would turn a
+                // row of independently clipped panels into one pass per panel.
+                let (first_order, first_curved_clip) = self
+                    .paths_iter
+                    .next()
+                    .map_or((0, 0), |path| (path.order, path.curved_clip));
+                let (mut same_order, mut same_clip) = (true, true);
                 while self
                     .paths_iter
-                    .next_if(|path| (path.order, batch_kind) < max_order_and_kind)
+                    .next_if(|path| {
+                        let order_matches = same_order && path.order == first_order;
+                        let clip_matches = same_clip && path.curved_clip == first_curved_clip;
+                        let accepted = (path.order, batch_kind) < max_order_and_kind
+                            && (order_matches || clip_matches);
+                        if accepted {
+                            same_order = order_matches;
+                            same_clip = clip_matches;
+                        }
+                        accepted
+                    })
                     .is_some()
                 {
                     paths_end += 1;
@@ -598,6 +748,7 @@ pub struct Quad {
     pub border_color: Hsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    pub scope: ScopeParams,
 }
 
 impl From<Quad> for Primitive {
@@ -611,7 +762,7 @@ impl From<Quad> for Primitive {
 #[expect(missing_docs)]
 pub struct Underline {
     pub order: DrawOrder,
-    pub pad: u32, // align to 8 bytes
+    pub curved_clip: CurvedClipId,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
@@ -639,7 +790,7 @@ pub struct Shadow {
     pub element_corner_radii: Corners<ScaledPixels>,
     /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
     pub inset: u32,
-    pub pad: u32, // align to 8 bytes
+    pub curved_clip: CurvedClipId,
 }
 
 impl From<Shadow> for Primitive {
@@ -767,12 +918,15 @@ impl Default for TransformationMatrix {
 #[expect(missing_docs)]
 pub struct MonochromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
+    /// Gaussian blur sigma in device pixels applied while sampling the mask at composite
+    /// time (RND-005); `0` samples the mask as is.
+    pub blur: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
+    pub scope: ScopeParams,
 }
 
 impl From<MonochromeSprite> for Primitive {
@@ -792,12 +946,46 @@ pub struct SubpixelSprite {
     pub color: Hsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
+    pub scope: ScopeParams,
 }
 
 impl From<SubpixelSprite> for Primitive {
     fn from(sprite: SubpixelSprite) -> Self {
         Primitive::SubpixelSprite(sprite)
     }
+}
+
+/// Per-draw image effects of a [`PolychromeSprite`], all in device pixels; the all-zero
+/// block is the neutral state (ordinary linear image painting).
+///
+/// Only the wgpu (Linux) renderer evaluates the mask and the nearest flag. The Metal and
+/// Direct3D renderers carry the block to keep the record layout in step but ignore it: they
+/// paint images without the mask and always filter linearly.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct ImageEffects {
+    /// Feathered inverse rounded-rectangle mask bounds: origin x, origin y, width, height
+    /// (RND-004). The mask is disabled while `mask_feather` is not positive.
+    pub mask_bounds: [f32; 4],
+    /// Corner radius of the mask rectangle.
+    pub mask_radius: f32,
+    /// Feather distance of the mask; zero or negative disables the whole mask.
+    pub mask_feather: f32,
+    /// Clearance distance added to the cutout.
+    pub mask_clearance: f32,
+    /// Bottom reference y coordinate of the bottom ramp.
+    pub mask_bottom_reference: f32,
+    /// Bottom feather distance; zero or negative disables the bottom ramp.
+    pub mask_bottom_feather: f32,
+    /// Bit 0: select the texel containing the coordinate instead of filtering (RND-007).
+    pub flags: u32,
+    /// Reserved; keeps the block at 48 bytes.
+    pub reserved: [u32; 2],
+}
+
+impl ImageEffects {
+    /// Flag bit selecting nearest-neighbor texel selection.
+    pub const NEAREST: u32 = 1;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -812,6 +1000,8 @@ pub struct PolychromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    pub scope: ScopeParams,
+    pub effects: ImageEffects,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -831,6 +1021,8 @@ pub struct PaintSurface {
     /// Element opacity in effect while painting; multiplies the sampled alpha.
     /// Ignored by the macOS video-buffer path.
     pub opacity: f32,
+    /// Chain of curved overflow clips applying to the surface (stamped by the scene).
+    pub curved_clip: CurvedClipId,
     #[cfg(target_os = "macos")]
     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
     /// Shared erased GPU texture; the scene keeps it alive until dropped. Its concrete type
@@ -862,6 +1054,8 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     start: Point<P>,
     current: Point<P>,
     contour_count: usize,
+    /// Curved overflow clip chain stamped by the scene.
+    pub curved_clip: CurvedClipId,
 }
 
 impl Path<Pixels> {
@@ -880,6 +1074,7 @@ impl Path<Pixels> {
             content_mask: Default::default(),
             color: Default::default(),
             contour_count: 0,
+            curved_clip: 0,
         }
     }
 
@@ -898,6 +1093,7 @@ impl Path<Pixels> {
             start: self.start.map(|start| start.scale(factor)),
             current: self.current.scale(factor),
             contour_count: self.contour_count,
+            curved_clip: self.curved_clip,
             color: self.color,
         }
     }

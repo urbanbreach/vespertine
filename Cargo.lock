@@ -7546,6 +7546,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-segmentation",
  "vespertine",
+ "vespertine_bench_metrics",
  "vespertine_collections",
  "vespertine_util",
  "wgpu",

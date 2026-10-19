@@ -78,6 +78,8 @@ fn sprite_scene_at(tile: AtlasTile, x: f32) -> Scene {
         content_mask: ContentMask { bounds },
         corner_radii: Corners::default(),
         tile,
+        scope: Default::default(),
+        effects: Default::default(),
     });
     scene.finish();
     scene

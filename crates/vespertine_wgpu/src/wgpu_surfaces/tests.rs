@@ -57,6 +57,7 @@ fn solid_quad(rect: Bounds<ScaledPixels>, color: vespertine::Hsla) -> Quad {
         border_color: color,
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        scope: Default::default(),
     }
 }
 
@@ -152,6 +153,7 @@ fn paint_surface(
         bounds: destination,
         content_mask: ContentMask { bounds: mask },
         opacity: 1.0,
+        curved_clip: 0,
         texture,
     }
 }
@@ -300,6 +302,47 @@ fn surfaces_keep_z_order_with_other_primitives() -> anyhow::Result<()> {
     assert_pixel(&image, 62, 12, BLACK, 0);
     assert_pixel(&image, 75, 25, GREEN, 0);
     assert_pixel(&image, 85, 35, BLACK, 0);
+    Ok(())
+}
+
+/// RND-002 R15: a surface under a curved overflow clip is cut by the shape, with coverage
+/// following the shape's own antialiasing, while a surface outside any shape is untouched.
+#[test]
+fn a_surface_inside_a_curved_overflow_clip_is_cut_by_the_shape() -> anyhow::Result<()> {
+    let mut renderer = renderer()?;
+    let (device, queue) = device_and_queue(&renderer);
+    let window = bounds(0, 0, 120, 60);
+    let shape = vespertine::CurvedClipShape {
+        bounds: [0.0, 0.0, 60.0, 60.0],
+        radii_x: [24.0; 4],
+        radii_y: [24.0; 4],
+    };
+    let mut scene = Scene::default();
+    scene.push_curved_clip(shape);
+    scene.insert_primitive(paint_surface(
+        solid_texture(&device, &queue, 2, 2, GREEN),
+        bounds(0, 0, 60, 60),
+        window,
+    ));
+    scene.pop_curved_clip();
+    scene.insert_primitive(paint_surface(
+        solid_texture(&device, &queue, 2, 2, GREEN),
+        bounds(60, 0, 60, 60),
+        window,
+    ));
+    let image = render(&mut renderer, &mut scene, 120, 60)?;
+    // The cut-away corner stays the (white) clear color, the interior and the straight edge are
+    // green, and the unclipped surface keeps its square corner.
+    assert_pixel(&image, 1, 1, WHITE, 0);
+    assert_pixel(&image, 30, 30, GREEN, 0);
+    assert_pixel(&image, 30, 1, GREEN, 0);
+    assert_pixel(&image, 61, 1, GREEN, 0);
+    // A pixel on the arc follows the shape's coverage.
+    let coverage = vespertine::curved_clip_coverage([&shape], [7.5, 6.5]);
+    assert!(coverage > 0.0 && coverage < 1.0, "probe is on the arc");
+    let faded = (255.0 * (1.0 - coverage)).round() as u8;
+    let expected = [faded, 255, faded, 255];
+    assert_pixel(&image, 7, 6, expected, 3);
     Ok(())
 }
 

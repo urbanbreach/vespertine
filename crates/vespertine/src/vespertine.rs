@@ -28,14 +28,20 @@ mod backdrop_blur_tests;
 mod geometry;
 mod gestures;
 mod global;
+mod glyph_blur;
 mod gpu_context;
 #[cfg(vespertine_hot_reload)]
 mod hot_reload;
+mod image_fit;
+mod image_mask;
 mod input;
 mod inspector;
 mod interactive;
 mod key_dispatch;
 mod keymap;
+mod paint_scope;
+#[cfg(test)]
+mod paint_scope_window_tests;
 mod path_builder;
 mod platform;
 pub mod prelude;
@@ -53,6 +59,8 @@ pub mod queue;
 /// A seeded, mutable element tree for benchmarks and tests of VESPERTINE rendering.
 #[cfg(any(test, feature = "bench-support"))]
 pub mod randomized_element_tree;
+#[cfg(test)]
+mod rounded_clip_tests;
 mod scene;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
@@ -117,6 +125,7 @@ pub use executor::*;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
+pub use glyph_blur::*;
 pub use gpu_context::*;
 pub use spring::*;
 pub use vespertine_macros::{
@@ -188,11 +197,14 @@ macro_rules! bench_main {
         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
     };
 }
+pub use image_fit::{anchor_zoom, cover_fit, pan_focal};
+pub use image_mask::*;
 pub use input::*;
 pub use inspector::*;
 pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
+pub use paint_scope::*;
 pub use path_builder::*;
 pub use platform::*;
 pub use profiler::*;
@@ -410,3 +422,6 @@ pub struct GpuSpecs {
     /// Further information about the driver, as reported by Vulkan.
     pub driver_info: String,
 }
+
+#[cfg(test)]
+mod surface_plate_tests;

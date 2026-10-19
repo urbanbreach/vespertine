@@ -140,6 +140,19 @@ pub trait Styled: Sized {
         self.overflow_hidden().whitespace_nowrap().text_ellipsis()
     }
 
+    /// Clips this element's descendants to its own curved padding edge: the border box
+    /// inset by the border widths, with independent elliptical corner radii
+    /// `max(radius - border width, 0)`, evaluated per fragment for every primitive class
+    /// with antialiasing and no offscreen target (RND-002).
+    ///
+    /// Off by default. It only has an effect together with a non-visible overflow on both
+    /// axes (for example [`Styled::overflow_hidden`]) and at least one positive corner
+    /// radius. The element's own border and drop shadow stay outside the clip.
+    fn curved_overflow_clip(mut self) -> Self {
+        self.style().curved_overflow_clip = Some(true);
+        self
+    }
+
     /// Sets number of lines to show before truncating the text.
     /// [Docs](https://tailwindcss.com/docs/line-clamp)
     fn line_clamp(mut self, lines: usize) -> Self {
