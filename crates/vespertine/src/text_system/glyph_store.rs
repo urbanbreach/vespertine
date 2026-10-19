@@ -875,7 +875,7 @@ mod tests {
             },
             RenderGlyphParams {
                 dilation: 1,
-                ..base.clone()
+                ..base
             },
         ];
         for variant in variants {

@@ -31,7 +31,7 @@ fn table_width(f: u64) -> f32 {
 /// digit-growth cell of frames that are a multiple of 50.
 fn cell_text(f: u64, k: u64) -> SharedString {
     let n = 1_000_000 + ((f * 104_729 + k * 7_919 + 12_345) % 8_999_999);
-    let grown = f > 0 && f % 50 == 0 && k == ((f / 50) * 37) % CELLS;
+    let grown = f > 0 && f.is_multiple_of(50) && k == ((f / 50) * 37) % CELLS;
     let prefix = if grown { "1" } else { "" };
     format!("{prefix}{}.{:02}", n / 100, n % 100).into()
 }

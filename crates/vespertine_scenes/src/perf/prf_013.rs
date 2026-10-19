@@ -23,7 +23,7 @@ fn with_thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut text = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             text.push(',');
         }
         text.push(digit);
@@ -36,7 +36,7 @@ fn cell_text(f: u64, i: u64) -> SharedString {
     let n = f * 128 + i;
     let text = match i % 4 {
         0 => {
-            let sign = if n % 2 == 0 { '+' } else { '-' };
+            let sign = if n.is_multiple_of(2) { '+' } else { '-' };
             format!("{sign}{}.{:02}", n / 100, n % 100)
         }
         1 => format!("{}.{:02}%", n / 100, n % 100),

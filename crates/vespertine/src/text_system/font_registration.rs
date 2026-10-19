@@ -227,7 +227,6 @@ pub(crate) mod mock_platform {
                 let face = ttf_parser::Face::parse(&data, 0).expect("validated fonts parse");
                 let italic = face.is_italic();
                 let weight = face.weight().to_number() as f32;
-                drop(face);
                 state.faces.push(MockFace {
                     family: validated.family,
                     italic,

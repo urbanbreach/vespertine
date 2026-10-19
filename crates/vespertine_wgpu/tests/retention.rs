@@ -447,6 +447,10 @@ fn workload_strings_are_unique_and_sizes_follow_the_spec() {
 /// R4d: cosmic-text's whole-run shaping cache (`shape-run-cache`) must stay disabled; recently
 /// shaped lines are retained by PRF-012 and a second store would duplicate it.
 #[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a synchronous test may block on `cargo tree`"
+)]
 fn r4d_shape_run_cache_stays_disabled() {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(cargo)

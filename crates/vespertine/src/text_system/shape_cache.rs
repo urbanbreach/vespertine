@@ -459,8 +459,8 @@ impl ShapeCaches {
                     let layout = assemble(font, indices, font_id, font_size);
                     font.synthesized += 1;
                     let count = font.synthesized;
-                    let validate =
-                        count <= NUMERIC_INITIAL_CHECKS || count % NUMERIC_CHECK_INTERVAL == 0;
+                    let validate = count <= NUMERIC_INITIAL_CHECKS
+                        || count.is_multiple_of(NUMERIC_CHECK_INTERVAL);
                     (layout, validate)
                 } else {
                     (LineLayout::default(), false)

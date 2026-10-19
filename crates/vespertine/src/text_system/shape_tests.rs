@@ -593,7 +593,7 @@ mod recent_shapes {
 
         layout(&window, "only", &font);
         layout(&window, "only too", &font);
-        let replayed = window.reuse_layouts(start.clone()..end.clone());
+        let replayed = window.reuse_layouts(start.clone()..end);
         // Two used entries were replayed after the two entries already recorded in this frame.
         assert_eq!(window.line_layout_cache.used_entry_counts()[0], 4);
         assert_ne!(
