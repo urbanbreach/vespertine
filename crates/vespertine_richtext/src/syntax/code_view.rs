@@ -1,18 +1,21 @@
 //! The `CodeView` element: syntax-colored source with one line element per source line
 //! (TXT-007 R10, R13, R17).
 //!
-//! Every line is a [`StyledText`] whose run list comes from [`runs_from_spans`] with ONE shared
-//! font, so changing colors (or receiving a late highlight result) never changes shaping.
+//! Every line is a native [`RichText`] run whose run list comes from [`runs_from_spans`] with ONE
+//! shared font, so changing colors (or receiving a late highlight result) never changes shaping.
+//! Inside a [`crate::text_root`] each line registers as one selectable run (sub-index = line
+//! index) and takes part in search washes, matched against the exact string it paints.
 
 use super::cache::{HighlightCache, HighlighterAdapter, LanguageHint, RetainedHighlight};
 use super::document::{HighlightedDocument, line_contents};
 use super::theme::SyntaxColors;
+use crate::RichText;
 use crate::runs::runs_from_spans;
 use std::ops::Range;
 use std::sync::Arc;
 use vespertine::{
-    App, Font, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Refineable, RenderOnce,
-    SharedString, StyleRefinement, Styled, StyledText, TextRun, Window, div, font, px,
+    App, ElementId, Font, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
+    Refineable, RenderOnce, SharedString, StyleRefinement, Styled, TextRun, Window, div, font, px,
 };
 
 /// Where a [`CodeView`] gets its document from.
@@ -37,14 +40,17 @@ pub struct CodeView {
     font_size: Pixels,
     line_height: Pixels,
     font_weight: FontWeight,
+    id: ElementId,
     style: StyleRefinement,
 }
 
 impl CodeView {
     /// A view of `source` using the global cache, the dark palette, a 12.5 px monospace font
     /// with line height 18 and regular weight.
+    #[track_caller]
     pub fn new(source: impl Into<Arc<str>>) -> Self {
         Self {
+            id: ElementId::from(std::panic::Location::caller()),
             source: source.into(),
             language: None,
             path: None,
@@ -56,6 +62,13 @@ impl CodeView {
             font_weight: FontWeight::NORMAL,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Identity of the view: line runs are keyed by it, so two views painted together in one
+    /// document need distinct ids (the default is the construction site).
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     /// The language alias (the host `language` property).
@@ -162,6 +175,7 @@ impl CodeView {
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
                 CodeLine::new(
+                    index,
                     &self.source[range],
                     spans
                         .iter()
@@ -191,6 +205,7 @@ impl RenderOnce for CodeView {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let lines = self.lines();
         let mut root = div()
+            .id(self.id.clone())
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -209,6 +224,7 @@ impl RenderOnce for CodeView {
 /// layers can attach to it.
 #[derive(IntoElement)]
 pub struct CodeLine {
+    index: u32,
     text: SharedString,
     runs: Vec<TextRun>,
     height: Pixels,
@@ -218,6 +234,7 @@ impl CodeLine {
     /// Builds a line from its text and `(byte range, color)` spans sorted by start; every run
     /// carries `font`, gaps get `plain` (TXT-006 R2/R3).
     pub fn new(
+        index: usize,
         text: &str,
         spans: impl IntoIterator<Item = (Range<usize>, Hsla)>,
         plain: Hsla,
@@ -226,10 +243,16 @@ impl CodeLine {
     ) -> Self {
         let spans: Vec<(Range<usize>, Hsla)> = spans.into_iter().collect();
         Self {
+            index: index as u32,
             runs: runs_from_spans(text, &spans, plain, font),
             text: SharedString::from(text.to_owned()),
             height,
         }
+    }
+
+    /// The index of the line in the source.
+    pub fn index(&self) -> usize {
+        self.index as usize
     }
 
     /// The text of the line (without its terminator).
@@ -245,10 +268,14 @@ impl CodeLine {
 
 impl RenderOnce for CodeLine {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        div()
-            .h(self.height)
-            .flex_none()
-            .whitespace_nowrap()
-            .child(StyledText::new(self.text).with_runs(self.runs))
+        div().h(self.height).flex_none().whitespace_nowrap().child(
+            RichText::new(
+                ElementId::from(("code-line", self.index as usize)),
+                self.text.to_string(),
+            )
+            .runs(self.runs)
+            .sub_index(self.index)
+            .native(),
+        )
     }
 }

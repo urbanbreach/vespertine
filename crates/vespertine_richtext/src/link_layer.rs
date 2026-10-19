@@ -15,8 +15,8 @@ use std::rc::Rc;
 use vespertine::{
     AnyElement, AnyView, App, AppContext as _, AvailableSpace, ClipboardItem, Context,
     DispatchPhase, ElementId, FocusHandle, GlobalElementId, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point,
     prelude::FluentBuilder as _, px, rgb, size,
 };
 
@@ -87,6 +87,7 @@ pub struct LinkLayer {
     runtime: Rc<RefCell<Runtime>>,
     overlays: Vec<AnyElement>,
     popups: Vec<AnyElement>,
+    card_open: bool,
 }
 
 fn activate(
@@ -135,6 +136,7 @@ impl LinkLayer {
             runtime,
             overlays: Vec::new(),
             popups: Vec::new(),
+            card_open: false,
         }
     }
 
@@ -326,6 +328,7 @@ impl LinkLayer {
                     cx,
                 );
                 self.popups.push(popup);
+                self.card_open = true;
             }
         }
 
@@ -376,6 +379,16 @@ impl LinkLayer {
             window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, _cx| {
                 if phase == DispatchPhase::Capture {
                     runtime.borrow_mut().menu = None;
+                    window.refresh();
+                }
+            });
+        }
+        if self.card_open {
+            // A press outside dismisses the keyboard-focused disclosure; it traps no input.
+            let runtime = self.runtime.clone();
+            window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _cx| {
+                if phase == DispatchPhase::Capture {
+                    runtime.borrow_mut().disclosure_dismissed = true;
                     window.refresh();
                 }
             });

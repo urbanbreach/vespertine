@@ -348,3 +348,28 @@ fn touch_taps_activate() {
     harness.draw();
     assert_eq!(log.borrow().len(), 1, "a tap on a link activates it");
 }
+
+#[test]
+fn a_press_outside_dismisses_the_focused_disclosure() {
+    let log = new_log();
+    let mut harness = Harness::new(
+        WIDTH,
+        200.,
+        doc(300., "link text and more words", 0..9, &log),
+    );
+    let before = harness.screenshot();
+    harness.focus_next();
+    harness.key("shift");
+    let card = |image: &image::RgbaImage| support::rgb_at(image, WIDTH, 40., 33.);
+    assert_ne!(
+        card(&before),
+        card(&harness.screenshot()),
+        "the card is shown"
+    );
+    harness.click(at(250., 150.));
+    assert_eq!(
+        card(&before),
+        card(&harness.screenshot()),
+        "an outside press dismisses it"
+    );
+}
