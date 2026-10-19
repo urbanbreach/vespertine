@@ -23,19 +23,28 @@
 //! resizing and reordering that keep per-column identity, grouped rows with collapsible headings
 //! and a paging footer, a scroll anchor that survives filtering, paging and sorting, and a graph
 //! gutter whose canvas rows align exactly with the table rows.
+//!
+//! The document components render through [`vespertine_richtext`] with the THM-002 tokens of a
+//! [`vespertine_theme::document::DocumentTheme`]: [`code`] (CMP-014: the code block host, the
+//! Markdown code card and the owner-supplied highlighter contract), [`markdown_doc`] (CMP-011:
+//! parser, incremental parser, display repair and the document view) and the helpers of
+//! [`doc_theme`].
 
 pub mod audio;
 pub mod badges;
 pub mod browser;
 pub mod chart;
+pub mod code;
 pub mod controls;
 pub mod diagram;
 pub mod dialog;
 pub mod diff;
+pub mod doc_theme;
 pub mod elastic;
 pub mod floating;
 mod layout;
 pub mod markdown;
+pub mod markdown_doc;
 pub mod math;
 pub mod media;
 pub mod mentions;

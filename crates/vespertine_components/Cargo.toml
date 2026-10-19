@@ -50,8 +50,8 @@ serde_json.workspace = true
 tempfile.workspace = true
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
-vespertine_test_host = { path = "../vespertine_test_host" }
 vespertine_webview.workspace = true
+vespertine_test_host.workspace = true
 
 [[example]]
 name = "browser_surface"
@@ -180,3 +180,7 @@ path = "examples/mention_scopes.rs"
 [[example]]
 name = "diagram_toggle"
 path = "examples/diagram_toggle.rs"
+
+[[example]]
+name = "markdown_stream"
+path = "examples/markdown_stream.rs"
