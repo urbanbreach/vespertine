@@ -1,0 +1,46 @@
+allow-private-module-inception = true
+avoid-breaking-exported-api = false
+disallowed-types = []
+
+[[disallowed-methods]]
+path = "std::process::Command::spawn"
+reason = "Spawning `std::process::Command` can block the current thread for an unknown duration"
+replacement = "smol::process::Command::spawn"
+
+[[disallowed-methods]]
+path = "std::process::Command::output"
+reason = "Spawning `std::process::Command` can block the current thread for an unknown duration"
+replacement = "smol::process::Command::output"
+
+[[disallowed-methods]]
+path = "std::process::Command::status"
+reason = "Spawning `std::process::Command` can block the current thread for an unknown duration"
+replacement = "smol::process::Command::status"
+
+[[disallowed-methods]]
+path = "std::process::Command::stdin"
+reason = "`smol::process::Command::from()` does not preserve stdio configuration"
+replacement = "smol::process::Command::stdin"
+
+[[disallowed-methods]]
+path = "std::process::Command::stdout"
+reason = "`smol::process::Command::from()` does not preserve stdio configuration"
+replacement = "smol::process::Command::stdout"
+
+[[disallowed-methods]]
+path = "std::process::Command::stderr"
+reason = "`smol::process::Command::from()` does not preserve stdio configuration"
+replacement = "smol::process::Command::stderr"
+
+[[disallowed-methods]]
+path = "smol::Timer::after"
+reason = "smol::Timer introduces non-determinism in tests"
+replacement = "vespertine::BackgroundExecutor::timer"
+
+[[disallowed-methods]]
+path = "serde_json::from_reader"
+reason = "Parsing from a buffer is much slower than first reading the buffer into a Vec/String, see https://github.com/serde-rs/json/issues/160#issuecomment-253446892. Use `serde_json::from_slice` instead."
+
+[[disallowed-methods]]
+path = "serde_json_lenient::from_reader"
+reason = "Parsing from a buffer is much slower than first reading the buffer into a Vec/String, see https://github.com/serde-rs/json/issues/160#issuecomment-253446892, Use `serde_json_lenient::from_slice` instead."

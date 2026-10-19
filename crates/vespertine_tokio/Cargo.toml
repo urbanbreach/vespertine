@@ -1,0 +1,20 @@
+[package]
+name = "vespertine_tokio"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/vespertine_tokio.rs"
+doctest = false
+test = false
+
+[dependencies]
+anyhow.workspace = true
+vespertine.workspace = true
+vespertine_util.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }

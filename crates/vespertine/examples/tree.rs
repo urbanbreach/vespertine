@@ -1,0 +1,61 @@
+//! Renders a div with deep children hierarchy. This example is useful to exemplify that Zed can
+//! handle deep hierarchies (even though it cannot just yet!).
+#[path = "example_support/fonts.rs"]
+mod example_support;
+
+use std::sync::LazyLock;
+
+use vespertine::{
+    App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+};
+use vespertine_platform::application;
+
+struct Tree {}
+
+static DEPTH: LazyLock<u64> = LazyLock::new(|| {
+    std::env::var("VESPERTINE_TREE_DEPTH")
+        .ok()
+        .and_then(|depth| depth.parse().ok())
+        .unwrap_or_else(|| 50)
+});
+
+impl Render for Tree {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let mut depth = *DEPTH;
+        static COLORS: [vespertine::Hsla; 4] = [
+            vespertine::red(),
+            vespertine::blue(),
+            vespertine::green(),
+            vespertine::yellow(),
+        ];
+        let mut colors = COLORS.iter().cycle().copied();
+        let mut next_div = || div().p_0p5().bg(colors.next().unwrap());
+        let mut innermost_node = next_div();
+        while depth > 0 {
+            innermost_node = next_div().child(innermost_node);
+            depth -= 1;
+        }
+        innermost_node
+    }
+}
+
+fn run_example() {
+    application().run(|cx: &mut App| {
+        if !example_support::load_fonts(cx) {
+            return;
+        }
+        let bounds = Bounds::centered(None, size(px(300.0), px(300.0)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, cx| cx.new(|_| Tree {}),
+        )
+        .unwrap();
+    });
+}
+
+fn main() {
+    run_example();
+}

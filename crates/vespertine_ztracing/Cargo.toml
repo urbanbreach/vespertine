@@ -1,0 +1,28 @@
+[package]
+name = "vespertine_ztracing"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[features]
+tracing-tracy = ["dep:tracing-tracy", "dep:tracing-subscriber", "dep:vespertine_zlog"]
+tracy = ["tracing-tracy", "tracy-client"]
+
+[dependencies]
+vespertine_zlog = { workspace = true, optional = true }
+tracing.workspace = true
+
+tracing-subscriber = { workspace = true, optional = true }
+
+vespertine_ztracing_macro.workspace = true
+
+tracing-tracy = { version = "0.11", optional = true, features = ["ondemand"] }
+tracy-client = { version = "0.18", optional = true, features = ["ondemand"] }
+

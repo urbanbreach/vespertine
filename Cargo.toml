@@ -1,0 +1,749 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vespertine",
+    "crates/vespertine_apple",
+    "crates/vespertine_bench_metrics",
+    "crates/vespertine_collections",
+    "crates/vespertine_derive_refineable",
+    "crates/vespertine_http_client",
+    "crates/vespertine_http_client_tls",
+    "crates/vespertine_linux",
+    "crates/vespertine_macos",
+    "crates/vespertine_macros",
+    "crates/vespertine_path",
+    "crates/vespertine_perf",
+    "crates/vespertine_platform",
+    "crates/vespertine_refineable",
+    "crates/vespertine_reqwest_client",
+    "crates/vespertine_scheduler",
+    "crates/vespertine_shared_string",
+    "crates/vespertine_sum_tree",
+    "crates/vespertine_tokio",
+    "crates/vespertine_util",
+    "crates/vespertine_util_core",
+    "crates/vespertine_util_macros",
+    "crates/vespertine_wgpu",
+    "crates/vespertine_windows",
+    "crates/vespertine_zlog",
+    "crates/vespertine_ztracing",
+    "crates/vespertine_ztracing_macro",
+]
+
+[workspace.package]
+publish = false
+edition = "2024"
+
+[workspace.dependencies]
+accesskit_macos = "0.26.0"
+accesskit_unix = "0.22"
+accesskit_windows = "0.34"
+anyhow = "1.0.86"
+async-fs = "2.1"
+async-task = "4.7"
+async-tungstenite = "0.33"
+backtrace = "0.3"
+bitflags = "2.6.0"
+block2 = "0.6"
+bytemuck = "1"
+bytes = "1.0"
+cocoa = "=0.26.0"
+core-foundation = "0.10"
+core-foundation-sys = "0.8.6"
+core-graphics = "0.24"
+core-text = "21"
+ctor = "1.0.12"
+dirs = "6.0"
+dunce = "1.0"
+env_logger = "0.11"
+etagere = "0.2"
+foreign-types = "0.5"
+futures = "0.3.34"
+futures-concurrency = "7.7.1"
+futures-lite = "2"
+globset = "0.4"
+heapless = "0.9.2"
+heck = "0.5"
+http = "1.1"
+http-body = "1.0"
+inventory = "0.3.19"
+itertools = "0.14.0"
+libc = "0.2"
+mach2 = "0.6"
+metal = "0.33"
+nix = "0.30"
+notify-rust = "4"
+objc = "0.2"
+objc2 = "0.6"
+parking_lot = "0.12.1"
+pathfinder_geometry = "0.5"
+percent-encoding = "2.3.2"
+pollster = "0.4.0"
+proc-macro2 = "1.0.93"
+profiling = "1"
+quote = "1.0.9"
+raw-window-handle = "0.6"
+rayon = "1.8"
+rustc-hash = "2.1.0"
+rustls = "0.23.26"
+rustls-platform-verifier = "0.7"
+serde_urlencoded = "0.7"
+sha2 = "0.10"
+shlex = "2.0"
+slotmap = "1.0.6"
+smol = "2.0"
+stacksafe = "1.0"
+swash = "0.2.6"
+tempfile = "3.20.0"
+tendril = "0.5"
+thiserror = "2.0.12"
+tokio = "1"
+tracing = "0.1.40"
+tracing-subscriber = "0.3"
+unicase = "2.6"
+unicode-segmentation = "1.10"
+url = "2.2"
+walkdir = "2.5"
+webpki-roots = "1.0.8"
+which = "8"
+windows-core = "0.62"
+windows-registry = "0.6.0"
+
+[workspace.dependencies.accesskit]
+version = "0.24.0"
+features = [
+    "enumn",
+]
+
+[workspace.dependencies.ashpd]
+version = "0.13"
+default-features = false
+features = [
+    "async-io",
+    "inhibit",
+    "open_uri",
+    "file_chooser",
+    "settings",
+]
+
+[workspace.dependencies.async-channel]
+version = "2.5"
+default-features = false
+
+[workspace.dependencies.async-compression]
+version = "0.4"
+features = [
+    "bzip2",
+    "gzip",
+    "futures-io",
+]
+
+[workspace.dependencies.async-tar]
+git = "https://github.com/zed-industries/async-tar"
+rev = "bd3ad6f89df9a9da7a8535958756d6bf465936a0"
+
+[workspace.dependencies.async_zip]
+version = "0.0.18"
+features = [
+    "deflate",
+    "deflate64",
+]
+
+[workspace.dependencies.cbindgen]
+version = "0.28.0"
+default-features = false
+
+[workspace.dependencies.chrono]
+version = "0.4"
+default-features = false
+features = [
+    "std",
+    "serde",
+]
+
+[workspace.dependencies.criterion]
+version = "0.8.2"
+features = [
+    "html_reports",
+]
+
+[workspace.dependencies.derive_more]
+version = "2.1"
+features = [
+    "deref",
+    "deref_mut",
+    "from_str",
+]
+
+[workspace.dependencies.dispatch2]
+version = "0.3"
+default-features = false
+features = [
+    "std",
+]
+
+[workspace.dependencies.flume]
+version = "0.12"
+default-features = false
+features = [
+    "async",
+]
+
+[workspace.dependencies.font-kit]
+git = "https://github.com/zed-industries/font-kit"
+rev = "94b0f28166665e8fd2f53ff6d268a14955c82269"
+package = "zed-font-kit"
+version = "0.14.1-zed"
+default-features = false
+
+[workspace.dependencies.hdrhistogram]
+version = "7"
+default-features = false
+
+[workspace.dependencies.image]
+version = "0.25.1"
+default-features = false
+features = [
+    "bmp",
+    "dds",
+    "exr",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "rayon",
+    "tga",
+    "tiff",
+    "webp",
+]
+
+[workspace.dependencies.indexmap]
+version = "2.7.0"
+features = [
+    "serde",
+]
+
+[workspace.dependencies.log]
+version = "0.4"
+default-features = false
+features = [
+    "std",
+]
+
+[workspace.dependencies.objc2-app-kit]
+version = "0.3.2"
+default-features = false
+features = [
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSDraggingItem",
+    "NSGraphics",
+    "NSImage",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSPasteboard",
+    "NSResponder",
+    "NSSavePanel",
+    "NSScreen",
+    "NSTrackingArea",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+    "block2",
+    "objc2-core-foundation",
+]
+
+[workspace.dependencies.objc2-core-foundation]
+version = "=0.3.2"
+default-features = false
+
+[workspace.dependencies.objc2-core-graphics]
+version = "=0.3.2"
+default-features = false
+features = [
+    "CGDirectDisplay",
+]
+
+[workspace.dependencies.objc2-core-media]
+version = "=0.3.2"
+default-features = false
+features = [
+    "CMSampleBuffer",
+    "objc2-core-video",
+]
+
+[workspace.dependencies.objc2-core-text]
+version = "0.3.2"
+default-features = false
+features = [
+    "std",
+    "CTFont",
+    "CTFontDescriptor",
+]
+
+[workspace.dependencies.objc2-core-video]
+version = "=0.3.2"
+default-features = false
+features = [
+    "CVBuffer",
+    "CVImageBuffer",
+]
+
+[workspace.dependencies.objc2-foundation]
+version = "=0.3.2"
+default-features = false
+features = [
+    "NSArray",
+    "NSAttributedString",
+    "NSCoder",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSGeometry",
+    "NSNull",
+    "NSObjCRuntime",
+    "NSObject",
+    "NSProcessInfo",
+    "NSRange",
+    "NSRunLoop",
+    "NSSet",
+    "NSString",
+    "NSURL",
+    "NSValue",
+    "objc2-core-foundation",
+    "std",
+]
+
+[workspace.dependencies.objc2-quartz-core]
+version = "=0.3.2"
+default-features = false
+features = [
+    "std",
+    "CALayer",
+    "CAMetalLayer",
+]
+
+[workspace.dependencies.objc2-screen-capture-kit]
+version = "=0.3.2"
+default-features = false
+features = [
+    "block2",
+    "dispatch2",
+    "objc2-core-graphics",
+    "objc2-core-media",
+    "SCShareableContent",
+    "SCStream",
+    "std",
+]
+
+[workspace.dependencies.objc2-security]
+version = "0.3.2"
+default-features = false
+features = [
+    "std",
+    "SecBase",
+    "SecItem",
+]
+
+[workspace.dependencies.objc2-user-notifications]
+version = "0.3"
+default-features = false
+features = [
+    "std",
+    "block2",
+    "UNNotification",
+    "UNNotificationAction",
+    "UNNotificationCategory",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotificationTrigger",
+    "UNUserNotificationCenter",
+]
+
+[workspace.dependencies.oo7]
+version = "0.6"
+default-features = false
+
+[workspace.dependencies.perf-event]
+package = "perf-event2"
+version = "0.7.4"
+
+[workspace.dependencies.postage]
+version = "0.5"
+default-features = false
+
+[workspace.dependencies.proptest]
+git = "https://github.com/proptest-rs/proptest"
+rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
+features = [
+    "attr-macro",
+]
+
+[workspace.dependencies.rand]
+version = "0.9"
+default-features = false
+features = [
+    "std",
+    "std_rng",
+    "os_rng",
+]
+
+[workspace.dependencies.regex]
+version = "1.5"
+default-features = false
+features = [
+    "std",
+    "perf",
+]
+
+[workspace.dependencies.reqwest]
+git = "https://github.com/zed-industries/reqwest.git"
+rev = "33bc764aa15ff7b200bf7c93bd96e24878d53e14"
+default-features = false
+features = [
+    "http2",
+    "macos-system-configuration",
+    "rustls-tls-native-roots",
+    "socks",
+    "stream",
+]
+package = "zed-reqwest"
+version = "0.12.15-zed"
+
+[workspace.dependencies.resvg]
+version = "0.46.0"
+default-features = false
+features = [
+    "text",
+    "system-fonts",
+    "memmap-fonts",
+    "raster-images",
+]
+
+[workspace.dependencies.rust-embed]
+version = "8.11"
+features = [
+    "include-exclude",
+    "compression",
+]
+
+[workspace.dependencies.scap]
+git = "https://github.com/zed-industries/scap"
+rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac"
+default-features = false
+package = "zed-scap"
+version = "0.0.8-zed"
+
+[workspace.dependencies.schemars]
+version = "1.0"
+default-features = false
+features = [
+    "std",
+    "indexmap2",
+]
+
+[workspace.dependencies.semver]
+version = "1.0"
+features = [
+    "serde",
+]
+
+[workspace.dependencies.serde]
+version = "1.0"
+features = [
+    "rc",
+]
+
+[workspace.dependencies.serde_json]
+version = "1.0.144"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+[workspace.dependencies.serde_json_lenient]
+version = "0.2"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+[workspace.dependencies.smallvec]
+version = "1.6"
+features = [
+    "union",
+    "const_new",
+]
+
+[workspace.dependencies.spin]
+version = "0.10"
+default-features = false
+features = [
+    "mutex",
+    "spin_mutex",
+    "lock_api",
+]
+
+[workspace.dependencies.strum]
+version = "0.28"
+features = [
+    "derive",
+]
+
+[workspace.dependencies.syn]
+version = "2.0"
+default-features = false
+features = [
+    "proc-macro",
+]
+
+[workspace.dependencies.taffy]
+version = "=0.13.0"
+default-features = false
+
+[workspace.dependencies.unicode-bidi]
+version = "0.3.18"
+default-features = false
+features = [
+    "hardcoded-data",
+]
+
+[workspace.dependencies.usvg]
+version = "0.46.0"
+default-features = false
+
+[workspace.dependencies.uuid]
+version = "1.1"
+features = [
+    "serde",
+]
+
+[workspace.dependencies.vespertine]
+path = "crates/vespertine"
+default-features = false
+
+[workspace.dependencies.vespertine_apple]
+path = "crates/vespertine_apple"
+
+[workspace.dependencies.vespertine_bench_metrics]
+path = "crates/vespertine_bench_metrics"
+
+[workspace.dependencies.vespertine_collections]
+path = "crates/vespertine_collections"
+version = "0.1.0"
+
+[workspace.dependencies.vespertine_derive_refineable]
+path = "crates/vespertine_derive_refineable"
+
+[workspace.dependencies.vespertine_http_client]
+path = "crates/vespertine_http_client"
+
+[workspace.dependencies.vespertine_http_client_tls]
+path = "crates/vespertine_http_client_tls"
+
+[workspace.dependencies.vespertine_linux]
+path = "crates/vespertine_linux"
+default-features = false
+
+[workspace.dependencies.vespertine_macos]
+path = "crates/vespertine_macos"
+default-features = false
+
+[workspace.dependencies.vespertine_macros]
+path = "crates/vespertine_macros"
+
+[workspace.dependencies.vespertine_path]
+path = "crates/vespertine_path"
+
+[workspace.dependencies.vespertine_perf]
+path = "crates/vespertine_perf"
+default-features = false
+
+[workspace.dependencies.vespertine_platform]
+path = "crates/vespertine_platform"
+default-features = false
+
+[workspace.dependencies.vespertine_refineable]
+path = "crates/vespertine_refineable"
+
+[workspace.dependencies.vespertine_reqwest_client]
+path = "crates/vespertine_reqwest_client"
+
+[workspace.dependencies.vespertine_scheduler]
+path = "crates/vespertine_scheduler"
+
+[workspace.dependencies.vespertine_shared_string]
+path = "crates/vespertine_shared_string"
+
+[workspace.dependencies.vespertine_sum_tree]
+path = "crates/vespertine_sum_tree"
+
+[workspace.dependencies.vespertine_util]
+path = "crates/vespertine_util"
+
+[workspace.dependencies.vespertine_util_core]
+path = "crates/vespertine_util_core"
+
+[workspace.dependencies.vespertine_util_macros]
+path = "crates/vespertine_util_macros"
+
+[workspace.dependencies.vespertine_wgpu]
+path = "crates/vespertine_wgpu"
+
+[workspace.dependencies.vespertine_windows]
+path = "crates/vespertine_windows"
+default-features = false
+
+[workspace.dependencies.vespertine_zlog]
+path = "crates/vespertine_zlog"
+
+[workspace.dependencies.vespertine_ztracing]
+path = "crates/vespertine_ztracing"
+
+[workspace.dependencies.vespertine_ztracing_macro]
+path = "crates/vespertine_ztracing_macro"
+
+[workspace.dependencies.wgpu]
+git = "https://github.com/gfx-rs/wgpu"
+rev = "3b3506ea31154edc04de64debda0e780cba2639c"
+default-features = false
+
+[workspace.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[workspace.dependencies.xkbcommon]
+version = "0.8"
+default-features = false
+
+[workspace.lints.rust.unexpected_cfgs]
+level = "allow"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+declare_interior_mutable_const = "deny"
+redundant_clone = "deny"
+disallowed_methods = "deny"
+type_complexity = "allow"
+let_underscore_future = "allow"
+single_range_in_vec_init = "allow"
+too_many_arguments = "allow"
+large_enum_variant = "allow"
+nonminimal_bool = "allow"
+
+[workspace.lints.clippy.style]
+level = "allow"
+priority = -1
+
+[patch.crates-io.async-process]
+git = "https://github.com/zed-industries/async-process.git"
+rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
+
+[patch.crates-io.async-task]
+git = "https://github.com/zed-industries/async-task.git"
+rev = "015845a19fc31752c02367567d3b8900a406f9da"
+
+[patch.crates-io.windows-capture]
+git = "https://github.com/zed-industries/windows-capture.git"
+rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9"
+
+[patch.crates-io.calloop]
+git = "https://github.com/zed-industries/calloop"
+rev = "3759371fee14c40066d64777e2a36b6ffcc22590"
+
+[patch.crates-io.khronos-egl]
+git = "https://github.com/zed-industries/khronos-egl"
+rev = "42214b36347b108fd9630ca6254b96dde59e04fe"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+incremental = true
+codegen-units = 16
+debug = "limited"
+
+[profile.dev.build-override]
+codegen-units = 16
+split-debuginfo = "unpacked"
+debug = "limited"
+
+[profile.dev.package.vespertine_macros]
+opt-level = 3
+
+[profile.dev.package.vespertine_derive_refineable]
+opt-level = 3
+
+[profile.dev.package.vespertine_util_macros]
+opt-level = 3
+
+[profile.dev.package.quote]
+opt-level = 3
+
+[profile.dev.package.syn]
+opt-level = 3
+
+[profile.dev.package.proc-macro2]
+opt-level = 3
+
+[profile.dev.package.taffy]
+opt-level = 3
+
+[profile.dev.package.resvg]
+opt-level = 3
+
+[profile.dev.package.serde_json]
+opt-level = 3
+
+[profile.dev.package.vespertine_collections]
+codegen-units = 1
+
+[profile.dev.package.vespertine_refineable]
+codegen-units = 1
+
+[profile.dev.package.vespertine_reqwest_client]
+codegen-units = 1
+
+[profile.dbg]
+inherits = "dev"
+debug = "full"
+
+[profile.dbg.build-override]
+debug = "full"
+
+[profile.release]
+debug = "limited"
+lto = "thin"
+codegen-units = 1
+
+[profile.release.package]
+
+[profile.release-fast]
+inherits = "release"
+debug = "full"
+lto = false
+codegen-units = 16

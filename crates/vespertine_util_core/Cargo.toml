@@ -1,0 +1,176 @@
+[package]
+name = "vespertine_util_core"
+version = "0.1.0"
+publish = false
+license = "Apache-2.0"
+description = "A collection of utility structs and functions used by Zed and VESPERTINE"
+
+[package.edition]
+workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/util.rs"
+doctest = true
+
+[features]
+test-support = [
+    "rand",
+    "vespertine_util_macros",
+    "vespertine_path/test-support",
+    "dep:tempfile",
+]
+debug-embed = [
+    "rust-embed/debug-embed",
+]
+
+[dependencies.anyhow]
+workspace = true
+
+[dependencies.vespertine_collections]
+workspace = true
+
+[dependencies.dunce]
+workspace = true
+
+[dependencies.globset]
+workspace = true
+
+[dependencies.itertools]
+workspace = true
+
+[dependencies.rand]
+workspace = true
+optional = true
+
+[dependencies.regex]
+workspace = true
+features = [
+    "unicode-bool",
+    "unicode-gencat",
+]
+
+[dependencies.rust-embed]
+workspace = true
+
+[dependencies.schemars]
+workspace = true
+features = [
+    "derive",
+]
+
+[dependencies.serde]
+workspace = true
+features = [
+    "derive",
+]
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.serde_json_lenient]
+workspace = true
+
+[dependencies.tempfile]
+workspace = true
+optional = true
+
+[dependencies.unicase]
+workspace = true
+
+[dependencies.url]
+workspace = true
+
+[dependencies.percent-encoding]
+workspace = true
+
+[dependencies.vespertine_util_macros]
+workspace = true
+optional = true
+
+[dependencies.vespertine_util]
+workspace = true
+
+[dependencies.vespertine_path]
+workspace = true
+features = [
+    "serde",
+]
+
+[dependencies.async_zip]
+workspace = true
+
+[dependencies.futures-lite]
+workspace = true
+
+[dependencies.futures]
+workspace = true
+
+[dependencies.shlex]
+workspace = true
+
+[dependencies.smol]
+workspace = true
+
+[dependencies.async-fs]
+workspace = true
+
+[dependencies.walkdir]
+workspace = true
+
+[dependencies.dirs]
+workspace = true
+
+[dependencies.log]
+workspace = true
+
+[target."cfg(unix)".dependencies]
+command-fds = "0.3.1"
+
+[target."cfg(unix)".dependencies.libc]
+workspace = true
+
+[target."cfg(unix)".dependencies.nix]
+workspace = true
+features = [
+    "resource",
+    "user",
+]
+
+[target."cfg(unix)".dependencies.tempfile]
+workspace = true
+
+[target."cfg(unix)".dev-dependencies.which]
+workspace = true
+
+[target."cfg(target_os = \"macos\")".dependencies.mach2]
+workspace = true
+
+[target."cfg(target_os = \"macos\")".dependencies.which]
+workspace = true
+
+[target."cfg(windows)".dependencies.which]
+workspace = true
+
+[target."cfg(windows)".dependencies.windows]
+workspace = true
+features = [
+    "Win32_System_JobObjects",
+]
+
+[dev-dependencies.rand]
+workspace = true
+
+[dev-dependencies.tempfile]
+workspace = true
+
+[dev-dependencies.vespertine_util_macros]
+workspace = true
+
+[dev-dependencies.vespertine_path]
+workspace = true
+features = [
+    "test-support",
+]
