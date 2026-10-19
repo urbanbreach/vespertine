@@ -11,11 +11,11 @@
 pub mod audio;
 pub mod browser;
 pub mod chart;
+pub mod elastic;
 pub mod floating;
 pub mod media;
-pub mod status;
-pub mod terminal;
-pub mod elastic;
 pub mod scroll;
+pub mod status;
 pub mod streaming;
+pub mod terminal;
 pub mod tokens;

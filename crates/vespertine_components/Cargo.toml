@@ -34,7 +34,6 @@ vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_test_host = { path = "../vespertine_test_host" }
 vespertine_webview.workspace = true
-vespertine_test_host = { path = "../vespertine_test_host" }
 
 [[example]]
 name = "browser_surface"
