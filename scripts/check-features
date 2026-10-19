@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Check FEATURES.md: every row's verifiers exist and pass.
 
-Usage: scripts/check-features [--spec ID ...] [--file FILE] [--example-seconds N]
+Usage: scripts/check-features [--spec ID ...] [--file FILE] [--no-run-examples] [--example-seconds N]
 
 Rows (under a `## <AREA>` section, header `| Spec | Acceptance | Verified by |`):
 
     | RND-001 | A1, A2 | test:<crate>:<test name> ; example:<crate>:<example name> |
 
-* `test:<crate>:<name>` must be listed by `cargo test -p <crate> -- --list` and pass under
-  `cargo test -p <crate> -- --exact <names...>`.
-* `example:<crate>:<name>` is built in release mode and run for 10 s in the current graphical
-  session; it passes if it exits 0 or is still running at the timeout.
+* `test:<crate>:<name>` must exist in a test executable of the crate (all test executables are built
+  once with `cargo test --workspace --no-run`, or only the needed crates when `--spec` is given),
+  must not be `#[ignore]`d, and must pass (`<executable> --exact <names...>`).
+* `example:<crate>:<name>` is built (dev profile) and run for 10 s in the current graphical
+  session; it passes if it exits 0 or is still running at the timeout. `--no-run-examples` builds
+  the examples without launching them (used by `scripts/land`, so no windows open).
 
 Exits 0 iff every selected row passes (empty tables pass).
 """
@@ -112,83 +114,168 @@ def cargo_metadata():
     return json.loads(result.stdout)
 
 
-def check_tests(rows, packages):
-    """Runs every `test:` verifier, one cargo invocation per crate; records errors on rows."""
-    by_crate = {}
+def build_test_executables(package_args, packages_by_id):
+    """Builds every test target; returns {package name: [executable paths]} or None on failure."""
+    command = ["cargo", "test", *package_args, "--no-run", "--message-format=json-render-diagnostics"]
+    print("== building tests: " + " ".join(command[:-1]), flush=True)
+    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True)
+    executables = {}
+    for line in process.stdout:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if message.get("reason") != "compiler-artifact" or not message.get("executable"):
+            continue
+        if not message.get("profile", {}).get("test"):
+            continue
+        package = packages_by_id.get(message["package_id"])
+        if package is not None:
+            executables.setdefault(package["name"], []).append(message["executable"])
+    if process.wait() != 0:
+        return None
+    return executables
+
+
+def list_tests(executable, manifest_dir, *extra):
+    result = subprocess.run(
+        [executable, "--list", "--format", "terse", *extra],
+        cwd=manifest_dir, env=test_env(manifest_dir), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return {line[: -len(": test")] for line in result.stdout.splitlines() if line.endswith(": test")}
+
+
+def test_env(manifest_dir):
+    env = dict(os.environ)
+    env["CARGO_MANIFEST_DIR"] = manifest_dir
+    return env
+
+
+def check_tests(rows, packages, no_filter):
+    """Runs every `test:` verifier; records errors on rows."""
+    wanted = {}  # crate -> name -> rows
     for row in rows:
         for kind, crate, name in row.verifiers:
             if kind == "test":
-                by_crate.setdefault(crate, {}).setdefault(name, []).append(row)
-    for crate, names in sorted(by_crate.items()):
+                wanted.setdefault(crate, {}).setdefault(name, []).append(row)
+    if not wanted:
+        return
+    for crate, names in wanted.items():
         if crate not in packages:
             for rows_of_name in names.values():
                 for row in rows_of_name:
                     row.errors.append(f"unknown crate `{crate}`")
-            continue
-        print(f"== listing tests of {crate}", flush=True)
-        listing = run(["cargo", "test", "-p", crate, "--", "--list"], capture_output=True, text=True)
-        if listing.returncode != 0:
-            print(listing.stdout + listing.stderr, file=sys.stderr)
+    known = {crate: names for crate, names in wanted.items() if crate in packages}
+    if not known:
+        return
+    packages_by_id = {package["id"]: package for package in packages.values()}
+    package_args = ["--workspace"] if no_filter else [arg for crate in sorted(known) for arg in ("-p", crate)]
+    executables = build_test_executables(package_args, packages_by_id)
+    if executables is None:
+        for names in known.values():
             for rows_of_name in names.values():
                 for row in rows_of_name:
-                    row.errors.append(f"`cargo test -p {crate} -- --list` failed")
-            continue
-        listed = {line[: -len(": test")] for line in listing.stdout.splitlines() if line.endswith(": test")}
-        present = []
-        for name, rows_of_name in names.items():
-            if name in listed:
-                present.append(name)
-            else:
-                for row in rows_of_name:
-                    row.errors.append(f"test `{crate}:{name}` does not exist")
-        if not present:
-            continue
-        print(f"== running {len(present)} test(s) of {crate}", flush=True)
-        outcome = run(["cargo", "test", "-p", crate, "--", "--exact", *present], capture_output=True, text=True)
-        sys.stdout.write(outcome.stdout)
-        sys.stderr.write(outcome.stderr)
-        results = {}
-        for line in outcome.stdout.splitlines():
-            match = re.match(r"^test (.+) \.\.\. (\w+)", line)
-            if match:
-                results.setdefault(match.group(1), []).append(match.group(2))
-        for name in present:
-            states = results.get(name, [])
-            if states and all(state == "ok" for state in states):
+                    row.errors.append("test build failed")
+        return
+    for crate, names in sorted(known.items()):
+        manifest_dir = os.path.dirname(packages[crate]["manifest_path"])
+        found = {name: [] for name in names}  # name -> executables that list it
+        ignored = set()
+        for executable in executables.get(crate, []):
+            listed = list_tests(executable, manifest_dir)
+            if listed is None:
+                for rows_of_name in names.values():
+                    for row in rows_of_name:
+                        row.errors.append(f"`{executable} --list` failed")
                 continue
-            reason = "did not run" if not states else "/".join(sorted(set(states)))
-            for row in names[name]:
-                row.errors.append(f"test `{crate}:{name}` {reason}")
+            ignored_here = list_tests(executable, manifest_dir, "--ignored") or set()
+            for name in names:
+                if name in listed:
+                    found[name].append(executable)
+                    if name in ignored_here:
+                        ignored.add(name)
+        per_executable = {}
+        for name, exes in found.items():
+            if not exes:
+                for row in names[name]:
+                    row.errors.append(f"test `{crate}:{name}` does not exist")
+            elif name in ignored:
+                for row in names[name]:
+                    row.errors.append(f"test `{crate}:{name}` is #[ignore]d")
+            else:
+                for executable in exes:
+                    per_executable.setdefault(executable, []).append(name)
+        for executable, selected in per_executable.items():
+            print(f"== running {len(selected)} test(s) of {crate} ({os.path.basename(executable)})", flush=True)
+            outcome = subprocess.run(
+                [executable, "--exact", *selected],
+                cwd=manifest_dir, env=test_env(manifest_dir), capture_output=True, text=True,
+            )
+            sys.stdout.write(outcome.stdout)
+            sys.stderr.write(outcome.stderr)
+            results = {}
+            for line in outcome.stdout.splitlines():
+                match = re.match(r"^test (.+) \.\.\. (\w+)", line)
+                if match:
+                    results.setdefault(match.group(1), []).append(match.group(2))
+            for name in selected:
+                states = results.get(name, [])
+                if states and all(state == "ok" for state in states):
+                    continue
+                reason = "did not run" if not states else "/".join(sorted(set(states)))
+                for row in names[name]:
+                    row.errors.append(f"test `{crate}:{name}` {reason}")
 
 
-def check_examples(rows, packages, target_directory, seconds):
-    seen = {}
+def check_examples(rows, packages, target_directory, seconds, run_examples):
+    needed = {}  # (crate, example) -> rows
     for row in rows:
         for kind, crate, name in row.verifiers:
-            if kind != "example":
-                continue
-            key = (crate, name)
-            if key not in seen:
-                seen[key] = run_example(crate, name, packages, target_directory, seconds)
-            if seen[key]:
-                row.errors.append(f"example `{crate}:{name}` {seen[key]}")
+            if kind == "example":
+                needed.setdefault((crate, name), []).append(row)
+    if not needed:
+        return
+    failures = {}
+    buildable = []
+    features = []
+    for (crate, name) in needed:
+        package = packages.get(crate)
+        if package is None:
+            failures[(crate, name)] = "belongs to an unknown crate"
+            continue
+        target = next((t for t in package["targets"] if "example" in t["kind"] and t["name"] == name), None)
+        if target is None:
+            failures[(crate, name)] = "does not exist"
+            continue
+        buildable.append((crate, name))
+        features += [f"{crate}/{feature}" for feature in target.get("required-features", [])]
+    if buildable:
+        command = ["cargo", "build"]
+        for crate in sorted({crate for crate, _ in buildable}):
+            command += ["-p", crate]
+        for name in sorted({name for _, name in buildable}):
+            command += ["--example", name]
+        if features:
+            command += ["--features", ",".join(sorted(set(features)))]
+        print("== building examples: " + " ".join(command), flush=True)
+        if run(command).returncode != 0:
+            for key in buildable:
+                failures[key] = "failed to build"
+            buildable = []
+    for crate, name in buildable:
+        if run_examples:
+            failure = run_example(crate, name, os.path.join(target_directory, "debug", "examples", name), seconds)
+            if failure:
+                failures[(crate, name)] = failure
+    for key, failure in failures.items():
+        for row in needed[key]:
+            row.errors.append(f"example `{key[0]}:{key[1]}` {failure}")
 
 
-def run_example(crate, name, packages, target_directory, seconds):
+def run_example(crate, name, binary, seconds):
     """Returns None on success or a failure description."""
-    package = packages.get(crate)
-    if package is None:
-        return "belongs to an unknown crate"
-    target = next((t for t in package["targets"] if "example" in t["kind"] and t["name"] == name), None)
-    if target is None:
-        return "does not exist"
-    build = ["cargo", "build", "--release", "-p", crate, "--example", name]
-    if target.get("required-features"):
-        build += ["--features", ",".join(target["required-features"])]
-    print(f"== building example {crate}:{name}", flush=True)
-    if run(build).returncode != 0:
-        return "failed to build"
-    binary = os.path.join(target_directory, "release", "examples", name)
     print(f"== running example {crate}:{name} for {seconds} s", flush=True)
     process = subprocess.Popen([binary], cwd=ROOT, start_new_session=True)
     deadline = time.monotonic() + seconds
@@ -214,6 +301,7 @@ def main():
     parser = argparse.ArgumentParser(description="Check FEATURES.md rows (see the module docstring).")
     parser.add_argument("--spec", action="append", default=[], metavar="ID", help="only check rows of this spec (repeatable)")
     parser.add_argument("--file", default=os.path.join(ROOT, "FEATURES.md"), help="table file (default: FEATURES.md)")
+    parser.add_argument("--no-run-examples", action="store_true", help="build examples but do not launch them")
     parser.add_argument("--example-seconds", type=float, default=10.0, help="run time of each example (default 10)")
     args = parser.parse_args()
 
@@ -236,8 +324,8 @@ def main():
     if rows:
         metadata = cargo_metadata()
         packages = {package["name"]: package for package in metadata["packages"]}
-        check_tests(rows, packages)
-        check_examples(rows, packages, metadata["target_directory"], args.example_seconds)
+        check_tests(rows, packages, no_filter=not args.spec)
+        check_examples(rows, packages, metadata["target_directory"], args.example_seconds, not args.no_run_examples)
 
     failed = bool(problems)
     print("\n== FEATURES.md")

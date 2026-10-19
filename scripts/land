@@ -2,10 +2,22 @@
 # Land the current worktree branch (work/<owner>) onto main.
 #
 # Takes the exclusive landing lock shared by all worktrees, rebases the branch onto main, runs the
-# landing gates, fast-forwards main in the main checkout and prints the landed commit.
+# landing gates on the rebased commit in one persistent integration worktree
+# (.worktrees/_land, so consecutive lands build incrementally in the same path), fast-forwards main
+# in the main checkout and prints the landed commit.
+#
+# `--dry-run` does everything except the final fast-forward of main (for testing this script).
 set -euo pipefail
 
+dry_run=0
+case "${1:-}" in
+    "") ;;
+    --dry-run) dry_run=1 ;;
+    *) echo "usage: scripts/land [--dry-run]" >&2; exit 2 ;;
+esac
+
 MAIN_CHECKOUT="$HOME/Projects/vespertine"
+LAND_WORKTREE="$MAIN_CHECKOUT/.worktrees/_land"
 LOCK_FILE="$MAIN_CHECKOUT/.git/vespertine-land.lock"
 
 export RUSTC_WRAPPER="$HOME/Projects/vespertine-cleanroom/tools/bin/sccache"
@@ -42,18 +54,33 @@ if [ "$(git rev-parse main)" = "$(git rev-parse HEAD)" ]; then
     die "nothing to land: $branch is identical to main"
 fi
 
+candidate=$(git rev-parse HEAD)
+if [ ! -e "$LAND_WORKTREE/.git" ]; then
+    git worktree add --detach "$LAND_WORKTREE" "$candidate"
+fi
+echo "land: gates run in $LAND_WORKTREE on $(git rev-parse --short "$candidate")"
+git -C "$LAND_WORKTREE" checkout --detach --force "$candidate"
+git -C "$LAND_WORKTREE" clean -fdq -e /target
+cd "$LAND_WORKTREE"
+
 echo "land: gate: cargo fmt --all --check"
 cargo fmt --all --check
 echo "land: gate: cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 echo "land: gate: cargo test --workspace"
 cargo test --workspace
-echo "land: gate: ./scripts/check-features"
-./scripts/check-features
+echo "land: gate: ./scripts/check-features --no-run-examples"
+./scripts/check-features --no-run-examples
+cd "$worktree"
 
 # main moved while the gates ran only if someone bypassed the lock; refuse rather than land untested code.
-git merge-base --is-ancestor main HEAD || die "main moved during the gates; run ./scripts/land again"
+git merge-base --is-ancestor main "$candidate" || die "main moved during the gates; run ./scripts/land again"
+
+if [ "$dry_run" = 1 ]; then
+    echo "land: dry run: gates passed for $(git rev-parse --short "$candidate"); main not modified"
+    exit 0
+fi
 
 echo "land: fast-forwarding main"
-git -C "$MAIN_CHECKOUT" merge --ff-only "$branch"
+git -C "$MAIN_CHECKOUT" merge --ff-only "$candidate"
 echo "land: landed $(git -C "$MAIN_CHECKOUT" log -1 --format='%h %s' main)"
