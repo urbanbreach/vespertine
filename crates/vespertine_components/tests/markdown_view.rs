@@ -8,6 +8,7 @@ use vespertine::{AnyElement, IntoElement, ParentElement, Styled, div, px};
 use vespertine_components::markdown_doc::{
     DiagramView, Markdown, MarkdownDocument, MarkdownOptions, TaskOptions,
 };
+use vespertine_components::math::MathStyle;
 use vespertine_richtext::highlight;
 use vespertine_richtext::search::{HighlightDeclaration, HighlightSpec};
 use vespertine_test_host::{TestHost, require_backend};
@@ -503,12 +504,12 @@ fn host_for(query: &'static str, source: &'static str) -> TestHost {
 #[test]
 fn a2_disabled_formulas_show_their_source_and_display_math_falls_back_to_a_math_card() {
     require_backend!();
-    let mut host = md_host(
-        400.,
-        300.,
-        "inline $x^2$ here\n\n$$\na+b\n$$\n",
-        MarkdownOptions::default,
-    );
+    let mut host = md_host(400., 300., "inline $x^2$ here\n\n$$\na+b\n$$\n", || {
+        MarkdownOptions {
+            math: MathStyle::new().enabled(false),
+            ..MarkdownOptions::default()
+        }
+    });
     host.paint_frame();
     let painted = host.painted_text();
     assert!(
@@ -761,5 +762,100 @@ fn a2_a_rendered_diagram_toggles_with_its_source() {
     assert!(
         painted.contains("graph TD") && !painted.contains("DIAGRAM BODY"),
         "{painted}"
+    );
+}
+
+#[test]
+fn r13_typeset_inline_formulas_reserve_slots_and_copy_as_delimited_source() {
+    require_backend!();
+    let mut host = md_host(
+        500.,
+        120.,
+        "before $\\frac{a}{b}$ after",
+        MarkdownOptions::default,
+    );
+    host.paint_frame();
+    let painted = host.painted_text();
+    assert!(
+        painted.iter().all(|text| !text.contains('$')),
+        "the placeholder characters are painted, never the source: {painted:?}"
+    );
+    assert!(painted.iter().any(|text| text.contains('\u{a0}')));
+    let copied = docs_support::drag(&mut host, (21., 31.), (470., 31.)).expect("a selection");
+    assert_eq!(copied, "before $\\frac{a}{b}$ after");
+}
+
+#[test]
+fn r13_display_formulas_are_blocks_of_their_own_that_copy_with_double_dollars() {
+    require_backend!();
+    let mut host = md_host(
+        640.,
+        160.,
+        "above\n\n$$x^2+y^2$$\n\nbelow",
+        MarkdownOptions::default,
+    );
+    host.paint_frame();
+    let painted = host.painted_text();
+    assert!(
+        painted.iter().all(|text| !text.contains('$')),
+        "{painted:?}"
+    );
+    // 20 + 22 (above) + 12 gap, then a line box of at least 22 and the formula centered in 600.
+    // A drag across the slot (the formula is centered in the 600 px column) is one unit of the
+    // original text.
+    let copied = docs_support::drag(&mut host, (200., 66.), (440., 66.)).expect("a selection");
+    assert_eq!(copied, "$$x^2+y^2$$");
+}
+
+#[test]
+fn r13_a_tall_inline_formula_opens_the_line_height_of_its_paragraph() {
+    require_backend!();
+    let next_y = |source: &'static str| {
+        let mut host = host_for("next", source);
+        host.paint_frame();
+        washes(&mut host)[0].1[0][1]
+    };
+    let plain = next_y("x y\n\nnext");
+    let tall = next_y("x $\\frac{\\frac{a}{b}}{\\frac{c}{d}}$ y\n\nnext");
+    assert!(tall > plain + 4., "{plain} -> {tall}");
+    let short = next_y("x $a$ y\n\nnext");
+    assert_eq!(
+        short, plain,
+        "a paragraph with small formulas keeps its rhythm"
+    );
+}
+
+#[test]
+fn r14_a_column_holding_a_formula_floors_at_its_widest_unbreakable_word() {
+    require_backend!();
+    let formula = "$a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w+x+y+z$";
+    let pans = |source: &'static str| {
+        let mut host = host(260., 160., move || {
+            finding("tag", doc(source, MarkdownOptions::default()))
+        });
+        host.paint_frame();
+        let before = washes(&mut host)[0].1[0][0];
+        host.mouse_move(100., 40., None, "").unwrap();
+        host.paint_frame();
+        host.scroll_wheel(100., 40., -120., 0., "").unwrap();
+        host.paint_frame();
+        washes(&mut host)[0].1[0][0] < before - 20.
+    };
+    let with_formula: &'static str =
+        Box::leak(format!("| tag | f |\n|---|---|\n| tag | {formula} |\n").into_boxed_str());
+    let with_text: &'static str = Box::leak(
+        format!(
+            "| tag | f |\n|---|---|\n| tag | {} |\n",
+            "a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w+x+y+z".replace('+', "")
+        )
+        .into_boxed_str(),
+    );
+    assert!(
+        pans(with_formula),
+        "the formula column keeps its width and the table scrolls"
+    );
+    assert!(
+        !pans(with_text),
+        "plain text of a similar width compresses to the 96 px floor"
     );
 }

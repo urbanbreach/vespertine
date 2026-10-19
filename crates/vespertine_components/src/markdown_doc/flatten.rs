@@ -2,6 +2,7 @@
 //! text, one [`TextRun`] per style change, link ranges, and inline-code pill ranges.
 
 use super::tree::{PENDING_LINK, Run};
+use crate::math::{MathStyle, MathText, Presentation, present_inline, slot_font};
 use std::ops::Range;
 use vespertine::{
     FontStyle, FontWeight, Hsla, Pixels, SharedString, StrikethroughStyle, TextRun, UnderlineStyle,
@@ -57,6 +58,10 @@ pub struct Flat {
     pub links: Vec<Link>,
     /// Merged inline-code ranges (one wash box per wrapped row).
     pub pills: Vec<Range<usize>>,
+    /// The paragraph with typeset inline formulas (CMP-012): the displayed text of `text` with a
+    /// reserved slot per formula and the original text with the delimited sources. `None` when
+    /// no formula is typeset.
+    pub math: Option<MathText>,
 }
 
 impl Flat {
@@ -66,9 +71,21 @@ impl Flat {
     }
 }
 
-/// Flattens `runs`. Task markers are shown as ordinary text unless `hide_task_marker`.
-pub fn flatten(runs: &[Run], theme: &DocumentTheme, ctx: &TextCtx, hide_task_marker: bool) -> Flat {
+/// Flattens `runs`. Task markers are shown as ordinary text unless `hide_task_marker`. Formula
+/// runs are typeset (a reserved slot in the slot font) under `math`, else shown as inline code
+/// with their delimiters (CMP-012 R6).
+pub fn flatten(
+    runs: &[Run],
+    theme: &DocumentTheme,
+    ctx: &TextCtx,
+    hide_task_marker: bool,
+    math: &MathStyle,
+) -> Flat {
     let muted = hsla(theme.text_muted);
+    let mut paragraph = runs
+        .iter()
+        .any(|run| run.formula.is_some())
+        .then(MathText::new);
     let mut text = String::new();
     let mut out: Vec<TextRun> = Vec::new();
     let mut links: Vec<Link> = Vec::new();
@@ -77,15 +94,35 @@ pub fn flatten(runs: &[Run], theme: &DocumentTheme, ctx: &TextCtx, hide_task_mar
         if run.task.is_some() && hide_task_marker {
             continue;
         }
-        let start = text.len();
-        // Formulas show their canonical delimited source as inline code (CMP-012 R6) unless an
-        // owner typesets them.
-        let is_code = run.style.code || run.formula.is_some();
-        text.push_str(&run.text);
-        let len = run.text.len();
-        if len == 0 {
+        if run.text.is_empty() {
             continue;
         }
+        let start = text.len();
+        // A formula that typesets reserves a slot of no-break spaces; one that does not (math
+        // disabled, refused, too tall or too wide) is its delimited source as inline code.
+        let typeset = run.formula.as_ref().and_then(|source| {
+            let paragraph = paragraph.as_mut()?;
+            match present_inline(&source.tex, math) {
+                Presentation::Formula { formula, slot } => paragraph
+                    .push_inline(&source.tex, &formula, math.scale())
+                    .then_some(slot),
+                _ => None,
+            }
+        });
+        let is_code = typeset.is_none() && (run.style.code || run.formula.is_some());
+        let len = match &typeset {
+            Some(slot) => {
+                text.push_str(slot);
+                slot.len()
+            }
+            None => {
+                text.push_str(&run.text);
+                if let Some(paragraph) = paragraph.as_mut() {
+                    paragraph.push_text(&run.text);
+                }
+                run.text.len()
+            }
+        };
         let weight = if run.style.bold {
             if ctx.weight >= FontWeight::SEMIBOLD {
                 FontWeight::BOLD
@@ -95,14 +132,18 @@ pub fn flatten(runs: &[Run], theme: &DocumentTheme, ctx: &TextCtx, hide_task_mar
         } else {
             ctx.weight
         };
-        let mut run_font = if is_code {
+        let mut run_font = if typeset.is_some() {
+            slot_font()
+        } else if is_code {
             font(theme.font_mono.clone())
         } else {
             font(theme.font_sans.clone())
         };
-        run_font.weight = if is_code { FontWeight::NORMAL } else { weight };
-        if run.style.italic {
-            run_font.style = FontStyle::Italic;
+        if typeset.is_none() {
+            run_font.weight = if is_code { FontWeight::NORMAL } else { weight };
+            if run.style.italic {
+                run_font.style = FontStyle::Italic;
+            }
         }
         let color = if is_code {
             hsla(theme.code_text)
@@ -144,11 +185,16 @@ pub fn flatten(runs: &[Run], theme: &DocumentTheme, ctx: &TextCtx, hide_task_mar
             }
         }
     }
+    let math = paragraph.filter(|paragraph| {
+        debug_assert_eq!(paragraph.displayed(), text);
+        !paragraph.slots().is_empty()
+    });
     Flat {
         text,
         runs: out,
         links,
         pills,
+        math,
     }
 }
 
@@ -228,7 +274,7 @@ mod tests {
                 None,
             ),
         ];
-        let mut flat = flatten(&runs, &theme, &ctx, false);
+        let mut flat = flatten(&runs, &theme, &ctx, false, &MathStyle::new());
         let before = (
             flat.text.clone(),
             flat.runs.iter().map(|r| r.len).sum::<usize>(),

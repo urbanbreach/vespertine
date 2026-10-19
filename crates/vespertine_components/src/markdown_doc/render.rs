@@ -2,17 +2,19 @@
 
 use super::cache::style_identity;
 use super::flatten::{Flat, TextCtx, flatten, single_line};
-use super::options::{DiagramView, MarkdownOptions};
+use super::options::MarkdownOptions;
 use super::table::TableGeometry;
 use super::tree::{Align, Block, BlockKind, Formula, Item, Run, TaskMarker};
 use crate::code::{CardAction, CodeCard, CodeScrollState, CopyOptions, WrapToggle, widgets::Icon};
+use crate::diagram::DiagramView;
 use crate::doc_theme::{alpha, hsla, ink_alpha};
+use crate::math::{DisplayBlock, MathBlock, MathTextOptions, inline_line_height, math_text};
 use std::cell::Cell;
 use std::rc::Rc;
 use vespertine::{
-    AnyElement, App, ClickEvent, CursorStyle, ElementId, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Role, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px,
+    AnyElement, App, ClickEvent, CursorStyle, ElementId, Font, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
+    TextRun, Window, div, font, px,
 };
 use vespertine_richtext::{RichText, RunKey, UnderWash, UserSelect, user_select};
 use vespertine_theme::document::DocumentTheme;
@@ -44,7 +46,8 @@ impl<'a> Ctx<'a> {
     /// Flattens through the document's cache (keyed by block generation and style identity).
     fn flat(&self, runs: &[Run], text: &TextCtx, hide_task_marker: bool) -> Flat {
         let theme = self.theme();
-        let build = || flatten(runs, theme, text, hide_task_marker);
+        let math = &self.opts.math;
+        let build = || flatten(runs, theme, text, hide_task_marker, math);
         let Some(cache) = &self.opts.cache else {
             return build();
         };
@@ -55,6 +58,7 @@ impl<'a> Ctx<'a> {
             text.size.as_f32().to_bits(),
             text.weight.0.to_bits(),
             hide_task_marker,
+            (math.enabled, math.face.index(), math.size()),
         );
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(
@@ -133,7 +137,7 @@ pub fn render_block(
                 ..text.clone()
             };
             let flat = ctx.flat(runs, &ctx_text, false);
-            text_element(ctx, flat, &ctx_text, None)
+            text_element(ctx, flat, &ctx_text, None, window, cx)
         }
         BlockKind::Code { info, code, .. } => code_block(info, code, ctx, window, cx),
         BlockKind::Quote(children) => quote(children, ctx, text, window, cx),
@@ -153,12 +157,19 @@ pub fn render_block(
             header,
             rows,
         } => table(aligns, header, rows, ctx, text, window, cx),
-        BlockKind::DisplayMath(formula) => display_math(formula, ctx, window, cx),
+        BlockKind::DisplayMath(formula) => display_math(formula, ctx, text, window, cx),
     }
 }
 
 /// A text element: one native run with the block's runs, links and pills.
-fn text_element(ctx: &Ctx, mut flat: Flat, text: &TextCtx, align: Option<Align>) -> AnyElement {
+fn text_element(
+    ctx: &Ctx,
+    mut flat: Flat,
+    text: &TextCtx,
+    align: Option<Align>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let elem = ctx.next();
     if ctx.last
         && let Some(fade) = ctx.opts.fade
@@ -166,11 +177,37 @@ fn text_element(ctx: &Ctx, mut flat: Flat, text: &TextCtx, align: Option<Align>)
         flat.fade_tail(fade);
     }
     let theme = ctx.theme();
+    // A tall inline formula opens the line height of every line of its paragraph (CMP-012 R7).
+    let line_height = match &flat.math {
+        Some(math) => {
+            let system = window.text_system().clone();
+            let runs = flat
+                .runs
+                .iter()
+                .map(|run| (run.len, run.font.clone()))
+                .collect();
+            inline_line_height(
+                &math.flat(runs),
+                math.formulas(),
+                ctx.opts.math.scale(),
+                text.line_height,
+                text.size,
+                |font: &Font| {
+                    let id = system.resolve_font(font);
+                    (
+                        f32::from(system.ascent(id, px(100.))) / 100.,
+                        f32::from(system.descent(id, px(100.))) / 100.,
+                    )
+                },
+            )
+        }
+        None => text.line_height,
+    };
     let mut element = div()
         .w_full()
         .min_w_0()
         .text_size(text.size)
-        .line_height(text.line_height)
+        .line_height(line_height)
         .text_color(text.color)
         .font_family(theme.font_sans.clone())
         .font_weight(text.weight);
@@ -182,14 +219,27 @@ fn text_element(ctx: &Ctx, mut flat: Flat, text: &TextCtx, align: Option<Align>)
     if flat.is_empty() {
         return element.min_h(text.line_height).into_any_element();
     }
-    let mut run = RichText::new(ctx.name(elem, "text"), flat.text.clone())
-        .runs(flat.runs.clone())
+    let rich = match &flat.math {
+        Some(math) => math_text(
+            ctx.name(elem, "text"),
+            math,
+            flat.runs.clone(),
+            MathTextOptions::inline(ctx.opts.math.scale()),
+            window,
+            cx,
+        ),
+        None => RichText::new(ctx.name(elem, "text"), flat.text.clone()).runs(flat.runs.clone()),
+    };
+    let mut run = rich
         .key(ctx.key(elem, 0))
         .native()
         .links(flat.links.clone())
         .link_options(ctx.opts.link_options.clone());
     if !flat.pills.is_empty() {
-        let (color, radius) = (hsla(theme.code_wash), px(theme.metrics.md_inline_code_radius));
+        let (color, radius) = (
+            hsla(theme.code_wash),
+            px(theme.metrics.md_inline_code_radius),
+        );
         run = run.under_washes(
             flat.pills
                 .into_iter()
@@ -228,7 +278,7 @@ fn paragraph(
                     ctx.next();
                     if !pending.is_empty() {
                         let flat = ctx.flat(&pending, text, hide_marker);
-                        pieces.push(text_element(ctx, flat, text, None));
+                        pieces.push(text_element(ctx, flat, text, None, window, cx));
                         pending.clear();
                     }
                     pieces.push(element);
@@ -239,7 +289,7 @@ fn paragraph(
         }
         if !pending.is_empty() {
             let flat = ctx.flat(&pending, text, hide_marker);
-            pieces.push(text_element(ctx, flat, text, None));
+            pieces.push(text_element(ctx, flat, text, None, window, cx));
         }
         return div()
             .w_full()
@@ -250,7 +300,7 @@ fn paragraph(
             .into_any_element();
     }
     let flat = ctx.flat(runs, text, hide_marker);
-    text_element(ctx, flat, text, None)
+    text_element(ctx, flat, text, None, window, cx)
 }
 
 fn quote(
@@ -543,16 +593,104 @@ fn diagram_body(card: CodeCard, body: AnyElement, theme: &DocumentTheme) -> AnyE
         .into_any_element()
 }
 
-fn display_math(formula: &Formula, ctx: &Ctx, window: &mut Window, cx: &mut App) -> AnyElement {
-    let _ = (window, cx);
+/// A display formula (CMP-012 R8, R9) as a block of its own; one that cannot be typeset stays a
+/// code block labelled `math`.
+fn display_math(
+    formula: &Formula,
+    ctx: &Ctx,
+    text: &TextCtx,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let theme = ctx.theme().clone();
     let elem = ctx.next();
-    CodeCard::new(ctx.name(elem, "math"), ctx.top, formula.tex.clone())
-        .label("math")
-        .theme(theme)
-        .key_owner((ctx.opts.row_key.clone(), ctx.top, elem))
-        .into_any_element()
+    let run = TextRun {
+        len: 0,
+        font: font(theme.font_sans.clone()),
+        color: text.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let block = DisplayBlock::new(
+        ctx.name(elem, "math"),
+        &formula.tex,
+        ctx.opts.math,
+        run,
+        text.size,
+    )
+    .line_height(text.line_height)
+    .key(ctx.key(elem, 0))
+    .native()
+    .build(window, cx);
+    match block {
+        MathBlock::Typeset(element) => element,
+        MathBlock::Fallback { language, text } => {
+            CodeCard::new(ctx.name(elem, "math-code"), ctx.top, text)
+                .label(language)
+                .theme(theme)
+                .key_owner((ctx.opts.row_key.clone(), ctx.top, elem))
+                .into_any_element()
+        }
+    }
 }
+
+/// Characters a line may break at: whitespace except the no-break spaces that formula slots are
+/// made of.
+fn breaks_line(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}')
+}
+
+/// The runs of `runs` restricted to the byte `range` of the text they cover.
+fn slice_runs(runs: &[TextRun], range: std::ops::Range<usize>) -> Vec<TextRun> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    for run in runs {
+        let (start, end) = (offset.max(range.start), (offset + run.len).min(range.end));
+        if start < end {
+            out.push(TextRun {
+                len: end - start,
+                ..run.clone()
+            });
+        }
+        offset += run.len;
+    }
+    out
+}
+
+/// The width of the widest unbreakable word of `flat` that contains a typeset formula: the slot
+/// text plus the text glued to it, shaped by `shape`. When that word exceeds 512 bytes the
+/// formula's own scaled extent stands in (CMP-011 R14).
+fn widest_formula_word(
+    flat: &Flat,
+    size: Pixels,
+    scale: f32,
+    shape: &dyn Fn(&str, &[TextRun], Pixels) -> f32,
+) -> f32 {
+    let Some(math) = &flat.math else {
+        return 0.;
+    };
+    let text = flat.text.as_str();
+    let mut widest = 0f32;
+    for (slot, formula) in math.slots().iter().zip(math.formulas()) {
+        let start = text[..slot.start].rfind(breaks_line).map_or(0, |at| {
+            at + text[at..].chars().next().map_or(1, char::len_utf8)
+        });
+        let end = text[slot.end..]
+            .find(breaks_line)
+            .map_or(text.len(), |at| slot.end + at);
+        let width = if end - start > WORD_CAP {
+            formula.extent() * scale * size.as_f32()
+        } else {
+            shape(&text[start..end], &slice_runs(&flat.runs, start..end), size)
+        };
+        widest = widest.max(width);
+    }
+    widest
+}
+
+/// Longest word shaped for the formula-column rule; longer words use the formula's own extent.
+const WORD_CAP: usize = 512;
 
 #[allow(clippy::too_many_arguments)]
 fn table(
@@ -587,6 +725,7 @@ fn table(
                 theme,
                 &header_text,
                 false,
+                &ctx.opts.math,
             )
         })
         .collect();
@@ -594,11 +733,19 @@ fn table(
         .iter()
         .map(|row| {
             (0..columns)
-                .map(|c| flatten(row.get(c).map_or(&[][..], |v| &v[..]), theme, text, false))
+                .map(|c| {
+                    flatten(
+                        row.get(c).map_or(&[][..], |v| &v[..]),
+                        theme,
+                        text,
+                        false,
+                        &ctx.opts.math,
+                    )
+                })
                 .collect()
         })
         .collect();
-    let measure = |flat: &Flat, size: vespertine::Pixels| -> f32 {
+    let measure = |flat: &Flat, size: Pixels| -> f32 {
         if flat.is_empty() {
             return 0.;
         }
@@ -607,17 +754,36 @@ fn table(
             .shape_line(single_line(&flat.text), size, &flat.runs, None);
         line.width.as_f32()
     };
+    // A column holding an inline formula is at least as wide as the widest unbreakable word
+    // containing the formula (CMP-011 R14).
+    let shape_word = |text: &str, runs: &[TextRun], size: Pixels| -> f32 {
+        window
+            .text_system()
+            .shape_line(single_line(text), size, runs, None)
+            .width
+            .as_f32()
+    };
+    let scale = ctx.opts.math.scale();
     let mut content = vec![0f32; columns];
+    let mut words = vec![0f32; columns];
+    let mut visit = |c: usize, flat: &Flat, size: Pixels| {
+        content[c] = content[c].max(measure(flat, size));
+        words[c] = words[c].max(widest_formula_word(flat, size, scale, &shape_word));
+    };
     for (c, flat) in header_flat.iter().enumerate() {
-        content[c] = content[c].max(measure(flat, header_text.size));
+        visit(c, flat, header_text.size);
     }
     for row in &body_flat {
         for (c, flat) in row.iter().enumerate() {
-            content[c] = content[c].max(measure(flat, text.size));
+            visit(c, flat, text.size);
         }
     }
-    let geometry = TableGeometry::from_content(
+    for c in 0..columns {
+        content[c] = content[c].max(words[c]);
+    }
+    let geometry = TableGeometry::from_columns(
         &content,
+        &words,
         padding,
         metrics.md_table_min_column_content,
         metrics.md_table_min_column_width,
@@ -633,21 +799,21 @@ fn table(
         .read(cx)
         .clone();
 
-    let cell = |flat: Flat, c: usize, text: &TextCtx, row_elem: usize| -> AnyElement {
-        let align = aligns.get(c).copied().unwrap_or_default();
-        let mut cell_style = div()
-            .flex_basis(px(0.))
-            .min_w(px(geometry.floors[c]))
-            .p(px(padding))
-            .overflow_hidden();
-        cell_style = cell_style
-            .flex_grow(geometry.naturals[c])
-            .flex_shrink(geometry.naturals[c]);
-        let _ = row_elem;
-        cell_style
-            .child(text_element(ctx, flat, text, Some(align)))
-            .into_any_element()
-    };
+    let cell =
+        |flat: Flat, c: usize, text: &TextCtx, window: &mut Window, cx: &mut App| -> AnyElement {
+            let align = aligns.get(c).copied().unwrap_or_default();
+            let mut cell_style = div()
+                .flex_basis(px(0.))
+                .min_w(px(geometry.floors[c]))
+                .p(px(padding))
+                .overflow_hidden();
+            cell_style = cell_style
+                .flex_grow(geometry.naturals[c])
+                .flex_shrink(geometry.naturals[c]);
+            cell_style
+                .child(text_element(ctx, flat, text, Some(align), window, cx))
+                .into_any_element()
+        };
 
     let mut row_elements: Vec<AnyElement> = Vec::new();
     row_elements.push(
@@ -659,11 +825,11 @@ fn table(
                 header_flat
                     .into_iter()
                     .enumerate()
-                    .map(|(c, flat)| cell(flat, c, &header_text, 0)),
+                    .map(|(c, flat)| cell(flat, c, &header_text, window, cx)),
             )
             .into_any_element(),
     );
-    for (r, row) in body_flat.into_iter().enumerate() {
+    for row in body_flat {
         row_elements.push(
             div()
                 .flex()
@@ -674,7 +840,7 @@ fn table(
                 .children(
                     row.into_iter()
                         .enumerate()
-                        .map(|(c, flat)| cell(flat, c, text, r + 1)),
+                        .map(|(c, flat)| cell(flat, c, text, window, cx)),
                 )
                 .into_any_element(),
         );

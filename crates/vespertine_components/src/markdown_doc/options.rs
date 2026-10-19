@@ -4,6 +4,7 @@ use super::cache::FlattenCache;
 use super::flatten::StreamingFade;
 use super::tree::{ImageInfo, TaskMarker};
 use crate::code::{CardAction, CodeScrollState};
+use crate::math::MathStyle;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,26 +23,7 @@ pub struct TaskOptions {
     pub on_toggle: Option<Rc<dyn Fn(&TaskMarker, &mut Window, &mut App)>>,
 }
 
-/// What a diagram handler returns for a mermaid fence (CMP-013 R1).
-pub enum DiagramView {
-    /// The ordinary source fence (no diagram available yet).
-    Source,
-    /// The source fence flagged with a failure reason.
-    Failed(SharedString),
-    /// A rendered diagram.
-    Diagram {
-        /// The diagram element.
-        body: AnyElement,
-        /// Show the source instead of the diagram.
-        show_source: bool,
-        /// Toggles between source and diagram.
-        toggle: Rc<dyn Fn(&mut Window, &mut App)>,
-    },
-}
-
-/// Diagram handler: source text, frame identifier `<row key>-mermaid-<block index>` and theme.
-pub type DiagramHandler =
-    Rc<dyn Fn(&str, &str, &DocumentTheme, &mut Window, &mut App) -> DiagramView>;
+pub use crate::diagram::{DiagramHandler, DiagramView};
 
 /// Image resolver: the image, a stable element key and the theme; `None` declines (the label
 /// link is shown instead).
@@ -99,6 +81,8 @@ pub struct MarkdownOptions {
     pub media: MediaOptions,
     /// Code block controls.
     pub code: CodeOptions,
+    /// Formula settings (CMP-012 style): enabled, face and size percentage.
+    pub math: MathStyle,
     /// Whether the display tree (hanging syntax repaired) is shown instead of the canonical one.
     pub streaming: bool,
     /// Whether the document takes part in selection (links and search keep working when off).
@@ -120,6 +104,7 @@ impl Default for MarkdownOptions {
             task: None,
             media: MediaOptions::default(),
             code: CodeOptions::default(),
+            math: MathStyle::new(),
             streaming: false,
             selectable: true,
             fade: None,
