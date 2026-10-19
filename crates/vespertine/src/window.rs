@@ -1188,6 +1188,8 @@ impl PaintIndex {
                 + to.input_handlers_index,
             cursor_styles_index: self.cursor_styles_index - from.cursor_styles_index
                 + to.cursor_styles_index,
+            present_callbacks_index: self.present_callbacks_index - from.present_callbacks_index
+                + to.present_callbacks_index,
             accessed_element_states_index: self.accessed_element_states_index
                 - from.accessed_element_states_index
                 + to.accessed_element_states_index,
