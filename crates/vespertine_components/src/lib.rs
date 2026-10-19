@@ -14,5 +14,5 @@ pub mod chart;
 pub mod floating;
 pub mod media;
 pub mod status;
-pub mod tokens;
 pub mod terminal;
+pub mod tokens;
