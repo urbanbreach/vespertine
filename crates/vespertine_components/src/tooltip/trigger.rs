@@ -54,7 +54,7 @@ impl TooltipTrigger {
     ) -> Self {
         let focus = cx.focus_handle();
         let text = text.into();
-        let focus_in = cx.on_focus_in(&focus, window, |this, window, cx| {
+        let focus_in = cx.on_focus_in(&focus, window, |_, window, cx| {
             // Only keyboard modality opens (R3): a mouse press that focuses the trigger does not.
             // Focus listeners run while the frame is finishing: a change they make draws only
             // when it is applied after it.
