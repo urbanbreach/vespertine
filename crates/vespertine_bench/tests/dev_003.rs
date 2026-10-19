@@ -76,8 +76,11 @@ impl Driver for Alternating {
         let model = &self.model;
         let (burn, allocations) = (self.burn_milliseconds, self.allocations);
         stage.mutate(|app| {
-            let spin_until = std::time::Instant::now() + std::time::Duration::from_millis(burn);
-            while std::time::Instant::now() < spin_until {
+            // Burn `burn` ms of this thread's CPU time (wall time may pass faster on a loaded
+            // machine).
+            let start = vespertine_bench::metrics::thread_cpu_ns().unwrap_or(0);
+            while vespertine_bench::metrics::thread_cpu_ns().unwrap_or(0) - start < burn * 1_000_000
+            {
                 std::hint::black_box(0u64);
             }
             model.update(app, |counter, cx| {
@@ -327,6 +330,57 @@ fn dev_003_a2_different_atlas_placement_is_tolerated() {
         &options(2, 10),
     );
     assert!(report.passed(), "{:?}", report.mismatch);
+}
+
+#[test]
+fn dev_003_a2_accessibility_tree_and_pixel_checks_join_the_comparison_when_requested() {
+    let _serial = serial();
+    let quotes = workload("quotes-sparse");
+    let report = lockstep(
+        &quotes,
+        &LockstepOptions {
+            accessibility: true,
+            ..LockstepOptions::default()
+        },
+        &options(1, 5),
+    );
+    assert!(report.passed(), "{:?}", report.mismatch);
+    assert_eq!(report.checks.last(), Some(&"accessibility tree"));
+
+    // The GPU-rendered pixels need a GPU test backend; without one the check is skipped, never
+    // passed.
+    if !matches!(
+        vespertine_platform::current_headless_renderer(),
+        Ok(Some(_))
+    ) {
+        eprintln!("skipping the pixel comparison: no GPU test backend on this machine");
+        return;
+    }
+    let pixels = |fault: Option<FaultPlan>| {
+        // Only the pixel check, so that a difference can only be seen through it.
+        Lockstep::empty()
+            .run(
+                &text(),
+                &quotes,
+                &LockstepOptions {
+                    pixels: true,
+                    fault,
+                    ..LockstepOptions::default()
+                },
+                &options(1, 5),
+            )
+            .unwrap()
+    };
+    let clean = pixels(None);
+    assert!(clean.passed(), "{:?}", clean.mismatch);
+    assert_eq!(clean.checks, ["pixels"]);
+    for kind in FaultKind::ALL {
+        let faulty = pixels(Some(FaultPlan { frame: 3, kind }));
+        let mismatch = faulty
+            .mismatch
+            .unwrap_or_else(|| panic!("a one-pixel {kind:?} fault must change pixels"));
+        assert_eq!((mismatch.frame, mismatch.check), (3, "pixels"), "{kind:?}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

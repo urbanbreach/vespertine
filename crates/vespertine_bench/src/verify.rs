@@ -317,6 +317,11 @@ impl Lockstep {
         }
     }
 
+    /// No built-in checks: only what [`Self::with_check`] and the options add.
+    pub fn empty() -> Self {
+        Self { checks: Vec::new() }
+    }
+
     /// Adds a check (accessibility, pixels, or anything else that implements [`FrameCheck`]).
     pub fn with_check(mut self, check: Box<dyn FrameCheck>) -> Self {
         self.checks.push(check);
