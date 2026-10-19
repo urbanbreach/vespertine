@@ -6,7 +6,8 @@
 # (.worktrees/_land, so consecutive lands build incrementally in the same path), fast-forwards main
 # in the main checkout and prints the landed commit.
 #
-# `--dry-run` does everything except the final fast-forward of main (for testing this script).
+# `--dry-run` does everything except the final fast-forward of main (for testing this script);
+# `VSP_LAND_LOCK` and `VSP_LAND_WORKTREE` override the lock file and integration worktree for such tests.
 set -euo pipefail
 
 dry_run=0
@@ -17,8 +18,8 @@ case "${1:-}" in
 esac
 
 MAIN_CHECKOUT="$HOME/Projects/vespertine"
-LAND_WORKTREE="$MAIN_CHECKOUT/.worktrees/_land"
-LOCK_FILE="$MAIN_CHECKOUT/.git/vespertine-land.lock"
+LAND_WORKTREE="${VSP_LAND_WORKTREE:-$MAIN_CHECKOUT/.worktrees/_land}"
+LOCK_FILE="${VSP_LAND_LOCK:-$MAIN_CHECKOUT/.git/vespertine-land.lock}"
 
 export RUSTC_WRAPPER="$HOME/Projects/vespertine-cleanroom/tools/bin/sccache"
 export SCCACHE_DIR="$HOME/Projects/vespertine-cleanroom/tools/sccache-cache"
