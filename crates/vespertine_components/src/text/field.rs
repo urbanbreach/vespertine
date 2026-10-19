@@ -17,7 +17,8 @@ use vespertine::{
     IntoElement, KeyDownEvent, KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, Point, Render, Role, ScrollWheelEvent, ShapedLine,
     SharedString, StatefulInteractiveElement, Style, Styled, Task, TextAlign, TextRun,
-    UTF16Selection, UnderlineStyle, Window, div, fill, point, px, relative, size,
+    UTF16Selection, UnderlineStyle, Window, div, fill, point, prelude::FluentBuilder, px, relative,
+    size,
 };
 
 /// Events of a [`TextField`] (CMP-007 R22).
@@ -77,6 +78,7 @@ pub struct TextField {
     disabled: bool,
     tab_stop: bool,
     role: Role,
+    accessible_label: Option<SharedString>,
     metrics: TextMetrics,
     theme: Option<FieldTheme>,
     font: Option<Font>,
@@ -134,6 +136,7 @@ impl TextField {
             disabled: false,
             tab_stop: true,
             role: Role::TextInput,
+            accessible_label: None,
             metrics: TextMetrics::default(),
             theme: None,
             font: None,
@@ -197,6 +200,13 @@ impl TextField {
     /// Sets the accessibility role (default text input).
     pub fn accessibility_role(mut self, role: Role) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Sets the accessible label announced for the input node (a text field is otherwise
+    /// unlabelled); a picker or dialog labels its field with the name of its purpose.
+    pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessible_label = Some(label.into());
         self
     }
 
@@ -416,6 +426,12 @@ impl TextField {
         if disabled {
             self.end_drag();
         }
+        cx.notify();
+    }
+
+    /// Sets or clears the accessible label of the input node.
+    pub fn set_accessible_label(&mut self, label: Option<SharedString>, cx: &mut Context<Self>) {
+        self.accessible_label = label;
         cx.notify();
     }
 
@@ -1184,6 +1200,9 @@ impl Render for TextField {
             .line_height(self.metrics.line_height)
             .text_color(if disabled { theme.muted } else { theme.text })
             .role(self.role)
+            .when_some(self.accessible_label.clone(), |root, label| {
+                root.aria_label(label)
+            })
             .aria_value(SharedString::from(self.core.text().to_owned()))
             .aria_placeholder(self.placeholder.clone())
             .aria_read_only(self.core.is_read_only())

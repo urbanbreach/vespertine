@@ -759,6 +759,18 @@ fn vertical_centering_theme_roles_and_accessibility() {
 }
 
 #[test]
+fn accessible_label_is_exposed_on_the_input_node() {
+    require_backend!();
+    let mut fx = fixture(300.0, |field| field.accessible_label("Rename file"));
+    let tree = fx.host.accessibility_tree().unwrap().unwrap().to_string();
+    assert!(tree.contains("Rename file"), "{tree}");
+    fx.with(|field, _, cx| field.set_accessible_label(None, cx));
+    fx.host.flush();
+    let tree = fx.host.accessibility_tree().unwrap().unwrap().to_string();
+    assert!(!tree.contains("Rename file"), "{tree}");
+}
+
+#[test]
 fn r25_a_press_on_an_embedded_control_leaves_caret_and_selection_alone() {
     require_backend!();
     let mut fx = fixture(300.0, |field| {
