@@ -584,7 +584,7 @@ fn request_layout_view(
             }
             _ if !tracking => {
                 let mut element = render(window, cx);
-                window.retention.views.stats.views_rendered += 1;
+                window.frame_stats_mut().views_built += 1;
                 let layout_id = element.request_layout(window, cx);
                 (layout_id, ViewState(ViewStateInner::Plain(Some(element))))
             }
@@ -707,7 +707,7 @@ fn build_view(
     window.begin_layout_owner();
     window.retention.layout_state_sink.push(Vec::new());
     let mut element = render(window, cx);
-    window.retention.views.stats.views_rendered += 1;
+    window.frame_stats_mut().views_built += 1;
     let layout_id = element.request_layout(window, cx);
     let layout_states = window.retention.layout_state_sink.pop().unwrap_or_default();
     let owned = window.end_layout_owner();
@@ -777,7 +777,7 @@ fn splice_layout(window: &mut Window, cx: &mut App, key: ViewKey) -> Option<Vec<
     if window.layout_write_count() != writes_before {
         // A child changed what its parent's layout depends on: the parent is
         // built again and adopts the children built here.
-        window.retention.views.stats.splice_failures += 1;
+        window.frame_stats_mut().splice_failures += 1;
         for child in built {
             if let Some(element) = child.element {
                 window
@@ -826,7 +826,7 @@ fn prepaint_view(
             ViewStateInner::Plain(None) => {
                 // A cached view drawn without retention: build it here.
                 let mut element = render(window, cx);
-                window.retention.views.stats.views_rendered += 1;
+                window.frame_stats_mut().views_built += 1;
                 element.layout_as_root(Size::<AvailableSpace>::from(bounds.size), window, cx);
                 element.prepaint_at(bounds.origin, window, cx);
                 ViewState(ViewStateInner::Plain(Some(element)))
@@ -892,7 +892,7 @@ fn prepaint_view(
                     if kind == ViewKind::Cached {
                         window.touch_layout_subtree(key);
                     }
-                    window.retention.views.stats.views_reused += 1;
+                    window.frame_stats_mut().views_reused += 1;
                     return ViewState(ViewStateInner::Tracked {
                         key,
                         element: None,
@@ -907,8 +907,8 @@ fn prepaint_view(
                         .is_some_and(|record| !record.dirty && record.prepaint.is_some());
                     if spliceable {
                         prepaint_spliced(window, cx, key, &mut splice);
-                        window.retention.views.stats.splice_successes += 1;
-                        window.retention.views.stats.views_reused += 1;
+                        window.frame_stats_mut().views_spliced += 1;
+                        window.frame_stats_mut().views_reused += 1;
                         return ViewState(ViewStateInner::Tracked {
                             key,
                             element: None,
@@ -921,7 +921,7 @@ fn prepaint_view(
                     // inputs changed): it is built again below, and adopts the
                     // children that were built for the splice instead of rendering
                     // them a second time.
-                    window.retention.views.stats.splice_failures += 1;
+                    window.frame_stats_mut().splice_failures += 1;
                     for child in splice {
                         if let Some(element) = child.element {
                             window
@@ -948,7 +948,7 @@ fn prepaint_view(
                 window.begin_layout_owner();
                 let start = window.prepaint_index();
                 let mut element = render(window, cx);
-                window.retention.views.stats.views_rendered += 1;
+                window.frame_stats_mut().views_built += 1;
                 if let Some(layout_key) = layout_key {
                     // Request layout again in place: the view claims the very nodes the
                     // enclosing layout already computed, so nothing is laid out again

@@ -80,6 +80,7 @@
 //!
 //! With the `test-support` feature, `Window::set_retention_enabled`
 //! turns retention off for one window (every frame constructs every view), and
-//! `Window::retention_stats` reports the views rendered,
-//! views reused and splice successes and failures since the last reset. The environment
+//! `Window::frame_stats` (DEV-003) reports the views built,
+//! views reused and views spliced, with the other frame statistics, since the last
+//! `Window::reset_frame_stats`. The environment
 //! variable `VESPERTINE_DISABLE_RETENTION=1` disables retention for the whole process.

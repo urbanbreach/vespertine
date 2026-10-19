@@ -37,13 +37,13 @@ fn draw(cx: &mut TestAppContext, window: AnyWindowHandle) {
         .unwrap();
 }
 
-fn stats(cx: &mut TestAppContext, window: AnyWindowHandle) -> crate::RetentionStats {
-    cx.update_window(window, |_, window, _| window.retention_stats())
+fn stats(cx: &mut TestAppContext, window: AnyWindowHandle) -> crate::FrameStats {
+    cx.update_window(window, |_, window, _| window.frame_stats())
         .unwrap()
 }
 
 fn reset(cx: &mut TestAppContext, window: AnyWindowHandle) {
-    cx.update_window(window, |_, window, _| window.reset_retention_stats())
+    cx.update_window(window, |_, window, _| window.reset_frame_stats())
         .unwrap();
 }
 
@@ -57,7 +57,7 @@ fn unchanged_window_builds_no_views(cx: &mut TestAppContext) {
     reset(cx, window);
     draw(cx, window);
     let s = stats(cx, window);
-    assert_eq!(s.views_rendered, 0, "{s:?}");
+    assert_eq!(s.views_built, 0, "{s:?}");
     assert!(s.views_reused >= 1, "{s:?}");
 }
 
@@ -78,7 +78,7 @@ fn notified_panel_is_the_only_one_built(cx: &mut TestAppContext) {
     });
     draw(cx, window);
     let s = stats(cx, window);
-    assert_eq!(s.views_rendered, 1, "{s:?}");
+    assert_eq!(s.views_built, 1, "{s:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -351,13 +351,13 @@ fn forced_reconstruction(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
     })
     .unwrap();
-    assert_eq!(stats(cx, window).views_rendered, 5, "refresh rebuilds all");
+    assert_eq!(stats(cx, window).views_built, 5, "refresh rebuilds all");
 
     draw(cx, window);
     reset(cx, window);
     cx.simulate_window_resize(window, crate::size(px(300.), px(200.)));
     draw(cx, window);
-    assert_eq!(stats(cx, window).views_rendered, 5, "resize rebuilds all");
+    assert_eq!(stats(cx, window).views_built, 5, "resize rebuilds all");
 
     draw(cx, window);
     cx.update_window(window, |_, window, _| window.set_retention_enabled(false))
@@ -367,18 +367,14 @@ fn forced_reconstruction(cx: &mut TestAppContext) {
     }
     reset(cx, window);
     draw(cx, window);
-    assert_eq!(
-        stats(cx, window).views_rendered,
-        5,
-        "disabled: always rebuild"
-    );
+    assert_eq!(stats(cx, window).views_built, 5, "disabled: always rebuild");
     cx.update_window(window, |_, window, _| window.set_retention_enabled(true))
         .unwrap();
     draw(cx, window);
     draw(cx, window);
     reset(cx, window);
     draw(cx, window);
-    assert_eq!(stats(cx, window).views_rendered, 0);
+    assert_eq!(stats(cx, window).views_built, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +494,7 @@ fn retained_and_full_windows_agree(cx: &mut TestAppContext) {
     for step in 0..120 {
         for window in [retained, full] {
             cx.update_window(window, |_, window, _| {
-                window.reset_retention_stats();
+                window.reset_frame_stats();
                 window.reset_layout_stats();
             })
             .unwrap();
@@ -588,7 +584,7 @@ fn retained_and_full_windows_agree(cx: &mut TestAppContext) {
                 .update_window(window, |_, window, _| window.layout_stats())
                 .unwrap();
             let views = cx
-                .update_window(window, |_, window, _| window.retention_stats())
+                .update_window(window, |_, window, _| window.frame_stats())
                 .unwrap();
             log.push(format!(
                 " {name}: created {} reused {} writes {}/{}/{} computed {} skipped {} rendered {} reused {}",
@@ -599,7 +595,7 @@ fn retained_and_full_windows_agree(cx: &mut TestAppContext) {
                 layout.measure_writes,
                 layout.computed_layouts,
                 layout.skipped_layouts,
-                views.views_rendered,
+                views.views_built,
                 views.views_reused
             ));
         }
@@ -699,7 +695,7 @@ fn failed_splice_adopts_the_child_instead_of_rendering_it_twice(cx: &mut TestApp
     // The window is stable again afterwards.
     reset(cx, window);
     draw(cx, window);
-    assert_eq!(stats(cx, window).views_rendered, 0);
+    assert_eq!(stats(cx, window).views_built, 0);
 }
 
 struct Spacer {
@@ -844,7 +840,7 @@ fn nested_views_replay_correctly_over_consecutive_frames(cx: &mut TestAppContext
         draw(cx, full);
         let s = stats(cx, retained);
         assert_eq!(
-            s.views_rendered, 1,
+            s.views_built, 1,
             "step {step}: only the leaf renders: {s:?}"
         );
         assert!(s.views_reused >= 1, "step {step}: {s:?}");
@@ -878,7 +874,7 @@ fn active_drag_and_first_accessibility_frame_rebuild_every_view(cx: &mut TestApp
     reset(cx, window);
     draw(cx, window);
     assert_eq!(
-        stats(cx, window).views_rendered,
+        stats(cx, window).views_built,
         6,
         "an active drag rebuilds all four panels, the dashboard and renders the dragged view"
     );
@@ -891,14 +887,14 @@ fn active_drag_and_first_accessibility_frame_rebuild_every_view(cx: &mut TestApp
     reset(cx, window);
     draw(cx, window);
     assert_eq!(
-        stats(cx, window).views_rendered,
+        stats(cx, window).views_built,
         5,
         "the first frame after accessibility activation rebuilds all"
     );
     reset(cx, window);
     draw(cx, window);
     assert_eq!(
-        stats(cx, window).views_rendered,
+        stats(cx, window).views_built,
         0,
         "views are replayed again while accessibility is active: they contribute their logged \
          accessibility operations (A11Y-002)"
@@ -911,7 +907,7 @@ fn active_drag_and_first_accessibility_frame_rebuild_every_view(cx: &mut TestApp
     reset(cx, window);
     draw(cx, window);
     assert_eq!(
-        stats(cx, window).views_rendered,
+        stats(cx, window).views_built,
         0,
         "frames are retained again once accessibility is inactive"
     );
@@ -1091,7 +1087,7 @@ fn input_queries_invalidate_only_when_they_notify(cx: &mut TestAppContext) {
         baseline,
         "queries alone do not invalidate readers"
     );
-    assert_eq!(stats(cx, window).views_rendered, 0);
+    assert_eq!(stats(cx, window).views_built, 0);
 
     notify_on_query.set(true);
     query(cx);

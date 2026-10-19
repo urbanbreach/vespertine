@@ -76,7 +76,7 @@ pub(crate) mod read_tracker;
 pub(crate) mod retained;
 #[cfg(test)]
 mod retained_tests;
-pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames_disabled};
+pub use retained::{retained_frames_disabled, set_retained_frames_disabled};
 mod composition;
 #[cfg(test)]
 mod glyph_blur_tests;
@@ -1511,6 +1511,8 @@ pub struct Window {
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
     pub(crate) a11y: A11y,
     pub(crate) retention: retained::RetentionState,
+    pub(crate) frame_stats: crate::FrameStats,
+    pub(crate) frame_timing: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2416,6 +2418,8 @@ impl Window {
                 initial_window_title,
             ),
             retention: retained::RetentionState::new(cx.entities.tracker.clone()),
+            frame_stats: crate::FrameStats::default(),
+            frame_timing: false,
         })
     }
 
@@ -3863,6 +3867,9 @@ impl Window {
         // This ensures that multiple test Apps have isolated arenas.
         let arena_scope = ElementArenaScope::enter(&cx.element_arena);
 
+        let frame_clock = self.phase_clock();
+        let shaping_before = self.text_system().shaping_totals();
+
         if self.platform_window.prepare_frame() {
             self.refresh();
         }
@@ -4019,6 +4026,13 @@ impl Window {
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
             self.debug_frame_overlay.record_frame(draw_duration);
         }
+
+        let shaping_after = self.text_system().shaping_totals();
+        let stats = self.frame_stats_mut();
+        stats.draws += 1;
+        stats.lines_shaped += shaping_after.0 - shaping_before.0;
+        stats.shaping_time += std::time::Duration::from_nanos(shaping_after.1 - shaping_before.1);
+        stats.frame_time += frame_clock.elapsed();
 
         // Exit the scope to obtain the arena-clear token this draw owes; the
         // scope's teardown itself happens in `ElementArenaScope::drop`.
@@ -4250,10 +4264,14 @@ impl Window {
         let scale_factor = self.scale_factor();
         #[cfg(feature = "profiler")]
         let request_layout_start = Instant::now();
+        let build_clock = self.phase_clock();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
+        self.frame_stats_mut().build_time += build_clock.elapsed();
         #[cfg(feature = "profiler")]
         let prepaint_start = Instant::now();
+        let prepaint_clock = self.phase_clock();
+        let layout_time_before_prepaint = self.frame_stats.layout_time;
         self.layout_engine
             .as_mut()
             .unwrap()
@@ -4300,9 +4318,15 @@ impl Window {
                 || active_drag_element.is_some();
         }
 
+        // Layout computation inside prepaint is accounted to `layout_time`, not twice.
+        let layout_in_prepaint = self.frame_stats.layout_time - layout_time_before_prepaint;
+        self.frame_stats_mut().prepaint_time +=
+            prepaint_clock.elapsed().saturating_sub(layout_in_prepaint);
+
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
         let paint_start = Instant::now();
+        let paint_clock = self.phase_clock();
         self.invalidator.set_phase(DrawPhase::Paint);
         self.begin_composition_paint();
         root_element.paint(self, cx);
@@ -4323,6 +4347,7 @@ impl Window {
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
+        self.frame_stats_mut().paint_time += paint_clock.elapsed();
 
         #[cfg(feature = "profiler")]
         self.window_profiler
@@ -6524,9 +6549,11 @@ impl Window {
     ) {
         self.invalidator.debug_assert_prepaint();
 
+        let layout_clock = self.phase_clock();
         let mut layout_engine = self.layout_engine.take().unwrap();
         layout_engine.compute_layout(layout_id, available_space, self, cx);
         self.layout_engine = Some(layout_engine);
+        self.frame_stats_mut().layout_time += layout_clock.elapsed();
     }
 
     /// Recomputes the layout of the subtree rooted at `layout_id` with that node's size fixed
@@ -6544,9 +6571,11 @@ impl Window {
     ) {
         self.invalidator.debug_assert_prepaint();
 
+        let layout_clock = self.phase_clock();
         let mut layout_engine = self.layout_engine.take().unwrap();
         layout_engine.relayout_subtree_in_place(layout_id, size, self, cx);
         self.layout_engine = Some(layout_engine);
+        self.frame_stats_mut().layout_time += layout_clock.elapsed();
     }
 
     /// Obtain the bounds computed for the given LayoutId relative to the window. This method will usually be invoked by

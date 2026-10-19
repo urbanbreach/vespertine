@@ -588,15 +588,16 @@ impl LineLayoutCache {
         if let Some(layout) = caches.recent_lookup(font_generation, text, font_size, runs) {
             return layout;
         }
-        let layout = match caches.numeric_layout(
-            self.platform_text_system.as_ref(),
-            font_generation,
-            text,
-            font_size,
-            runs,
-        ) {
-            NumericOutcome::Layout(layout) => layout,
-            NumericOutcome::Platform => match caches.append_layout(
+        let layout = caches.record_shaped(|| {
+            match caches.numeric_layout(
+                self.platform_text_system.as_ref(),
+                font_generation,
+                text,
+                font_size,
+                runs,
+            ) {
+                NumericOutcome::Layout(layout) => layout,
+                NumericOutcome::Platform => match caches.append_layout(
                 self.platform_text_system.as_ref(),
                 font_generation,
                 text,
@@ -615,7 +616,8 @@ impl LineLayoutCache {
                     layout
                 }
             },
-        };
+            }
+        });
         caches.recent_insert(font_generation, text, font_size, runs, &layout);
         layout
     }

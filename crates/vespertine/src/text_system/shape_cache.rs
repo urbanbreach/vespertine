@@ -67,6 +67,11 @@ pub(crate) struct ShapeCounters {
     pub(crate) appended_lines: AtomicU64,
     pub(crate) append_checks: AtomicU64,
     pub(crate) append_disabled: AtomicU64,
+    /// Lines that missed the frame cache and the recent-shape store and were shaped (platform
+    /// or numeric assembly), whichever way. Feeds `FrameStats::lines_shaped` (DEV-003).
+    pub(crate) shaped_lines: AtomicU64,
+    /// Wall time spent shaping those lines, recorded only while shaping timing is enabled.
+    pub(crate) shaping_nanos: AtomicU64,
 }
 
 impl ShapeCounters {
@@ -410,6 +415,7 @@ pub(crate) struct ShapeCaches {
     append: Mutex<AppendState>,
     pub(crate) counters: ShapeCounters,
     numeric_enabled: std::sync::atomic::AtomicBool,
+    timing_enabled: std::sync::atomic::AtomicBool,
 }
 
 impl Default for ShapeCaches {
@@ -420,11 +426,40 @@ impl Default for ShapeCaches {
             append: Mutex::default(),
             counters: ShapeCounters::default(),
             numeric_enabled: std::sync::atomic::AtomicBool::new(true),
+            timing_enabled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
 
 impl ShapeCaches {
+    /// Enables or disables timing of shaped lines (off by default).
+    pub(crate) fn set_timing_enabled(&self, enabled: bool) {
+        self.timing_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Lines shaped and nanoseconds spent shaping them since this text system was created.
+    pub(crate) fn shaping_totals(&self) -> (u64, u64) {
+        (
+            self.counters.shaped_lines.load(Ordering::Relaxed),
+            self.counters.shaping_nanos.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Counts one shaped line and, when timing is enabled, the time `shape` took.
+    pub(crate) fn record_shaped<R>(&self, shape: impl FnOnce() -> R) -> R {
+        ShapeCounters::bump(&self.counters.shaped_lines);
+        if !self.timing_enabled.load(Ordering::Relaxed) {
+            return shape();
+        }
+        let start = std::time::Instant::now();
+        let result = shape();
+        let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.counters
+            .shaping_nanos
+            .fetch_add(nanos, Ordering::Relaxed);
+        result
+    }
+
     /// Looks a line up in the recent-shape store. `font_generation` is the generation the caller
     /// observed before looking.
     pub(crate) fn recent_lookup(

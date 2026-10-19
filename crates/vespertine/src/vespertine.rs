@@ -33,6 +33,8 @@ mod elements;
 mod executor;
 mod floating;
 pub mod focus_restore;
+mod frame_stats;
+pub use frame_stats::FrameStats;
 mod host_surface;
 mod host_text;
 mod platform_scheduler;

@@ -309,6 +309,17 @@ impl TextSystem {
         self.shape_caches.stats()
     }
 
+    /// Lines shaped and nanoseconds spent shaping since this text system was created
+    /// (`FrameStats` accounting, DEV-003).
+    pub(crate) fn shaping_totals(&self) -> (u64, u64) {
+        self.shape_caches.shaping_totals()
+    }
+
+    /// Enables or disables timing of shaped lines; shared by every window of this text system.
+    pub(crate) fn set_shaping_timing(&self, enabled: bool) {
+        self.shape_caches.set_timing_enabled(enabled);
+    }
+
     /// Enables or disables numeric shaping (PRF-013). Test support only.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_numeric_shaping_enabled(&self, enabled: bool) {

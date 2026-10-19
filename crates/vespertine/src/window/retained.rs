@@ -122,19 +122,6 @@ enum Slot {
     Free { generation: u32 },
 }
 
-/// Counters for tests and benchmarks (DEV-003).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct RetentionStats {
-    /// Views whose render ran.
-    pub views_rendered: u64,
-    /// Views whose output was replayed instead of rebuilt.
-    pub views_reused: u64,
-    /// Parents replayed around freshly rebuilt children.
-    pub splice_successes: u64,
-    /// Splice attempts that fell back to full reconstruction.
-    pub splice_failures: u64,
-}
-
 #[derive(Default)]
 pub(crate) struct RetainedViews {
     slots: Vec<Slot>,
@@ -148,7 +135,6 @@ pub(crate) struct RetainedViews {
     modifier_readers: FxHashSet<ViewKey>,
     capslock_readers: FxHashSet<ViewKey>,
     pub frame_epoch: u64,
-    pub stats: RetentionStats,
 }
 
 /// Inputs that changed since the preceding frame.
@@ -664,7 +650,6 @@ impl RetainedViews {
     pub fn clear(&mut self) {
         *self = Self {
             frame_epoch: self.frame_epoch,
-            stats: self.stats,
             ..Self::default()
         };
     }
@@ -869,18 +854,6 @@ impl Window {
     #[cfg(any(test, feature = "test-support"))]
     pub fn retention_enabled(&self) -> bool {
         !self.retention.window_disabled
-    }
-
-    /// Counters of retained-frame activity since the last reset.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn retention_stats(&self) -> RetentionStats {
-        self.retention.views.stats
-    }
-
-    /// Resets the retained-frame counters.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn reset_retention_stats(&mut self) {
-        self.retention.views.stats = RetentionStats::default();
     }
 
     /// Captures the ambient state of the view being built.
