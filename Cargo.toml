@@ -49,6 +49,7 @@ edition = "2024"
 accesskit_macos = "0.26.0"
 accesskit_unix = "0.22"
 accesskit_windows = "0.34"
+alacritty_terminal = { version = "0.26.0", default-features = false }
 anyhow = "1.0.86"
 async-fs = "2.1"
 async-task = "4.7"
@@ -620,6 +621,9 @@ path = "crates/vespertine_shared_string"
 
 [workspace.dependencies.vespertine_sum_tree]
 path = "crates/vespertine_sum_tree"
+
+[workspace.dependencies.vespertine_test_host]
+path = "crates/vespertine_test_host"
 
 [workspace.dependencies.vespertine_theme]
 path = "crates/vespertine_theme"

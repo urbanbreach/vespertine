@@ -13,3 +13,4 @@ pub mod floating;
 pub mod media;
 pub mod status;
 pub mod tokens;
+pub mod terminal;

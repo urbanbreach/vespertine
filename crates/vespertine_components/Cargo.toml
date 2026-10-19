@@ -14,6 +14,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+accesskit.workspace = true
 vespertine.workspace = true
 vespertine_theme.workspace = true
 vespertine_webview.workspace = true
@@ -22,6 +23,7 @@ image.workspace = true
 unicode-segmentation.workspace = true
 url.workspace = true
 usvg.workspace = true
+alacritty_terminal.workspace = true
 
 [dev-dependencies]
 image.workspace = true
@@ -48,3 +50,7 @@ path = "examples/audio_activity.rs"
 [[example]]
 name = "media_viewer"
 path = "examples/media_viewer.rs"
+
+[[example]]
+name = "terminal_surface"
+path = "examples/terminal_surface.rs"
