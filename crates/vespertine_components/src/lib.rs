@@ -23,4 +23,7 @@ pub mod scroll;
 pub mod status;
 pub mod streaming;
 pub mod terminal;
+pub mod picker;
+pub mod select;
 pub mod tokens;
+pub mod tooltip;
