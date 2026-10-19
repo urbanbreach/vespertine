@@ -934,7 +934,11 @@ mod tests {
             self.cx
                 .executor()
                 .advance_clock(Duration::from_millis(millis));
-            self.vcx.update(|window, cx| window.draw(cx).clear(cx));
+            self.vcx.update(|window, cx| {
+                // Deliver the frame the panes asked for, as the platform loop would.
+                window.simulate_next_frame(cx);
+                window.draw(cx).clear(cx)
+            });
         }
 
         fn settle(&mut self) {

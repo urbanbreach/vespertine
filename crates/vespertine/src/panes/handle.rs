@@ -4,10 +4,9 @@ use std::{cell::Cell, rc::Rc};
 
 use super::fit::{PaneLimits, PaneSide};
 use crate::{
-    App, AvailableSpace, Bounds, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId,
-    Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Size, Style, Styled,
-    Window, div, point, px, relative, size,
+    App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox,
+    HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Size, Style, Window, point, px, relative, size,
 };
 
 /// Width of a horizontal seam's hitbox, centered on the seam.
@@ -48,48 +47,6 @@ pub fn seam_bounds(
 }
 
 type SizeCallback = Rc<dyn Fn(Pixels, &mut Window, &mut App)>;
-
-/// Adapter for stable pointer capture while a seam is dragged.
-///
-/// INP-001 will provide declarative element capture. Until then a drag is
-/// held by (1) capture-phase window listeners that stop propagation, (2) the
-/// window's hitbox capture, re-bound to the seam's current hitbox every frame
-/// and released by the window after mouse-up, and (3) a deferred full-window
-/// occluding hitbox so other content never reports hovered. Replace this
-/// type's methods to move to the declarative capture.
-struct PointerCapture;
-
-impl PointerCapture {
-    fn begin(window: &mut Window, hitbox: &Hitbox) {
-        window.capture_pointer(hitbox.id);
-    }
-
-    fn rebind(window: &mut Window, hitbox: &Hitbox) {
-        window.capture_pointer(hitbox.id);
-    }
-
-    fn end(window: &mut Window) {
-        window.release_pointer();
-    }
-
-    fn shield(window: &mut Window, cx: &mut App) {
-        let viewport = window.viewport_size();
-        let mut shield = div()
-            .w(viewport.width)
-            .h(viewport.height)
-            .occlude()
-            .into_any_element();
-        shield.layout_as_root(
-            size(
-                AvailableSpace::Definite(viewport.width),
-                AvailableSpace::Definite(viewport.height),
-            ),
-            window,
-            cx,
-        );
-        window.defer_draw(shield, Point::default(), usize::MAX, None);
-    }
-}
 
 /// A draggable seam. The handle's own bounds are its hitbox: it consumes
 /// pointer events inside them and nowhere else.
@@ -231,7 +188,7 @@ impl Element for ResizeHandle {
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> Self::PrepaintState {
         let dragging =
             window.with_element_state(id.unwrap(), |state: Option<Rc<Cell<bool>>>, _| {
@@ -239,15 +196,14 @@ impl Element for ResizeHandle {
                 (state.clone(), state)
             });
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::BlockMouse);
-        if dragging.get() {
-            PointerCapture::shield(window, cx);
-        }
+        // An active drag follows this seam's identity (INP-001), not a frame-local hitbox id.
+        window.rebind_captured_element(id.unwrap(), hitbox.id);
         ResizeHandlePrepaint { hitbox, dragging }
     }
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
@@ -257,6 +213,7 @@ impl Element for ResizeHandle {
     ) {
         let hitbox = prepaint.hitbox.clone();
         let dragging = prepaint.dragging.clone();
+        let element_id = id.expect("resize handles have ids").clone();
         let side = self.side;
         let limits = self.limits;
         let default = limits.clamp(self.default_size);
@@ -294,7 +251,7 @@ impl Element for ResizeHandle {
                     }
                 } else {
                     dragging.set(true);
-                    PointerCapture::begin(window, &hitbox);
+                    window.capture_pointer_for_element(&element_id, hitbox.id);
                 }
                 window.refresh();
             }
@@ -303,8 +260,6 @@ impl Element for ResizeHandle {
         if !dragging.get() {
             return;
         }
-        PointerCapture::rebind(window, &hitbox);
-
         window.on_mouse_event({
             let dragging = dragging.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
@@ -314,7 +269,7 @@ impl Element for ResizeHandle {
                 if event.pressed_button != Some(MouseButton::Left) {
                     // The release was lost (for example outside the window).
                     dragging.set(false);
-                    PointerCapture::end(window);
+                    window.release_pointer();
                     window.refresh();
                     return;
                 }

@@ -1,16 +1,16 @@
 //! Retained pane-group state, its events and the per-frame metrics exposed to
 //! children (LAY-004 R1, R6, R7).
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
-use super::{
-    fit::{
-        MAIN_MIN_WIDTH, PaneDescriptor, PaneEntry, PaneFit, PaneId, PaneLimits, PaneSide,
-        PaneState, fit,
-    },
-    motion::RetargetableTransition,
+use super::fit::{
+    MAIN_MIN_WIDTH, PaneDescriptor, PaneEntry, PaneFit, PaneId, PaneLimits, PaneSide, PaneState,
+    fit,
 };
-use crate::{Bounds, Context, EventEmitter, Pixels, Size};
+use crate::{
+    Bounds, Context, EventEmitter, Pixels, Size,
+    motion::{MotionDescription, MotionProps, MotionTrack, MotionTransition},
+};
 
 /// Changes to a [`PaneGroupState`], emitted for every change however it was
 /// made (seam drag, seam reset or a direct call) so callers can persist them.
@@ -126,10 +126,64 @@ impl PaneMetrics {
     }
 }
 
+/// A size animated by an ANM-002 motion track: retargets from the visible value, snaps by
+/// starting a fresh track at the new value.
+pub(super) struct SizeTrack {
+    track: MotionTrack,
+    target: f32,
+}
+
+impl SizeTrack {
+    pub fn at_rest(value: f32, transition: &MotionTransition, now: Duration) -> Self {
+        let mut track = Self {
+            track: MotionTrack::new(),
+            target: value,
+        };
+        track.update(value, transition, now);
+        track
+    }
+
+    fn update(&mut self, value: f32, transition: &MotionTransition, now: Duration) {
+        self.target = value;
+        let description = MotionDescription::new(MotionProps::new().width(f64::from(value)))
+            .transition(transition.clone());
+        self.track.update(&description, now);
+    }
+
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    /// Eases from the currently visible value to `value`.
+    pub fn retarget(&mut self, value: f32, transition: &MotionTransition, now: Duration) {
+        self.update(value, transition, now);
+    }
+
+    /// Jumps to `value` without animation.
+    pub fn snap(&mut self, value: f32, transition: &MotionTransition, now: Duration) {
+        self.track = MotionTrack::new();
+        self.update(value, transition, now);
+    }
+
+    /// The visible value and whether the track is still running.
+    pub fn sample(&mut self, now: Duration, reduced_motion: bool) -> (f32, bool) {
+        let sample = self.track.sample(now, reduced_motion);
+        (sample.style.width.unwrap_or(self.target), sample.active)
+    }
+
+    pub fn value(&mut self, now: Duration) -> f32 {
+        self.sample(now, false).0
+    }
+
+    pub fn is_active(&mut self, now: Duration) -> bool {
+        self.sample(now, false).1
+    }
+}
+
 /// Transition bookkeeping for one pane's slot.
 pub(super) struct PaneRuntime {
-    pub slot: RetargetableTransition,
-    pub content: RetargetableTransition,
+    pub slot: SizeTrack,
+    pub content: SizeTrack,
     /// Whether `content` holds a width the content was last laid out at (the
     /// slot has not rested at zero since).
     pub content_valid: bool,

@@ -673,7 +673,7 @@ fn slot_transition_uses_the_size_curve() {
     h.draw();
     h.advance(100);
     h.draw();
-    let expected = 256. * CubicBezier::new(0., 0., 0.58, 1.).ease(0.5);
+    let expected = 256. * crate::motion::presets::SIZE_CURVE.ease(0.5);
     assert!(near(h.slot("leading").size.width, expected));
     h.advance(100);
     h.draw();

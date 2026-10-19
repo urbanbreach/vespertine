@@ -7,13 +7,16 @@ use vespertine_refineable::Refineable as _;
 use super::{
     fit::{PaneEntry, PaneFit, PaneId, PaneSide, fit},
     handle::{ResizeHandle, seam_bounds},
-    motion::{CubicBezier, RetargetableTransition, SIZE_TRANSITION_DURATION},
-    state::{GroupRuntime, PaneFrame, PaneGroupState, PanePlacement, PaneRuntime, PaneSeam},
+    state::{
+        GroupRuntime, PaneFrame, PaneGroupState, PanePlacement, PaneRuntime, PaneSeam, SizeTrack,
+    },
 };
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, Element, ElementId, Entity,
     GlobalElementId, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, Pixels, Style,
-    StyleRefinement, Styled, Window, point, size,
+    StyleRefinement, Styled, Window,
+    motion::{self, MotionTransition, presets},
+    point, size,
 };
 
 /// Creates a pane group laid out from `state`.
@@ -35,8 +38,7 @@ pub struct PaneGroup {
     main: Option<AnyElement>,
     panes: Vec<(PaneId, AnyElement)>,
     seam_top_inset: Pixels,
-    duration: Duration,
-    curve: CubicBezier,
+    transition: MotionTransition,
 }
 
 impl PaneGroup {
@@ -49,8 +51,7 @@ impl PaneGroup {
             main: None,
             panes: Vec::new(),
             seam_top_inset: Pixels::ZERO,
-            duration: SIZE_TRANSITION_DURATION,
-            curve: CubicBezier::SIZE,
+            transition: presets::SIZE_TRANSITION.transition(),
         }
         .size_full()
     }
@@ -75,10 +76,10 @@ impl PaneGroup {
         self
     }
 
-    /// Replaces the slot transition (default 200 ms, cubic-bezier 0, 0, 0.58, 1).
-    pub fn slot_transition(mut self, duration: Duration, curve: CubicBezier) -> Self {
-        self.duration = duration;
-        self.curve = curve;
+    /// Replaces the slot transition (default: the 200 ms size transition of
+    /// ANM-002, cubic-bezier 0, 0, 0.58, 1).
+    pub fn slot_transition(mut self, transition: MotionTransition) -> Self {
+        self.transition = transition;
         self
     }
 }
@@ -127,10 +128,9 @@ fn advance_slots(
     entries: &[PaneEntry],
     fit: &PaneFit,
     viewport: crate::Size<Pixels>,
-    now: std::time::Instant,
+    now: Duration,
     reduce_motion: bool,
-    duration: Duration,
-    curve: CubicBezier,
+    transition: &MotionTransition,
 ) -> (Vec<SlotFrame>, bool) {
     let viewport_changed = runtime
         .viewport
@@ -152,47 +152,44 @@ fn advance_slots(
             .panes
             .entry(entry.descriptor.id.clone())
             .or_insert_with(|| PaneRuntime {
-                slot: RetargetableTransition::at_rest(target, now, duration, curve),
-                content: RetargetableTransition::at_rest(target, now, duration, curve),
+                slot: SizeTrack::at_rest(target, transition, now),
+                content: SizeTrack::at_rest(target, transition, now),
                 content_valid: target > 0.0,
                 last_open: open,
                 last_adjustment: entry.state.adjustment,
             });
-        rt.slot.set_timing(duration, curve);
-        rt.content.set_timing(duration, curve);
-
         let flag_changed = rt.last_open != open;
         let snap = reduce_motion || ((viewport_changed || any_direct) && !flag_changed);
         if target != rt.slot.target() {
             if snap {
-                rt.slot.snap(now, target);
+                rt.slot.snap(target, transition, now);
                 rt.content_valid = target > 0.0;
                 if target > 0.0 {
-                    rt.content.snap(now, target);
+                    rt.content.snap(target, transition, now);
                 }
             } else {
                 if target > 0.0 {
                     if rt.content_valid {
-                        rt.content.retarget(now, target);
+                        rt.content.retarget(target, transition, now);
                     } else {
                         // Opening from a closed slot: the content is laid out
                         // at the destination size from the first frame.
-                        rt.content.snap(now, target);
+                        rt.content.snap(target, transition, now);
                         rt.content_valid = true;
                     }
                 } else {
                     // Closing: the content keeps the size it had when
                     // closing began.
                     let current = rt.content.value(now);
-                    rt.content.snap(now, current);
+                    rt.content.snap(current, transition, now);
                 }
-                rt.slot.retarget(now, target);
+                rt.slot.retarget(target, transition, now);
             }
         } else if viewport_changed && rt.slot.is_active(now) {
             // A window-driven change discards any departing allocation.
-            rt.slot.snap(now, target);
+            rt.slot.snap(target, transition, now);
             if target > 0.0 {
-                rt.content.snap(now, target);
+                rt.content.snap(target, transition, now);
             }
             rt.content_valid = target > 0.0;
         }
@@ -250,7 +247,7 @@ impl Element for PaneGroup {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let now = cx.background_executor().now();
+        let now = motion::now(cx);
         let (entries, main_min, runtime, metrics) = {
             let state = self.state.read(cx);
             (
@@ -269,8 +266,7 @@ impl Element for PaneGroup {
             bounds.size,
             now,
             cx.reduce_motion(),
-            self.duration,
-            self.curve,
+            &self.transition,
         );
         if active {
             window.request_animation_frame();

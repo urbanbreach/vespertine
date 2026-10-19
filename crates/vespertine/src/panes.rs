@@ -11,14 +11,12 @@
 mod fit;
 mod group;
 mod handle;
-mod motion;
 mod state;
 mod surface;
 
 pub use fit::*;
 pub use group::*;
 pub use handle::*;
-pub use motion::{CubicBezier, Glide, RetargetableTransition, SIZE_TRANSITION_DURATION};
 pub use state::*;
 pub use surface::*;
 
