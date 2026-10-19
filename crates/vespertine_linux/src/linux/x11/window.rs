@@ -1782,6 +1782,12 @@ impl PlatformWindow for X11Window {
         }
     }
 
+    fn trim_renderer_resources(&self) {
+        if let Some(renderer) = &mut self.0.state.borrow_mut().renderer {
+            renderer.trim();
+        }
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0
             .state
@@ -1978,6 +1984,27 @@ impl PlatformWindow for X11Window {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.0.state.borrow().renderer.as_ref()?.gpu_specs()
+    }
+
+    fn gpu_context(&self) -> Option<vespertine::SharedGpuContext> {
+        // `try_borrow`: never panic, even if queried while the window state is in use.
+        self.0
+            .state
+            .try_borrow()
+            .ok()?
+            .renderer
+            .as_ref()?
+            .shared_gpu_context()
+    }
+
+    fn gpu_device_lost(&self) -> Option<bool> {
+        self.0
+            .state
+            .try_borrow()
+            .ok()?
+            .renderer
+            .as_ref()?
+            .gpu_device_lost()
     }
 
     fn play_system_bell(&self) {

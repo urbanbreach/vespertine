@@ -1279,6 +1279,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
     fn schedule_frame(&self) {}
+    /// Called when the window parks: its demand-gated frame scheduling stopped requesting
+    /// frames after the last rendered one. Renderers release transient GPU resources that a
+    /// parked window does not need (path intermediates after a path-free frame, backdrop-blur
+    /// storage after an effect-free frame) without touching glyph or image caches. The default
+    /// does nothing; native macOS and Windows renderers apply their own policies.
+    fn trim_renderer_resources(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
     fn is_subpixel_rendering_supported(&self) -> bool;
 
@@ -1350,6 +1356,23 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
+
+    /// The shared GPU device and queue this window's renderer uses, type-erased.
+    ///
+    /// Backends without an application-reachable GPU device (the test platform, macOS and
+    /// Windows) keep this default and return `None`. Backends that have one also return `None`
+    /// while the device is lost or being recovered.
+    fn gpu_context(&self) -> Option<crate::SharedGpuContext> {
+        None
+    }
+
+    /// Whether this window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
+    /// healthy and `None` when the backend cannot determine it (the default, used by backends
+    /// with no application-reachable GPU device). Must be safe to call at any time,
+    /// including while the backend is recovering.
+    fn gpu_device_lost(&self) -> Option<bool> {
+        None
+    }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
@@ -1753,6 +1776,20 @@ pub trait PlatformAtlas {
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
 
+    /// Replaces the pixels stored for `key` with `bytes`, tightly packed rows of
+    /// pixels in the same layout as ordinary insertion, `size` device pixels large.
+    ///
+    /// When a tile for `key` exists and its dimensions equal `size`, backends that
+    /// can do so upload into the existing allocation and return the identical tile
+    /// (texture id, tile id, bounds and padding unchanged). A missing tile and any
+    /// size change use ordinary remove-then-insert allocation and return the new
+    /// tile. Backends that cannot update in place always reallocate, in which case
+    /// the returned tile need not equal the previous one.
+    ///
+    /// Errors if `bytes` does not match `size` or the backend fails. A failed
+    /// reallocation leaves `key` without a tile.
+    fn update(&self, key: AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) -> Result<AtlasTile>;
+
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
     fn contains(&self, _key: &AtlasKey) -> bool {
         false
@@ -1769,6 +1806,17 @@ pub trait AtlasBackend {
     ) -> Result<AtlasTile>;
 
     fn remove(&mut self, tile: AtlasTile);
+
+    /// Overwrites the pixels of `tile`, whose dimensions equal the dimensions of
+    /// the update, without changing its allocation. Returns `Ok(false)` when this
+    /// backend cannot update in place, in which case the caller reallocates.
+    ///
+    /// A backend that mutates pixels on the CPU, outside any ordered GPU queue,
+    /// must first wait for completion of the newest prior submission that may
+    /// still sample the tile.
+    fn update_in_place(&mut self, _tile: AtlasTile, _bytes: &[u8]) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 #[doc(hidden)]
@@ -1828,6 +1876,41 @@ impl<Backend: AtlasBackend> AtlasState<Backend> {
             self.backend.remove(tile);
         }
     }
+
+    /// Implements [`PlatformAtlas::update`] on top of [`AtlasBackend::update_in_place`].
+    pub fn update(
+        &mut self,
+        key: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<AtlasTile> {
+        let kind = key.texture_kind();
+        let bytes_per_pixel = match kind {
+            AtlasTextureKind::Monochrome => 1,
+            AtlasTextureKind::Subpixel | AtlasTextureKind::Polychrome => 4,
+        };
+        let expected_len = usize::try_from(size.width.0)
+            .ok()
+            .zip(usize::try_from(size.height.0).ok())
+            .and_then(|(width, height)| width.checked_mul(height)?.checked_mul(bytes_per_pixel));
+        anyhow::ensure!(
+            expected_len == Some(bytes.len()),
+            "atlas update of {size:?} expects {expected_len:?} bytes, got {}",
+            bytes.len()
+        );
+
+        if let Some(tile) = self.tiles_by_key.get(&key).copied()
+            && tile.bounds.size == size
+            && self.backend.update_in_place(tile, bytes)?
+        {
+            return Ok(tile);
+        }
+
+        self.remove(&key);
+        let tile = self.backend.insert(kind, size, bytes)?;
+        self.tiles_by_key.insert(key, tile);
+        Ok(tile)
+    }
 }
 
 /// A sprite atlas for windows without a GPU. It hands out uniquely identified
@@ -1868,6 +1951,11 @@ impl AtlasBackend for HeadlessAtlasBackend {
     }
 
     fn remove(&mut self, _tile: AtlasTile) {}
+
+    /// The headless atlas stores no pixels, so every update is trivially in place.
+    fn update_in_place(&mut self, _tile: AtlasTile, _bytes: &[u8]) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 impl PlatformAtlas for HeadlessAtlas {
@@ -1881,6 +1969,10 @@ impl PlatformAtlas for HeadlessAtlas {
 
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
+    }
+
+    fn update(&self, key: AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) -> Result<AtlasTile> {
+        self.0.lock().update(key, size, bytes)
     }
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
@@ -3655,6 +3747,163 @@ mod atlas_tests {
         assert_eq!(reset_calls, 1);
         assert!(!state.contains(&other_key));
         assert_eq!(state.backend.removed_tiles, vec![tile]);
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Event {
+        WaitForGpu,
+        Replace(TileId),
+        Insert,
+        Remove(TileId),
+    }
+
+    /// Models a backend that replaces pixels on the CPU: it must wait for the GPU
+    /// to finish sampling the old pixels before it overwrites them (PRF-016 R4).
+    #[derive(Default)]
+    struct CpuReplacingBackend {
+        events: Vec<Event>,
+        next_tile: u32,
+        fail_replace: bool,
+        fail_insert: bool,
+    }
+
+    impl AtlasBackend for CpuReplacingBackend {
+        fn insert(
+            &mut self,
+            kind: AtlasTextureKind,
+            size: Size<DevicePixels>,
+            _bytes: &[u8],
+        ) -> Result<AtlasTile> {
+            self.events.push(Event::Insert);
+            if self.fail_insert {
+                anyhow::bail!("insert failed");
+            }
+            self.next_tile += 1;
+            Ok(AtlasTile {
+                texture_id: AtlasTextureId { index: 0, kind },
+                tile_id: TileId(self.next_tile),
+                padding: 0,
+                bounds: Bounds {
+                    origin: Point::default(),
+                    size,
+                },
+            })
+        }
+
+        fn remove(&mut self, tile: AtlasTile) {
+            self.events.push(Event::Remove(tile.tile_id));
+        }
+
+        fn update_in_place(&mut self, tile: AtlasTile, _bytes: &[u8]) -> Result<bool> {
+            self.events.push(Event::WaitForGpu);
+            if self.fail_replace {
+                anyhow::bail!("replace failed");
+            }
+            self.events.push(Event::Replace(tile.tile_id));
+            Ok(true)
+        }
+    }
+
+    fn insert_tile(state: &mut AtlasState<impl AtlasBackend>, key: &AtlasKey) -> Result<AtlasTile> {
+        state
+            .get_or_insert_with(key.clone(), &mut build_tile)?
+            .context("builder should produce a tile")
+    }
+
+    #[test]
+    fn update_without_in_place_support_reallocates() -> Result<()> {
+        let mut state = AtlasState::new(RecordingAtlasBackend::default());
+        let key = image_key(1);
+        let tile = insert_tile(&mut state, &key)?;
+
+        let updated = state.update(key.clone(), TILE_SIZE, &[255, 0, 0, 255])?;
+        assert_ne!(updated, tile);
+        assert_eq!(state.backend.removed_tiles, vec![tile]);
+        assert_eq!(state.backend.insert_calls, 2);
+        assert_eq!(insert_tile(&mut state, &key)?, updated);
+        Ok(())
+    }
+
+    #[test]
+    fn update_of_a_missing_key_inserts() -> Result<()> {
+        let mut state = AtlasState::new(CpuReplacingBackend::default());
+        let key = image_key(1);
+        let tile = state.update(key.clone(), TILE_SIZE, &[0, 0, 0, 255])?;
+        assert_eq!(state.backend.events, [Event::Insert]);
+        assert_eq!(insert_tile(&mut state, &key)?, tile);
+        Ok(())
+    }
+
+    #[test]
+    fn same_size_update_replaces_in_place_after_waiting_for_the_gpu() -> Result<()> {
+        let mut state = AtlasState::new(CpuReplacingBackend::default());
+        let key = image_key(1);
+        let tile = insert_tile(&mut state, &key)?;
+        state.backend.events.clear();
+
+        let updated = state.update(key.clone(), TILE_SIZE, &[255, 0, 0, 255])?;
+        assert_eq!(updated, tile);
+        assert_eq!(
+            state.backend.events,
+            [Event::WaitForGpu, Event::Replace(tile.tile_id)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn size_change_uses_remove_then_insert() -> Result<()> {
+        let mut state = AtlasState::new(CpuReplacingBackend::default());
+        let key = image_key(1);
+        let tile = insert_tile(&mut state, &key)?;
+        state.backend.events.clear();
+
+        let wider = Size {
+            width: DevicePixels(2),
+            height: DevicePixels(1),
+        };
+        let updated = state.update(key.clone(), wider, &[0; 8])?;
+        assert_ne!(updated, tile);
+        assert_eq!(updated.bounds.size, wider);
+        assert_eq!(
+            state.backend.events,
+            [Event::Remove(tile.tile_id), Event::Insert]
+        );
+        assert_eq!(insert_tile(&mut state, &key)?, updated);
+        Ok(())
+    }
+
+    #[test]
+    fn update_errors_propagate_without_corrupting_the_cache() -> Result<()> {
+        let mut state = AtlasState::new(CpuReplacingBackend::default());
+        let key = image_key(1);
+        let tile = insert_tile(&mut state, &key)?;
+        state.backend.events.clear();
+
+        // Mismatched bytes never reach the backend.
+        state
+            .update(key.clone(), TILE_SIZE, &[0, 0])
+            .expect_err("byte length must match the size");
+        assert!(state.backend.events.is_empty());
+        assert_eq!(insert_tile(&mut state, &key)?, tile);
+
+        // A failed in-place replace keeps the tile.
+        state.backend.fail_replace = true;
+        state
+            .update(key.clone(), TILE_SIZE, &[0, 0, 0, 255])
+            .expect_err("backend failure propagates");
+        assert_eq!(insert_tile(&mut state, &key)?, tile);
+
+        // A failed reallocation leaves the key without a tile.
+        state.backend.fail_insert = true;
+        let wider = Size {
+            width: DevicePixels(2),
+            height: DevicePixels(1),
+        };
+        state
+            .update(key.clone(), wider, &[0; 8])
+            .expect_err("backend failure propagates");
+        assert!(!state.contains(&key));
         Ok(())
     }
 }

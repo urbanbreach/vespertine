@@ -34,18 +34,22 @@ impl DeviceErrorState {
         let errors = Arc::new(Self::default());
         device.set_device_lost_callback({
             let errors = Arc::clone(&errors);
-            move |reason, message| {
-                log::error!("wgpu device lost: reason={reason:?}, message={message}");
-                if reason != wgpu::DeviceLostReason::Destroyed {
-                    errors.lost.store(true, Ordering::Relaxed);
-                }
-            }
+            move |reason, message| errors.report_lost(reason, &message)
         });
         device.on_uncaptured_error(Arc::new({
             let errors = Arc::clone(&errors);
             move |error| errors.record(error.to_string())
         }));
         errors
+    }
+
+    /// Records a device-lost report from wgpu's device-lost callback. A device destroyed on
+    /// purpose is not a loss.
+    pub(crate) fn report_lost(&self, reason: wgpu::DeviceLostReason, message: &str) {
+        log::error!("wgpu device lost: reason={reason:?}, message={message}");
+        if reason != wgpu::DeviceLostReason::Destroyed {
+            self.lost.store(true, Ordering::Relaxed);
+        }
     }
 
     /// Returns true if the GPU device was lost (e.g., due to driver crash, suspend/resume).
@@ -156,7 +160,7 @@ impl WgpuContext {
     }
 
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
-    fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
+    pub(crate) fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
         let instance = Self::instance(None);
         let device_id_filter = Self::device_id_filter();
         let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =

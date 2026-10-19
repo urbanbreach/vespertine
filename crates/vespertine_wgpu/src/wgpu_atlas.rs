@@ -75,6 +75,32 @@ impl WgpuAtlas {
         lock.backend.flush_uploads();
     }
 
+    /// Live atlas textures and the bytes of their allocations (DEV-002): the texture allocation
+    /// size, not the occupied glyph area. Empty slots are excluded.
+    pub fn memory_usage(&self) -> (usize, u64) {
+        let lock = self.0.lock();
+        let storage = &lock.backend.storage;
+        let textures: Vec<Option<(u32, u32, u64)>> = [
+            &storage.monochrome_textures,
+            &storage.subpixel_textures,
+            &storage.polychrome_textures,
+        ]
+        .into_iter()
+        .flat_map(|list| list.textures.iter())
+        .map(|slot| {
+            slot.as_ref().map(|texture| {
+                let bytes_per_pixel = texture.format.block_copy_size(None).map_or(4, u64::from);
+                (
+                    texture.texture.width(),
+                    texture.texture.height(),
+                    bytes_per_pixel,
+                )
+            })
+        })
+        .collect();
+        crate::memory_report::atlas_figures(&textures)
+    }
+
     /// Returns the view backing `id`, or `None` once every tile in it has been
     /// removed. A scene can still reference such a texture when a cached view
     /// replays a paint from before the image was dropped, so callers must skip
@@ -122,6 +148,10 @@ impl PlatformAtlas for WgpuAtlas {
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
+
+    fn update(&self, key: AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) -> Result<AtlasTile> {
+        self.0.lock().update(key, size, bytes)
+    }
 }
 
 impl AtlasBackend for WgpuAtlasTextures {
@@ -155,6 +185,23 @@ impl AtlasBackend for WgpuAtlasTextures {
                 *texture_slot = Some(texture);
             }
         }
+    }
+
+    /// Same-size updates queue a write into the tile's existing allocation. The
+    /// write is submitted through [`wgpu::Queue::write_texture`] before the next
+    /// frame's commands, so it is ordered after every earlier submission that
+    /// sampled the old pixels and before every later one; no extra
+    /// synchronization is needed.
+    fn update_in_place(&mut self, tile: AtlasTile, bytes: &[u8]) -> Result<bool> {
+        anyhow::ensure!(
+            self.storage.get(tile.texture_id).is_some(),
+            "atlas tile refers to a missing texture"
+        );
+        // A later full write of the same region supersedes an earlier pending one.
+        self.pending_uploads
+            .retain(|upload| upload.id != tile.texture_id || upload.bounds != tile.bounds);
+        self.upload_texture(tile.texture_id, tile.bounds, bytes);
+        Ok(true)
     }
 }
 

@@ -23,9 +23,12 @@ mod elements;
 mod executor;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
+#[cfg(test)]
+mod backdrop_blur_tests;
 mod geometry;
 mod gestures;
 mod global;
+mod gpu_context;
 #[cfg(vespertine_hot_reload)]
 mod hot_reload;
 mod input;
@@ -114,6 +117,7 @@ pub use executor::*;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
+pub use gpu_context::*;
 pub use spring::*;
 pub use vespertine_macros::{
     AppContext, IntoElement, Render, VisualContext, bench, property_test, register_action, test,

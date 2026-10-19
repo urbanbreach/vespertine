@@ -2060,6 +2060,12 @@ impl PlatformWindow for WaylandWindow {
         self.0.schedule_frame();
     }
 
+    fn trim_renderer_resources(&self) {
+        if let Some(renderer) = &mut self.borrow_mut().renderer {
+            renderer.trim();
+        }
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.borrow()
             .renderer
@@ -2217,6 +2223,27 @@ impl PlatformWindow for WaylandWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.borrow().renderer.as_ref()?.gpu_specs()
+    }
+
+    fn gpu_context(&self) -> Option<vespertine::SharedGpuContext> {
+        // `try_borrow`: never panic, even if queried while the window state is in use.
+        self.0
+            .state
+            .try_borrow()
+            .ok()?
+            .renderer
+            .as_ref()?
+            .shared_gpu_context()
+    }
+
+    fn gpu_device_lost(&self) -> Option<bool> {
+        self.0
+            .state
+            .try_borrow()
+            .ok()?
+            .renderer
+            .as_ref()?
+            .gpu_device_lost()
     }
 
     fn play_system_bell(&self) {

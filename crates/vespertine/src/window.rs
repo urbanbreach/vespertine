@@ -6,8 +6,8 @@ use crate::Inspector;
 use crate::profiler;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
-    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    AsyncWindowContext, AtlasTile, AvailableSpace, BackdropBlur, Background, BorderStyle, Bounds,
+    BoxShadow, Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
@@ -23,6 +23,7 @@ use crate::{
     TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams,
     WindowTextSystem, WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
+    update_image_frames,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -1280,6 +1281,8 @@ pub struct Window {
         SubscriberSet<(), Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
+    /// The drawable size (device pixels) of the most recently completed draw.
+    last_drawn_drawable_size: Option<Size<DevicePixels>>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
     pub(crate) input_rate_tracker: Rc<RefCell<InputRateTracker>>,
@@ -1923,6 +1926,9 @@ impl Window {
                             || !window.next_frame_callbacks.borrow().is_empty()
                         {
                             window.platform_window.schedule_frame();
+                        } else if should_draw {
+                            // No demand remains after a rendered frame: the window parks.
+                            window.platform_window.trim_renderer_resources();
                         }
                     })
                     .log_err();
@@ -2182,6 +2188,7 @@ impl Window {
             visibility_observers: SubscriberSet::new(),
             hovered,
             needs_present,
+            last_drawn_drawable_size: None,
             input_rate_tracker,
             #[cfg(feature = "profiler")]
             window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
@@ -3577,6 +3584,7 @@ impl Window {
         if self.focus != focus_before_listeners {
             self.refresh();
         }
+        self.last_drawn_drawable_size = Some(self.drawable_size());
         self.needs_present.set(true);
 
         #[cfg(feature = "profiler")]
@@ -3614,6 +3622,31 @@ impl Window {
             self.mark_view_dirty(entity);
         }
         self.invalidator.replace_views(views);
+    }
+
+    /// Re-presents the scene recorded by the most recently completed draw, with
+    /// its atlas coordinates, without running layout, element rendering, prepaint
+    /// or paint and without invalidating any view or entity. Call it after
+    /// [`Self::update_image`] returned `true` so the new pixels appear.
+    ///
+    /// Returns `true` when the cached scene was presented. When no scene has been
+    /// drawn yet, or the drawable size changed since the last draw, the cached
+    /// scene cannot be presented as is: the window is marked for a normal redraw
+    /// instead and `false` is returned.
+    pub fn present_cached_frame(&mut self) -> bool {
+        if self.last_drawn_drawable_size == Some(self.drawable_size()) {
+            self.present();
+            true
+        } else {
+            self.refresh();
+            false
+        }
+    }
+
+    fn drawable_size(&self) -> Size<DevicePixels> {
+        self.platform_window
+            .content_size()
+            .to_device_pixels(self.platform_window.scale_factor())
     }
 
     #[profiling::function]
@@ -4566,6 +4599,62 @@ impl Window {
         result
     }
 
+    /// Blurs the already-painted contents of this window behind a bounded, optionally rounded
+    /// region, so popovers, menus and panels can show frosted glass made from the
+    /// application's own content.
+    ///
+    /// `bounds`, `corner_radii` and `blur_radius` are logical; `blur_radius` is the standard
+    /// deviation of the Gaussian. The effect is an ordered replacement of the framebuffer
+    /// region: the renderer snapshots everything painted before the effect's paint order,
+    /// filters it and writes it back inside the rounded bounds, hard-cut at the rounded edge.
+    /// Content painted afterwards (tint, border, text, nested overlays) composites crisply
+    /// above the blurred region. The active content mask clips both the snapshot and the
+    /// written region. A zero or negative radius emits nothing.
+    ///
+    /// To keep a floating surface's blur, tint, border and descendants in one stable
+    /// compositing order, paint them inside one [`Self::paint_layer`]; open a further
+    /// `paint_layer` for each nested overlay.
+    ///
+    /// The renderer processes an effect only when it reaches a primitive batch at the effect's
+    /// order or above, and it does not process effects after the final batch. An invisible
+    /// ordering primitive (a fully transparent shadow with the effect's bounds) is inserted
+    /// together with the effect and shares its order, which produces the batch boundary and
+    /// never produces visible output. Callers MUST nevertheless paint at least one visible
+    /// primitive (a tint, a border or content) after the effect: an effect after which nothing
+    /// at an equal or higher order is painted is not guaranteed to render on every renderer.
+    ///
+    /// The effect never samples the desktop or compositor content behind the window, so it
+    /// works regardless of window translucency. Where native child surfaces are composited
+    /// beneath the scene plane, the blur includes only earlier scene content (those pixels are
+    /// not part of the scene framebuffer). Renderers without backdrop-blur support leave the
+    /// frame valid and unblurred; callers who need a fallback may paint a translucent or
+    /// opaque fill after the effect, or instead of it for an opaque look.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_blur(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        blur_radius: Pixels,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        if blur_radius.0.is_nan() || blur_radius.0 <= 0.0 {
+            return;
+        }
+        let scale_factor = self.scale_factor();
+        let bounds = bounds.scale(scale_factor);
+        let corner_radii = corner_radii.scale(scale_factor);
+        let content_mask = self.content_mask().scale(scale_factor);
+        self.next_frame.scene.insert_backdrop_blur(BackdropBlur {
+            order: 0,
+            blur_radius: blur_radius.scale(scale_factor),
+            bounds,
+            content_mask,
+            corner_radii,
+        });
+    }
+
     /// Paint the drop (non-inset) shadows from `shadows` into the scene at the current
     /// z-index. Inset shadows are skipped; paint those with [`Self::paint_inset_shadows`]
     /// after the element's background so they layer on top of the fill.
@@ -5179,11 +5268,76 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
+        let opacity = self.element_opacity();
         self.next_frame.scene.insert_primitive(PaintSurface {
             order: 0,
             bounds,
             content_mask,
+            opacity,
             image_buffer,
+        });
+    }
+
+    /// Replaces the pixels of every frame of `data` in the sprite atlas, under the
+    /// image's existing identity and per-frame keys, so the allocation referenced
+    /// by the last drawn scene is reused. Build `data` with
+    /// [`RenderImage::with_updated_frames`] to give an image new pixels.
+    ///
+    /// Returns `true` only when the image has at least one frame and every frame
+    /// had a tile that equals the updated tile, in which case
+    /// [`Self::present_cached_frame`] shows the new pixels. Returns `false` for a
+    /// missing tile, a size change of any frame, or a zero-frame image; callers
+    /// must then redraw normally before relying on cached geometry. Errors from
+    /// obtaining frame bytes or from the atlas backend propagate.
+    pub fn update_image(&mut self, data: &RenderImage) -> Result<bool> {
+        update_image_frames(
+            self.sprite_atlas.as_ref(),
+            data.id,
+            data.frame_count(),
+            |frame_index| {
+                let bytes = data
+                    .as_bytes(frame_index)
+                    .with_context(|| format!("image {:?} has no frame {frame_index}", data.id))?;
+                Ok((data.size(frame_index), bytes))
+            },
+        )
+    }
+
+    /// Paint a surface into the scene for the next frame at the current z-index.
+    ///
+    /// `bounds` are the logical destination bounds (after object fit); they and the current
+    /// content mask are scaled by the window scale factor and snapped to device pixels exactly
+    /// like image primitives, and the element opacity in effect multiplies the texture's
+    /// alpha. The scene retains shared ownership of the source's texture until it is dropped.
+    /// Corner radii are not applied to surfaces.
+    ///
+    /// A zero-sized destination or source draws nothing.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    #[cfg(not(target_os = "macos"))]
+    pub fn paint_surface(&mut self, bounds: Bounds<Pixels>, source: crate::SurfaceSource) {
+        use crate::PaintSurface;
+
+        self.invalidator.debug_assert_paint();
+
+        let crate::SurfaceSource::GpuTexture { texture, size } = source;
+        if size.width.0 <= 0
+            || size.height.0 <= 0
+            || bounds.size.width <= px(0.)
+            || bounds.size.height <= px(0.)
+        {
+            return;
+        }
+
+        let bounds = self.snap_bounds(bounds);
+        let content_mask = self.snapped_content_mask();
+        let opacity = self.element_opacity();
+        self.next_frame.scene.insert_primitive(PaintSurface {
+            order: 0,
+            bounds,
+            content_mask,
+            opacity,
+            texture,
         });
     }
 
@@ -6963,6 +7117,26 @@ impl Window {
     /// Currently returns None on Mac and Windows.
     pub fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.platform_window.gpu_specs()
+    }
+
+    /// The GPU device and queue this window's renderer composites with, shared and
+    /// type-erased. Create the textures you wrap with [`SurfaceSource::gpu_texture`] on this
+    /// device.
+    ///
+    /// Returns `None` on platforms without an application-reachable GPU device (the test
+    /// platform, macOS and Windows), and on Linux while the device is lost or being
+    /// recovered; it never panics. After [`Window::gpu_device_lost`] reports a loss, wait for the
+    /// backend to recover (it recreates its device on a later frame and requests another
+    /// one), then call this again and rebuild every device-owned resource.
+    pub fn gpu_context(&self) -> Option<crate::SharedGpuContext> {
+        self.platform_window.gpu_context()
+    }
+
+    /// Whether the window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
+    /// healthy, `None` when the platform cannot determine it (no GPU device, or the test
+    /// platform, macOS and Windows). Safe to call at any moment, including during recovery.
+    pub fn gpu_device_lost(&self) -> Option<bool> {
+        self.platform_window.gpu_device_lost()
     }
 
     /// Perform titlebar double-click action.
@@ -9915,5 +10089,380 @@ mod inspector_tests {
             }
         })
         .expect("closed inspector has no bookkeeping and no style overrides");
+    }
+}
+
+/// PRF-016: `Window::update_image` and `Window::present_cached_frame` against the
+/// headless atlas, which hands out unique tiles and updates them in place.
+#[cfg(test)]
+mod image_update_tests {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        sync::Arc,
+    };
+
+    use image::{Frame, Rgba, RgbaImage};
+    use smallvec::SmallVec;
+
+    use crate::{
+        App, AtlasTile, Context, Corners, Element, ElementId, GlobalElementId, InspectorElementId,
+        IntoElement, LayoutId, Pixels, Render, RenderImage, Style, TestAppContext, Window,
+        WindowHandle, div, prelude::*, px, size,
+    };
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+
+    #[derive(Default)]
+    struct Counters {
+        renders: Cell<usize>,
+        layouts: Cell<usize>,
+        prepaints: Cell<usize>,
+        paints: Cell<usize>,
+    }
+
+    impl Counters {
+        fn snapshot(&self) -> [usize; 4] {
+            [
+                self.renders.get(),
+                self.layouts.get(),
+                self.prepaints.get(),
+                self.paints.get(),
+            ]
+        }
+    }
+
+    /// Paints every frame of an image 1:1 and counts each element-tree phase.
+    struct ImageSurface {
+        image: Arc<RenderImage>,
+        counters: Rc<Counters>,
+    }
+
+    impl IntoElement for ImageSurface {
+        type Element = Self;
+
+        fn into_element(self) -> Self {
+            self
+        }
+    }
+
+    impl Element for ImageSurface {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, ()) {
+            self.counters.layouts.set(self.counters.layouts.get() + 1);
+            let mut style = Style::default();
+            style.size.width = px(8.).into();
+            style.size.height = px(8.).into();
+            (window.request_layout(style, [], cx), ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            _bounds: crate::Bounds<Pixels>,
+            _request_layout: &mut (),
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+            self.counters
+                .prepaints
+                .set(self.counters.prepaints.get() + 1);
+        }
+
+        fn paint(
+            &mut self,
+            _id: Option<&GlobalElementId>,
+            _inspector_id: Option<&InspectorElementId>,
+            bounds: crate::Bounds<Pixels>,
+            _request_layout: &mut (),
+            _prepaint: &mut (),
+            window: &mut Window,
+            _cx: &mut App,
+        ) {
+            self.counters.paints.set(self.counters.paints.get() + 1);
+            for frame_index in 0..self.image.frame_count() {
+                window
+                    .paint_image(
+                        bounds,
+                        bounds,
+                        Corners::default(),
+                        self.image.clone(),
+                        frame_index,
+                        false,
+                    )
+                    .expect("frame exists");
+            }
+        }
+    }
+
+    struct ImageView {
+        image: Rc<RefCell<Arc<RenderImage>>>,
+        counters: Rc<Counters>,
+    }
+
+    impl Render for ImageView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.counters.renders.set(self.counters.renders.get() + 1);
+            div().child(ImageSurface {
+                image: self.image.borrow().clone(),
+                counters: self.counters.clone(),
+            })
+        }
+    }
+
+    /// An image with one frame per `(width, height)`, all filled with `pixel`.
+    fn frames(dimensions: &[(u32, u32)], pixel: [u8; 4]) -> SmallVec<[Frame; 1]> {
+        dimensions
+            .iter()
+            .map(|&(width, height)| Frame::new(RgbaImage::from_pixel(width, height, Rgba(pixel))))
+            .collect()
+    }
+
+    struct Fixture {
+        cx: TestAppContext,
+        window: WindowHandle<ImageView>,
+        current: Rc<RefCell<Arc<RenderImage>>>,
+        counters: Rc<Counters>,
+    }
+
+    impl Fixture {
+        fn new(dimensions: &[(u32, u32)]) -> Self {
+            let mut cx = TestAppContext::single();
+            let current = Rc::new(RefCell::new(Arc::new(RenderImage::new(frames(
+                dimensions, RED,
+            )))));
+            let counters = Rc::new(Counters::default());
+            let window = cx.add_window({
+                let current = current.clone();
+                let counters = counters.clone();
+                move |_, _| ImageView {
+                    image: current,
+                    counters,
+                }
+            });
+            Self {
+                cx,
+                window,
+                current,
+                counters,
+            }
+        }
+
+        fn with<R>(&mut self, f: impl FnOnce(&mut Window, &mut App) -> R) -> R {
+            self.cx
+                .update_window(self.window.into(), |_, window, cx| f(window, cx))
+                .unwrap()
+        }
+
+        fn draw(&mut self) {
+            self.with(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        /// The image object with the same identity and new pixels.
+        fn updated(&self, dimensions: &[(u32, u32)], pixel: [u8; 4]) -> Arc<RenderImage> {
+            Arc::new(
+                self.current
+                    .borrow()
+                    .with_updated_frames(frames(dimensions, pixel)),
+            )
+        }
+    }
+
+    fn sprite_tiles(window: &Window) -> Vec<AtlasTile> {
+        window
+            .rendered_frame
+            .scene
+            .polychrome_sprites
+            .iter()
+            .map(|sprite| sprite.tile)
+            .collect()
+    }
+
+    /// A3/R3 at the window level: retained updates followed by cached
+    /// presentation never re-enter layout, render, prepaint or paint, never
+    /// dirty the window, and keep the recorded atlas coordinates.
+    #[test]
+    fn cached_presentation_after_retained_updates_skips_the_element_tree() {
+        let mut fixture = Fixture::new(&[(4, 4)]);
+        fixture.draw();
+        let baseline = fixture.counters.snapshot();
+        assert!(
+            baseline
+                .iter()
+                .all(|&count| count == baseline[0] && count >= 1)
+        );
+        let tiles = fixture.with(|window, _| sprite_tiles(window));
+        assert_eq!(tiles.len(), 1);
+
+        for frame in 0..8usize {
+            let pixel = if frame.is_multiple_of(2) { BLUE } else { RED };
+            let image = fixture.updated(&[(4, 4)], pixel);
+            fixture.with(|window, _| {
+                assert!(window.update_image(&image).unwrap());
+                assert!(window.present_cached_frame());
+                assert!(!window.needs_present.get());
+                assert!(!window.invalidator.is_dirty());
+                assert!(window.dirty_views.is_empty());
+                assert_eq!(sprite_tiles(window), tiles);
+            });
+        }
+
+        assert_eq!(fixture.counters.snapshot(), baseline);
+    }
+
+    /// R3: without a drawn scene, or after the drawable size changed, cached
+    /// presentation does not present stale geometry; it schedules a normal draw.
+    #[test]
+    fn cached_presentation_falls_back_to_a_redraw() {
+        let mut fixture = Fixture::new(&[(4, 4)]);
+        fixture.draw();
+
+        fixture.with(|window, _| {
+            window.last_drawn_drawable_size = None;
+            assert!(!window.present_cached_frame());
+            assert!(window.invalidator.is_dirty());
+        });
+        fixture.draw();
+        fixture.with(|window, _| {
+            assert!(!window.invalidator.is_dirty());
+            assert!(window.present_cached_frame());
+            assert!(!window.invalidator.is_dirty());
+        });
+
+        let renders_before = fixture.counters.renders.get();
+        fixture.with(|window, _| {
+            window.resize(size(px(300.), px(200.)));
+            assert!(!window.present_cached_frame());
+            assert!(window.invalidator.is_dirty());
+        });
+        // The fallback only scheduled a normal draw; the platform then ran it, which
+        // re-rendered the view at the new size.
+        assert!(fixture.counters.renders.get() > renders_before);
+        fixture.with(|window, _| assert!(window.present_cached_frame()));
+    }
+
+    /// A2: false when any frame lacks a prior tile or changes size, true only when
+    /// every frame is retained, false for a zero-frame image.
+    #[test]
+    fn multi_frame_update_is_retained_only_when_every_frame_is() {
+        let mut fixture = Fixture::new(&[(2, 2), (3, 3), (4, 4)]);
+        fixture.draw();
+        let tiles = fixture.with(|window, _| sprite_tiles(window));
+        assert_eq!(tiles.len(), 3);
+
+        let same = fixture.updated(&[(2, 2), (3, 3), (4, 4)], BLUE);
+        fixture.with(|window, _| {
+            assert!(window.update_image(&same).unwrap());
+            assert_eq!(sprite_tiles(window), tiles);
+        });
+
+        // One frame changing size is never reported as retained, and the other
+        // frames are still updated in place.
+        let resized = fixture.updated(&[(2, 2), (5, 5), (4, 4)], RED);
+        fixture.with(|window, _| {
+            assert!(!window.update_image(&resized).unwrap());
+            assert!(window.has_image_atlas_entry(&resized));
+        });
+        // Now every frame has its new tile, so the same shape is retained again.
+        fixture.with(|window, _| assert!(window.update_image(&resized).unwrap()));
+
+        // A dropped image has no prior tiles at all.
+        fixture.with(|window, _| {
+            window.drop_image(resized.clone()).unwrap();
+            assert!(!window.has_image_atlas_entry(&resized));
+            assert!(!window.update_image(&resized).unwrap());
+            assert!(window.update_image(&resized).unwrap());
+        });
+
+        let empty = RenderImage::new(SmallVec::new());
+        fixture.with(|window, _| {
+            assert!(!window.update_image(&empty).unwrap());
+            assert!(!window.has_image_atlas_entry(&empty));
+        });
+    }
+
+    /// A frame that has not been drawn (missing tile) makes the result false even
+    /// though the other frames were retained.
+    #[test]
+    fn missing_frame_tile_is_not_retained() {
+        let mut fixture = Fixture::new(&[(2, 2), (2, 2)]);
+        fixture.draw();
+        let image = fixture.current.borrow().clone();
+        fixture.with(|window, _| {
+            window.sprite_atlas.remove(
+                &crate::RenderImageParams {
+                    image_id: image.id,
+                    frame_index: 1,
+                }
+                .into(),
+            );
+            assert!(!window.update_image(&image).unwrap());
+            assert!(window.update_image(&image).unwrap());
+        });
+    }
+
+    /// Image identity is preserved by an update and never shared by independent
+    /// images, even with equal bytes.
+    #[test]
+    fn update_preserves_identity_and_independent_images_never_share_one() {
+        let fixture = Fixture::new(&[(2, 2)]);
+        let original = fixture.current.borrow().clone();
+        let updated = original.with_updated_frames(frames(&[(2, 2)], BLUE));
+        assert_eq!(updated.id, original.id);
+        let twin = RenderImage::new(frames(&[(2, 2)], RED));
+        assert_ne!(twin.id, original.id);
+        assert_eq!(twin.as_bytes(0), original.as_bytes(0));
+    }
+
+    /// A5: after a resize (`false`) a normal redraw records the new geometry and
+    /// later same-size updates are retained against the new tile.
+    #[test]
+    fn resize_requires_a_redraw_then_updates_are_retained_again() {
+        let mut fixture = Fixture::new(&[(2, 2)]);
+        fixture.draw();
+        let before = fixture.with(|window, _| sprite_tiles(window));
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].bounds.size, size(2.into(), 2.into()));
+
+        let resized = fixture.updated(&[(4, 2)], BLUE);
+        fixture.with(|window, _| assert!(!window.update_image(&resized).unwrap()));
+
+        // The scene still holds the old geometry; the caller redraws normally.
+        *fixture.current.borrow_mut() = resized.clone();
+        fixture.with(|window, _| window.refresh());
+        let renders = fixture.counters.renders.get();
+        fixture.draw();
+        assert!(fixture.counters.renders.get() > renders);
+        let after = fixture.with(|window, _| sprite_tiles(window));
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].bounds.size, size(4.into(), 2.into()));
+        assert_ne!(after[0], before[0]);
+
+        let same_size = fixture.updated(&[(4, 2)], RED);
+        let baseline = fixture.counters.snapshot();
+        fixture.with(|window, _| {
+            assert!(window.update_image(&same_size).unwrap());
+            assert!(window.present_cached_frame());
+            assert_eq!(sprite_tiles(window), after);
+        });
+        assert_eq!(fixture.counters.snapshot(), baseline);
     }
 }

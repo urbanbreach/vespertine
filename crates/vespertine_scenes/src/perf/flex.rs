@@ -35,8 +35,8 @@ fn node(depth: u32, f: u64, next_leaf: &mut usize) -> Div {
         .p(px(2.0))
         .border(px(1.0))
         .border_color(hex(BORDER))
-        .bg(hex(if depth.is_multiple_of(2) { WHITE } else { SURFACE }));
-    container = if depth.is_multiple_of(2) {
+        .bg(hex(if depth % 2 == 0 { WHITE } else { SURFACE }));
+    container = if depth % 2 == 0 {
         container.flex_row()
     } else {
         container.flex_col()

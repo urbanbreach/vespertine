@@ -50,6 +50,8 @@ pub struct Scene {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
+    /// Backdrop-blur effect records, ordered with the primitives (see [`BackdropBlur`]).
+    pub backdrop_blurs: Vec<BackdropBlur>,
 }
 
 #[expect(missing_docs)]
@@ -66,6 +68,7 @@ impl Scene {
         self.subpixel_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
+        self.backdrop_blurs.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -138,11 +141,46 @@ impl Scene {
             .push(PaintOperation::Primitive(primitive));
     }
 
+    /// Inserts a backdrop-blur effect record together with its invisible ordering primitive: a
+    /// fully transparent drop shadow with zero blur and the effect's bounds, radii and content
+    /// mask, which gets the same order as the effect so that it produces a batch boundary
+    /// exactly at the effect's order. The order is assigned exactly like an ordinary
+    /// primitive's covering the same clipped bounds (the layer's order inside a paint layer).
+    /// Effects whose clipped bounds are empty and effects with a non-positive blur radius are
+    /// dropped. Replaying the recorded operation reproduces both records.
+    pub fn insert_backdrop_blur(&mut self, mut blur: BackdropBlur) {
+        let clipped_bounds = blur.bounds.intersect(&blur.content_mask.bounds);
+        if clipped_bounds.is_empty() || blur.blur_radius.0.is_nan() || blur.blur_radius.0 <= 0.0 {
+            return;
+        }
+        blur.order = self
+            .layer_stack
+            .last()
+            .copied()
+            .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds));
+        self.shadows.push(Shadow {
+            order: blur.order,
+            blur_radius: ScaledPixels(0.0),
+            bounds: blur.bounds,
+            corner_radii: blur.corner_radii,
+            content_mask: blur.content_mask,
+            color: Hsla::transparent_black(),
+            element_bounds: blur.bounds,
+            element_corner_radii: blur.corner_radii,
+            inset: 0,
+            pad: 0,
+        });
+        self.backdrop_blurs.push(blur);
+        self.paint_operations
+            .push(PaintOperation::BackdropBlur(blur));
+    }
+
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+                PaintOperation::BackdropBlur(blur) => self.insert_backdrop_blur(*blur),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
         }
@@ -160,6 +198,8 @@ impl Scene {
         self.polychrome_sprites
             .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.surfaces.sort_by_key(|surface| surface.order);
+        // Stable: effects with equal order are processed in insertion order.
+        self.backdrop_blurs.sort_by_key(|blur| blur.order);
     }
 
     #[cfg_attr(
@@ -187,6 +227,8 @@ impl Scene {
             polychrome_sprites_iter: self.polychrome_sprites.iter().peekable(),
             surfaces_start: 0,
             surfaces_iter: self.surfaces.iter().peekable(),
+            blurs: &self.backdrop_blurs,
+            blur_cursor: 0,
         }
     }
 }
@@ -215,6 +257,7 @@ pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
+    BackdropBlur(BackdropBlur),
 }
 
 #[derive(Clone)]
@@ -283,6 +326,9 @@ struct BatchIterator<'a> {
     polychrome_sprites_iter: Peekable<slice::Iter<'a, PolychromeSprite>>,
     surfaces_start: usize,
     surfaces_iter: Peekable<slice::Iter<'a, PaintSurface>>,
+    /// Backdrop-blur effects sorted by order; batches are cut at their orders.
+    blurs: &'a [BackdropBlur],
+    blur_cursor: usize,
 }
 
 impl<'a> Iterator for BatchIterator<'a> {
@@ -321,11 +367,22 @@ impl<'a> Iterator for BatchIterator<'a> {
 
         let first = orders_and_kinds[0];
         let second = orders_and_kinds[1];
-        let (batch_kind, max_order_and_kind) = if first.0.is_some() {
-            (first.1, (second.0.unwrap_or(u32::MAX), second.1))
-        } else {
-            return None;
-        };
+        let first_order = first.0?;
+        // A batch that starts below an effect's order must not contain primitives at or above
+        // it, so the effect can be processed between the two batches.
+        while self
+            .blurs
+            .get(self.blur_cursor)
+            .is_some_and(|blur| blur.order <= first_order)
+        {
+            self.blur_cursor += 1;
+        }
+        let batch_kind = first.1;
+        let mut max_order_and_kind = (second.0.unwrap_or(u32::MAX), second.1);
+        if let Some(blur) = self.blurs.get(self.blur_cursor) {
+            // `Shadow` sorts first, so `(order, kind) < (limit, Shadow)` means `order < limit`.
+            max_order_and_kind = max_order_and_kind.min((blur.order, PrimitiveKind::Shadow));
+        }
 
         match batch_kind {
             PrimitiveKind::Shadow => {
@@ -763,14 +820,23 @@ impl From<PolychromeSprite> for Primitive {
     }
 }
 
+/// A surface primitive: an axis-aligned destination rectangle showing a texture, clipped by
+/// the content mask. Corner radii are not applied.
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct PaintSurface {
     pub order: DrawOrder,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
+    /// Element opacity in effect while painting; multiplies the sampled alpha.
+    /// Ignored by the macOS video-buffer path.
+    pub opacity: f32,
     #[cfg(target_os = "macos")]
     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
+    /// Shared erased GPU texture; the scene keeps it alive until dropped. Its concrete type
+    /// is owned by the renderer, which skips textures of any other type.
+    #[cfg(not(target_os = "macos"))]
+    pub texture: std::sync::Arc<dyn std::any::Any + Send + Sync>,
 }
 
 impl From<PaintSurface> for Primitive {
@@ -944,6 +1010,51 @@ impl PathVertex<Pixels> {
             xy_position: self.xy_position.scale(factor),
             st_position: self.st_position,
             content_mask: self.content_mask.scale(factor),
+        }
+    }
+}
+
+/// An ordered backdrop-blur effect: the renderer snapshots the framebuffer immediately before
+/// this record's order, Gaussian-filters the snapshot and writes the result back inside the
+/// rounded bounds before drawing continues.
+///
+/// All geometry is in device pixels; `blur_radius` is the Gaussian standard deviation in device
+/// pixels. Effects are not primitives: the painting operation inserts an invisible ordinary
+/// primitive with the same bounds immediately before the effect to produce a batch boundary.
+#[derive(Debug, Copy, Clone, PartialEq)]
+#[repr(C)]
+pub struct BackdropBlur {
+    /// Paint order (assigned on insertion).
+    pub order: DrawOrder,
+    /// Gaussian standard deviation in device pixels.
+    pub blur_radius: ScaledPixels,
+    /// Effect rectangle.
+    pub bounds: Bounds<ScaledPixels>,
+    /// Rectangular content mask clipping both the snapshot envelope and the composite.
+    pub content_mask: ContentMask<ScaledPixels>,
+    /// Per-corner radii of the effect's rounded rectangle.
+    pub corner_radii: Corners<ScaledPixels>,
+}
+
+impl Scene {
+    /// The order of the first primitive of `batch`. Pending backdrop-blur effects whose order is
+    /// at or below this value are processed immediately before the batch is drawn.
+    pub fn batch_first_order(&self, batch: &PrimitiveBatch) -> DrawOrder {
+        match batch {
+            PrimitiveBatch::Shadows(range) => self.shadows[range.start].order,
+            PrimitiveBatch::Quads(range) => self.quads[range.start].order,
+            PrimitiveBatch::Paths(range) => self.paths[range.start].order,
+            PrimitiveBatch::Underlines(range) => self.underlines[range.start].order,
+            PrimitiveBatch::MonochromeSprites { range, .. } => {
+                self.monochrome_sprites[range.start].order
+            }
+            PrimitiveBatch::SubpixelSprites { range, .. } => {
+                self.subpixel_sprites[range.start].order
+            }
+            PrimitiveBatch::PolychromeSprites { range, .. } => {
+                self.polychrome_sprites[range.start].order
+            }
+            PrimitiveBatch::Surfaces(range) => self.surfaces[range.start].order,
         }
     }
 }

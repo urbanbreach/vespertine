@@ -49,6 +49,12 @@ impl PlatformAtlas for MetalAtlas {
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
+
+    /// Reallocates on every update (remove-then-insert): this backend does not
+    /// replace pixels inside an existing allocation.
+    fn update(&self, key: AtlasKey, size: Size<DevicePixels>, bytes: &[u8]) -> Result<AtlasTile> {
+        self.0.lock().update(key, size, bytes)
+    }
 }
 
 impl AtlasBackend for MetalAtlasTextures {

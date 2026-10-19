@@ -7008,6 +7008,7 @@ dependencies = [
  "vespertine_sum_tree",
  "vespertine_util",
  "vespertine_util_macros",
+ "vespertine_wgpu",
  "waker-fn",
  "windows 0.62.2",
  "zed-scap",
