@@ -39,6 +39,8 @@ use std::{
 
 use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
 
+mod composition;
+
 x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
         XA_ATOM,
@@ -80,6 +82,7 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE,
         _NET_WM_WINDOW_TYPE_NOTIFICATION,
         _NET_WM_WINDOW_TYPE_DIALOG,
+        _NET_WM_WINDOW_TYPE_DROPDOWN_MENU,
         _NET_WM_STATE_MODAL,
         _NET_WM_SYNC,
         _NET_SUPPORTED,
@@ -259,6 +262,8 @@ pub struct X11WindowState {
     x_root_window: xproto::Window,
     x_screen_index: usize,
     visual_id: u32,
+    /// The depth of the window's visual: 32 for an ARGB visual.
+    visual_depth: u8,
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
     bounds: Bounds<Pixels>,
@@ -268,6 +273,10 @@ pub struct X11WindowState {
     /// Taken when the window is dropped. Its GPU objects use the X connection, so they mustn't
     /// outlive the window, which a display mode switch relies on.
     renderer: Option<WgpuRenderer>,
+    /// The GPU context the window renderer was created from, shared with overlay renderers.
+    gpu_context: vespertine_wgpu::GpuContext,
+    /// Scene layering around native children (PLT-001), once enabled.
+    composition: Option<composition::X11Composition>,
     display: Rc<dyn PlatformDisplay>,
     input_handler: Option<PlatformInputHandler>,
     appearance: WindowAppearance,
@@ -800,7 +809,7 @@ impl X11WindowState {
                     transparent: false,
                     preferred_present_mode: None,
                 };
-                WgpuRenderer::new(gpu_context, &raw_window, config, compositor_gpu)?
+                WgpuRenderer::new(gpu_context.clone(), &raw_window, config, compositor_gpu)?
             };
 
             renderer.set_subpixel_layout(is_bgr);
@@ -858,10 +867,13 @@ impl X11WindowState {
                 x_root_window: visual_set.root,
                 x_screen_index,
                 visual_id: visual.id,
+                visual_depth: visual.depth,
                 bounds: bounds.to_pixels(scale_factor),
                 bounds_tracker: WindowBoundsTracker::new(bounds.to_pixels(scale_factor)),
                 scale_factor,
                 renderer: Some(renderer),
+                gpu_context,
+                composition: None,
                 atoms: *atoms,
                 input_handler: None,
                 active: false,
@@ -912,6 +924,13 @@ impl Drop for X11Window {
 
         if let Some(parent) = state.parent.as_ref() {
             parent.state.borrow_mut().children.remove(&self.0.x_window);
+        }
+
+        // The overlay window and its renderer go before anything else the window renderer
+        // presents to, then the native child windows and their shapes (PLT-001 R13).
+        let client = state.client.clone();
+        if let Some(mut composition) = state.composition.take() {
+            composition.release(&self.0.xcb, &client);
         }
 
         // The renderer's GPU objects use the X connection, and a display mode switch closes the
@@ -1035,6 +1054,8 @@ impl X11Window {
 
         let state = ptr.state.borrow_mut();
         ptr.set_wm_properties(state)?;
+        #[cfg(test)]
+        composition::track_window(&ptr);
 
         Ok(Self(ptr))
     }
@@ -1233,6 +1254,7 @@ impl X11WindowStatePtr {
 
         // Tiling or maximized state may have changed: the frame extents follow it.
         self.apply_client_inset(&mut state);
+        self.release_overlay_while_hidden(&mut state);
 
         Ok(())
     }
@@ -1481,6 +1503,7 @@ impl X11WindowStatePtr {
         if std::mem::replace(&mut self.state.borrow_mut().visibility, visibility) == visibility {
             return;
         }
+        self.release_overlay_while_hidden(&mut self.state.borrow_mut());
         let callback = self.callbacks.borrow_mut().visibility_change.take();
         if let Some(mut fun) = callback {
             fun(visibility);
@@ -1507,6 +1530,46 @@ impl X11WindowStatePtr {
             fun();
             self.callbacks.borrow_mut().button_layout_changed = Some(fun);
         }
+    }
+}
+
+impl X11WindowStatePtr {
+    /// Draws `scene` into the window itself. Returns whether the GPU device was recovered by
+    /// this call.
+    fn draw_scene(&self, scene: &Scene) -> bool {
+        let mut inner = self.state.borrow_mut();
+        let inner = &mut *inner;
+        let Some(renderer) = &mut inner.renderer else {
+            return false;
+        };
+
+        if renderer.device_lost() {
+            let raw_window = RawWindow {
+                connection: as_raw_xcb_connection::AsRawXcbConnection::as_raw_xcb_connection(
+                    &*self.xcb,
+                ) as *mut _,
+                screen_id: inner.x_screen_index,
+                window_id: self.x_window,
+                visual_id: inner.visual_id,
+            };
+            let recovered = match renderer.recover(&raw_window) {
+                Ok(()) => true,
+                Err(err) => {
+                    log::warn!("GPU recovery failed, will retry on next frame: {err}");
+                    false
+                }
+            };
+
+            inner.force_render_after_recovery = true;
+            return recovered;
+        }
+
+        renderer.draw(scene);
+
+        if renderer.needs_redraw() {
+            inner.force_render_after_recovery = true;
+        }
+        false
     }
 }
 
@@ -1901,37 +1964,51 @@ impl PlatformWindow for X11Window {
     }
 
     fn draw(&self, scene: &Scene) {
-        let mut inner = self.0.state.borrow_mut();
-        let inner = &mut *inner;
-        let Some(renderer) = &mut inner.renderer else {
-            return;
-        };
+        self.0.draw_scene_and_note_recovery(scene);
+    }
 
-        if renderer.device_lost() {
-            let raw_window = RawWindow {
-                connection: as_raw_xcb_connection::AsRawXcbConnection::as_raw_xcb_connection(
-                    &*self.0.xcb,
-                ) as *mut _,
-                screen_id: inner.x_screen_index,
-                window_id: self.0.x_window,
-                visual_id: inner.visual_id,
-            };
-            match renderer.recover(&raw_window) {
-                Ok(()) => {}
-                Err(err) => {
-                    log::warn!("GPU recovery failed, will retry on next frame: {err}");
-                }
-            }
+    fn enable_scene_overlay(&self) -> anyhow::Result<()> {
+        self.composition_enable(false)
+    }
 
-            inner.force_render_after_recovery = true;
-            return;
-        }
+    fn enable_window_composition(&self) -> anyhow::Result<()> {
+        self.composition_enable(true)
+    }
 
-        renderer.draw(scene);
+    fn native_composition(&self) -> Option<vespertine::NativeComposition> {
+        self.0.native_composition()
+    }
 
-        if renderer.needs_redraw() {
-            inner.force_render_after_recovery = true;
-        }
+    fn draw_layered(&self, scene: &Scene, overlay_start: usize, capture: bool) {
+        self.composition_draw_layered(scene, overlay_start, capture);
+    }
+
+    fn draw_composed(&self, composed: &vespertine::ComposedScene) -> anyhow::Result<()> {
+        self.composition_draw_composed(composed)
+    }
+
+    fn set_overlay_input_region(&self, region: &[Bounds<Pixels>]) {
+        self.0.set_overlay_region(region);
+    }
+
+    fn create_native_attachment(
+        &self,
+        surface: vespertine::SurfaceId,
+        kind: vespertine::SurfaceKind,
+    ) -> anyhow::Result<Rc<dyn vespertine::NativeAttachment>> {
+        self.0.create_native_attachment(surface, kind)
+    }
+
+    fn sync_composition_order(&self, layout: &vespertine::CompositionLayout) -> anyhow::Result<()> {
+        self.0.sync_composition_order(layout)
+    }
+
+    fn native_focus_active(&self) -> bool {
+        self.0.native_focus_active()
+    }
+
+    fn focus_framework_window(&self) {
+        self.0.focus_framework_window();
     }
 
     fn trim_renderer_resources(&self) {

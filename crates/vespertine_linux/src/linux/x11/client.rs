@@ -8,7 +8,7 @@ use core::str;
 use log::Level;
 use smallvec::SmallVec;
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     collections::{BTreeMap, HashSet},
     ops::Deref,
     path::PathBuf,
@@ -117,6 +117,38 @@ impl Deref for WindowRef {
     }
 }
 
+/// A window of the scene composition (PLT-001) that is not a framework window: the overlay
+/// window or a native child. Its pointer events belong to the window that owns it.
+pub(crate) struct AuxWindow {
+    /// The framework window the composition window belongs to.
+    pub owner: xproto::Window,
+    pub kind: AuxWindowKind,
+}
+
+pub(crate) enum AuxWindowKind {
+    /// The transparent override-redirect overlay window, positioned at the owner's content
+    /// origin: its pointer coordinates are window-content coordinates.
+    Overlay,
+    /// A native child that opted in to framework input forwarding. `origin` is the child's
+    /// origin in window-content device pixels, kept current by the composition.
+    Native { origin: Rc<Cell<Point<i32>>> },
+}
+
+/// Window-content logical position of an XInput pointer event: its coordinates (16.16 fixed
+/// point, in device pixels relative to the event window) plus the event window's `offset` in the
+/// window content, divided by the scale factor.
+fn window_position(
+    event_x: i32,
+    event_y: i32,
+    offset: Point<i32>,
+    scale_factor: f32,
+) -> Point<Pixels> {
+    point(
+        px((event_x as f32 / u16::MAX as f32 + offset.x as f32) / scale_factor),
+        px((event_y as f32 / u16::MAX as f32 + offset.y as f32) / scale_factor),
+    )
+}
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EventHandlerError {
@@ -204,6 +236,8 @@ pub struct X11ClientState {
     pub(crate) resource_database: Database,
     pub(crate) atoms: XcbAtoms,
     pub(crate) windows: HashMap<xproto::Window, WindowRef>,
+    /// Composition windows (overlay windows, native children with input forwarding) by id.
+    pub(crate) aux_windows: HashMap<xproto::Window, AuxWindow>,
     pub(crate) mouse_focused_window: Option<xproto::Window>,
     pub(crate) keyboard_focused_window: Option<xproto::Window>,
     pub(crate) xkb: xkbc::State,
@@ -298,6 +332,7 @@ impl X11ClientStatePtr {
             state.cursor_hidden_window = None;
         }
         state.cursor_styles.remove(&x_window);
+        state.aux_windows.retain(|_, aux| aux.owner != x_window);
     }
 
     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -342,6 +377,47 @@ impl X11ClientStatePtr {
             .log_err();
         state.ximc = Some(ximc);
         state.xim_handler = Some(xim_handler);
+    }
+}
+
+impl X11ClientStatePtr {
+    /// Routes the pointer events of a composition window to the framework window `owner`.
+    pub(crate) fn register_aux_window(&self, x_window: xproto::Window, aux: AuxWindow) {
+        let Some(client) = self.get_client() else {
+            return;
+        };
+        let Ok(mut state) = client.0.try_borrow_mut() else {
+            log::error!("x11: client state busy, composition window {x_window} not registered");
+            return;
+        };
+        let overlay_of = matches!(aux.kind, AuxWindowKind::Overlay).then_some(aux.owner);
+        state.aux_windows.insert(x_window, aux);
+        // The overlay window shows the cursor the framework last chose for its owner.
+        if let Some(owner) = overlay_of
+            && let Some(style) = state.cursor_styles.get(&owner).copied()
+            && let Some(cursor) = state.get_cursor_icon(style)
+        {
+            check_reply(
+                || "Failed to set cursor style of the overlay window",
+                state.xcb_connection.change_window_attributes(
+                    x_window,
+                    &ChangeWindowAttributesAux {
+                        cursor: Some(cursor),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .log_err();
+        }
+    }
+
+    pub(crate) fn unregister_aux_window(&self, x_window: xproto::Window) {
+        let Some(client) = self.get_client() else {
+            return;
+        };
+        if let Ok(mut state) = client.0.try_borrow_mut() {
+            state.aux_windows.remove(&x_window);
+        }
     }
 }
 
@@ -579,6 +655,7 @@ impl X11Connection {
                 clipboard,
                 clipboard_item: None,
                 xdnd_state: Xdnd::default(),
+                aux_windows: HashMap::default(),
             })
         })));
         // From here on, `Drop` removes whatever was registered if a later step fails.
@@ -929,6 +1006,78 @@ impl X11Client {
             .map(|window_reference| window_reference.window.clone())
     }
 
+    /// The framework window an XInput pointer event delivered to `x_window` belongs to, with the
+    /// offset (device pixels) that turns the event's coordinates into window-content
+    /// coordinates. Composition windows map to their owner (PLT-001 R14, R16).
+    fn pointer_window(&self, x_window: xproto::Window) -> Option<(X11WindowStatePtr, Point<i32>)> {
+        let state = self.0.borrow();
+        let (owner, offset) = match state.aux_windows.get(&x_window) {
+            Some(AuxWindow {
+                owner,
+                kind: AuxWindowKind::Native { origin },
+            }) => (*owner, origin.get()),
+            Some(AuxWindow {
+                owner,
+                kind: AuxWindowKind::Overlay,
+            }) => (*owner, Point::default()),
+            None => (x_window, Point::default()),
+        };
+        state
+            .windows
+            .get(&owner)
+            .map(|window| (window.window.clone(), offset))
+    }
+
+    /// Whether a pointer `Leave` on `x_window` only moved the pointer between a framework window
+    /// and its overlay window, which are separate X windows but one surface for the framework.
+    fn leave_stays_inside(&self, x_window: xproto::Window) -> bool {
+        let state = self.0.borrow();
+        let (target, owner) = match state.aux_windows.get(&x_window) {
+            Some(AuxWindow {
+                owner,
+                kind: AuxWindowKind::Overlay,
+            }) => (None, *owner),
+            Some(_) => return false,
+            None => {
+                let overlay = state.aux_windows.iter().find(|(_, aux)| {
+                    aux.owner == x_window && matches!(aux.kind, AuxWindowKind::Overlay)
+                });
+                match overlay {
+                    Some((overlay, _)) => (Some(*overlay), x_window),
+                    None => return false,
+                }
+            }
+        };
+        let xcb = state.xcb_connection.clone();
+        let root = xcb.setup().roots[state.x_root_index].root;
+        drop(state);
+        let Some(pointer) =
+            get_reply(|| "X11 QueryPointer failed.", xcb.query_pointer(root)).log_err()
+        else {
+            return false;
+        };
+        match target {
+            // Left the framework window: it went into the overlay window.
+            Some(overlay) => pointer.child == overlay,
+            // Left the overlay window: it went back into the framework window's top level.
+            None => {
+                let mut top_level = owner;
+                loop {
+                    let Some(tree) =
+                        get_reply(|| "X11 QueryTree failed.", xcb.query_tree(top_level)).log_err()
+                    else {
+                        return false;
+                    };
+                    if tree.parent == root || tree.parent == x11rb::NONE {
+                        break;
+                    }
+                    top_level = tree.parent;
+                }
+                pointer.child == top_level
+            }
+        }
+    }
+
     fn handle_event(&self, event: Event) -> Option<()> {
         match event {
             Event::UnmapNotify(event) => {
@@ -1112,6 +1261,11 @@ impl X11Client {
                     .log_err();
             }
             Event::FocusIn(event) => {
+                // Focus moving between the window and a native child of it (an inferior) does
+                // not change whether the window is active.
+                if event.detail == xproto::NotifyDetail::INFERIOR {
+                    return Some(());
+                }
                 let window = self.get_window(event.event)?;
                 window.set_active(true);
                 let mut state = self.0.borrow_mut();
@@ -1123,6 +1277,9 @@ impl X11Client {
                 self.enable_ime();
             }
             Event::FocusOut(event) => {
+                if event.detail == xproto::NotifyDetail::INFERIOR {
+                    return Some(());
+                }
                 let window = self.get_window(event.event)?;
                 window.set_active(false);
                 let mut state = self.0.borrow_mut();
@@ -1283,16 +1440,14 @@ impl X11Client {
                 window.handle_input(PlatformInput::KeyUp(vespertine::KeyUpEvent { keystroke }));
             }
             Event::XinputButtonPress(event) => {
-                let window = self.get_window(event.event)?;
+                let (window, offset) = self.pointer_window(event.event)?;
                 let mut state = self.0.borrow_mut();
 
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
 
-                let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
-                );
+                let position =
+                    window_position(event.event_x, event.event_y, offset, state.scale_factor);
 
                 if state.composing && state.ximc.is_some() {
                     drop(state);
@@ -1360,15 +1515,13 @@ impl X11Client {
                 }
             }
             Event::XinputButtonRelease(event) => {
-                let window = self.get_window(event.event)?;
+                let (window, offset) = self.pointer_window(event.event)?;
                 let mut state = self.0.borrow_mut();
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
 
-                let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
-                );
+                let position =
+                    window_position(event.event_x, event.event_y, offset, state.scale_factor);
                 match button_or_scroll_from_event_detail(event.detail) {
                     Some(ButtonOrScroll::Button(button)) => {
                         let click_count = state.current_count;
@@ -1385,7 +1538,7 @@ impl X11Client {
                 }
             }
             Event::XinputMotion(event) => {
-                let window = self.get_window(event.event)?;
+                let (window, offset) = self.pointer_window(event.event)?;
                 let mut state = self.0.borrow_mut();
                 state.restore_cursor_after_hide();
                 if window.is_blocked() {
@@ -1416,10 +1569,8 @@ impl X11Client {
                     };
                 }
                 let pressed_button = pressed_button_from_mask(event.button_mask[0]);
-                let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
-                );
+                let position =
+                    window_position(event.event_x, event.event_y, offset, state.scale_factor);
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
                 drop(state);
@@ -1446,28 +1597,33 @@ impl X11Client {
                 }
             }
             Event::XinputEnter(event) if event.mode == xinput::NotifyMode::NORMAL => {
-                let window = self.get_window(event.event)?;
+                let (window, _) = self.pointer_window(event.event)?;
                 window.set_hovered(true);
                 let mut state = self.0.borrow_mut();
-                state.mouse_focused_window = Some(event.event);
+                state.mouse_focused_window = Some(window.x_window);
                 state.restore_cursor_after_hide();
             }
             Event::XinputLeave(event) if event.mode == xinput::NotifyMode::NORMAL => {
+                // The pointer moved into a child window of ours, or between the window and
+                // its overlay window: it is still inside the window.
+                if event.detail == xinput::NotifyDetail::INFERIOR
+                    || self.leave_stays_inside(event.event)
+                {
+                    return Some(());
+                }
+                let (window, offset) = self.pointer_window(event.event)?;
                 let mut state = self.0.borrow_mut();
 
                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
                 reset_all_pointer_device_scroll_positions(&mut state.pointer_device_states);
                 state.mouse_focused_window = None;
                 let pressed_button = pressed_button_from_mask(event.buttons[0]);
-                let position = point(
-                    px(event.event_x as f32 / u16::MAX as f32 / state.scale_factor),
-                    px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
-                );
+                let position =
+                    window_position(event.event_x, event.event_y, offset, state.scale_factor);
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
                 drop(state);
 
-                let window = self.get_window(event.event)?;
                 window.handle_input(PlatformInput::MouseExited(vespertine::MouseExitEvent {
                     pressed_button,
                     position,
@@ -1873,6 +2029,27 @@ impl X11Client {
             ),
         )
         .log_err();
+        let overlays: Vec<xproto::Window> = state
+            .aux_windows
+            .iter()
+            .filter(|(_, aux)| {
+                aux.owner == focused_window && matches!(aux.kind, AuxWindowKind::Overlay)
+            })
+            .map(|(window, _)| *window)
+            .collect();
+        for overlay in overlays {
+            check_reply(
+                || "Failed to set cursor style of the overlay window",
+                state.xcb_connection.change_window_attributes(
+                    overlay,
+                    &ChangeWindowAttributesAux {
+                        cursor: Some(cursor),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .log_err();
+        }
         state.xcb_connection.flush().log_err();
     }
 
@@ -2407,7 +2584,7 @@ fn detect_compositor_gpu(
 /// Whether a compositing manager owns the screen: it owns the `_NET_WM_CM_S<n>` selection of
 /// screen `n`, or the root window carries the `_NET_WM_CM_OWNER` property. A bare window manager
 /// is not a compositing manager.
-fn check_compositor_present(
+pub(crate) fn check_compositor_present(
     xcb_connection: &XCBConnection,
     root: xproto::Window,
     screen: usize,

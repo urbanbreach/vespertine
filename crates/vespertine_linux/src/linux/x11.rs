@@ -2,6 +2,7 @@ mod activation;
 mod client;
 mod clipboard;
 mod compositing;
+mod composition;
 mod display;
 mod event;
 mod moveresize;
