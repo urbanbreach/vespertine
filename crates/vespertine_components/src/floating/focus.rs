@@ -66,6 +66,9 @@ pub struct LayerOptions {
     pub initial_focus: FocusTarget,
     /// Closing focus (R10).
     pub final_focus: FocusTarget,
+    /// Default restoration order: the trigger before the captured prior owner (a dialog,
+    /// CMP-003 R6 and R15) instead of the other way round (CMP-002 R10).
+    pub trigger_first: bool,
 }
 
 /// An open layer: its registry identity and the focus bookkeeping. Created by [`open_layer`] and
@@ -81,6 +84,7 @@ struct LayerOptionsInner {
     layer_focus: FocusHandle,
     trigger: Option<FocusHandle>,
     final_focus: FocusTarget,
+    trigger_first: bool,
 }
 
 /// Opens a layer: captures the current focus owner (before the layer's elements mount),
@@ -97,6 +101,7 @@ pub fn open_layer(window: &mut Window, cx: &mut App, options: LayerOptions) -> L
             layer_focus: options.layer_focus,
             trigger: options.trigger,
             final_focus: options.final_focus,
+            trigger_first: options.trigger_first,
         }),
     };
     let initial = options.initial_focus;
@@ -171,10 +176,14 @@ impl LayerHandle {
         if !still_here {
             return;
         }
-        let target = self
-            .prior
-            .iter()
-            .chain(self.options.trigger.iter())
+        let (first, second) = if self.options.trigger_first {
+            (self.options.trigger.as_ref(), self.prior.as_ref())
+        } else {
+            (self.prior.as_ref(), self.options.trigger.as_ref())
+        };
+        let target = first
+            .into_iter()
+            .chain(second)
             .find(|handle| handle.is_mounted(window));
         match target {
             Some(target) => target.clone().focus(window, cx),

@@ -2,6 +2,15 @@ use crate::SharedString;
 use anyhow::{Context as _, Result};
 use std::fmt;
 
+/// The key-context identifier that makes an element a modal scope (CMP-003 R14).
+///
+/// While focus is inside an element whose key context contains this identifier, action
+/// listeners, key listeners and modifier listeners registered on the elements *above* it in the
+/// dispatch path (window-level shortcuts of the page beneath a modal) are not dispatched; the
+/// scope element, its descendants and application-level (`App::on_action`) listeners still are.
+/// Bindings can also match on it (`ModalScope`) like any other context identifier.
+pub const MODAL_SCOPE_CONTEXT: &str = "ModalScope";
+
 /// A datastructure for resolving whether an action should be dispatched
 /// at this point in the element tree. Contains a set of identifiers
 /// and/or key value pairs representing the current context for the

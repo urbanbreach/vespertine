@@ -30,6 +30,9 @@ pub struct DialogAction {
     pub disabled: bool,
     /// A busy action exposes its busy state, cannot be activated again and keeps the dialog open.
     pub busy: bool,
+    /// The dialog stays open after this action is activated (an "Apply" action); the owner
+    /// closes it. Without it activation closes the dialog unless the action became busy.
+    pub keeps_open: bool,
 }
 
 impl DialogAction {
@@ -45,6 +48,7 @@ impl DialogAction {
             kind,
             disabled: false,
             busy: false,
+            keeps_open: false,
         }
     }
 
@@ -57,6 +61,12 @@ impl DialogAction {
     /// Sets the busy flag.
     pub fn busy(mut self, busy: bool) -> Self {
         self.busy = busy;
+        self
+    }
+
+    /// Sets whether the dialog stays open after this action is activated.
+    pub fn keeps_open(mut self, keeps_open: bool) -> Self {
+        self.keeps_open = keeps_open;
         self
     }
 

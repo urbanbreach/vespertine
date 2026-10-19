@@ -631,6 +631,20 @@ impl DispatchTree {
         dispatch_path
     }
 
+    /// Index in `path` (root to focus) of the first node whose listeners are still dispatched
+    /// under a modal scope: the deepest node whose key context contains
+    /// [`MODAL_SCOPE_CONTEXT`](crate::MODAL_SCOPE_CONTEXT), or 0 when the path has none.
+    pub fn modal_scope_start(&self, path: &[DispatchNodeId]) -> usize {
+        path.iter()
+            .rposition(|node_id| {
+                self.node(*node_id)
+                    .context
+                    .as_ref()
+                    .is_some_and(|context| context.contains(crate::MODAL_SCOPE_CONTEXT))
+            })
+            .unwrap_or(0)
+    }
+
     pub fn focus_path(&self, focus_id: FocusId) -> SmallVec<[FocusId; 8]> {
         let mut focus_path: SmallVec<[FocusId; 8]> = SmallVec::new();
         let mut current_node_id = self.focusable_node_ids.get(&focus_id).copied();

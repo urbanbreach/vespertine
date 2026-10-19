@@ -1140,3 +1140,99 @@ fn one_shortcut_runs_per_focused_pane_and_a_modal_blocks_it_for_both(cx: &mut Te
     cx.simulate_keystrokes("ctrl-k");
     assert_eq!(take(), ["A"]);
 }
+
+// ---------------------------------------------------------------------------
+// Modal scope (CMP-003 R14) and scoped tab traversal (INP-004)
+// ---------------------------------------------------------------------------
+
+actions!(input_scope_tests, [ScopeProbe]);
+
+struct ModalScopeView {
+    outside: FocusHandle,
+    first: FocusHandle,
+    second: FocusHandle,
+    scope: FocusHandle,
+    log: Rc<RefCell<Vec<&'static str>>>,
+}
+
+impl Render for ModalScopeView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (action_log, key_log) = (self.log.clone(), self.log.clone());
+        div()
+            .size_full()
+            .on_action(move |_: &ScopeProbe, _, _| action_log.borrow_mut().push("window"))
+            .on_key_down(move |_, _, _| key_log.borrow_mut().push("window-key"))
+            .child(div().id("outside").size(px(20.)).track_focus(&self.outside))
+            .child(
+                div()
+                    .id("scope")
+                    .key_context(vespertine::MODAL_SCOPE_CONTEXT)
+                    .track_focus(&self.scope)
+                    .child(div().id("first").size(px(20.)).track_focus(&self.first))
+                    .child(div().id("second").size(px(20.)).track_focus(&self.second)),
+            )
+    }
+}
+
+#[crate::test]
+fn a_modal_scope_blocks_window_level_listeners_above_it_but_not_app_level_actions(
+    cx: &mut TestAppContext,
+) {
+    use crate::KeyBinding;
+    let log = Rc::new(RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new("ctrl-j", ScopeProbe, None)]);
+        let app_log = log.clone();
+        cx.on_action(move |_: &ScopeProbe, _| app_log.borrow_mut().push("app"));
+    });
+    let (view, cx) = cx.add_window_view({
+        let log = log.clone();
+        move |_, cx| ModalScopeView {
+            outside: cx.focus_handle().tab_stop(true),
+            first: cx.focus_handle().tab_stop(true),
+            second: cx.focus_handle().tab_stop(true),
+            scope: cx.focus_handle(),
+            log,
+        }
+    });
+    let (outside, first, second, scope) = view.read_with(cx, |view, _| {
+        (
+            view.outside.clone(),
+            view.first.clone(),
+            view.second.clone(),
+            view.scope.clone(),
+        )
+    });
+    let take = || std::mem::take(&mut *log.borrow_mut());
+
+    focus_and_draw(cx, &outside);
+    cx.simulate_keystrokes("ctrl-j x");
+    assert_eq!(take(), ["window", "window-key"], "outside the scope");
+
+    focus_and_draw(cx, &first);
+    cx.simulate_keystrokes("ctrl-j x");
+    assert_eq!(
+        take(),
+        ["app"],
+        "inside the scope the window-level action and key listeners above it do not run, the \
+         application-level action does"
+    );
+
+    // Scoped traversal wraps inside the scope and never visits the page.
+    cx.update(|window, cx| assert!(window.focus_next_within(&scope, cx)));
+    assert_eq!(focused_id(cx), Some(second.id()));
+    cx.update(|window, cx| assert!(window.focus_next_within(&scope, cx)));
+    assert_eq!(focused_id(cx), Some(first.id()), "wraps last to first");
+    cx.update(|window, cx| assert!(window.focus_prev_within(&scope, cx)));
+    assert_eq!(focused_id(cx), Some(second.id()), "wraps first to last");
+    focus_and_draw(cx, &outside);
+    cx.update(|window, cx| assert!(window.focus_next_within(&scope, cx)));
+    assert_eq!(focused_id(cx), Some(first.id()), "enters at the first");
+    focus_and_draw(cx, &outside);
+    cx.update(|window, cx| assert!(window.focus_prev_within(&scope, cx)));
+    assert_eq!(
+        focused_id(cx),
+        Some(second.id()),
+        "reverse enters at the last"
+    );
+}

@@ -60,6 +60,7 @@ pub struct Select {
     heading: Option<SharedString>,
     open_rightward: bool,
     limits: Option<Bounds<Pixels>>,
+    limits_provider: Option<Rc<dyn Fn(&Window) -> Bounds<Pixels>>>,
     compact: bool,
     loading: bool,
     font_family: Option<SharedString>,
@@ -94,6 +95,7 @@ impl Select {
             heading: None,
             open_rightward: false,
             limits: None,
+            limits_provider: None,
             compact: false,
             loading: false,
             font_family: None,
@@ -155,6 +157,13 @@ impl Select {
     /// The bounds the menu stays inside (default: the window inset by 8 px).
     pub fn limits(mut self, limits: Bounds<Pixels>) -> Self {
         self.limits = Some(limits);
+        self
+    }
+
+    /// Bounds that follow something painted, evaluated at every use (a dialog's border box,
+    /// CMP-003 R11: see `Dialog::menu_limits_provider`). It overrides [`Select::limits`].
+    pub fn limits_provider(mut self, provider: Rc<dyn Fn(&Window) -> Bounds<Pixels>>) -> Self {
+        self.limits_provider = Some(provider);
         self
     }
 
@@ -285,6 +294,9 @@ impl Select {
     }
 
     fn effective_limits(&self, window: &Window) -> Bounds<Pixels> {
+        if let Some(provider) = &self.limits_provider {
+            return provider(window);
+        }
         self.limits.unwrap_or_else(|| {
             containment_limits(Bounds::new(Default::default(), window.viewport_size()))
         })
@@ -328,6 +340,7 @@ impl Select {
                 // The trigger keeps keyboard focus while the menu is open.
                 initial_focus: FocusTarget::Suppress,
                 final_focus: FocusTarget::Default,
+                trigger_first: false,
             },
         );
         self.state.open(&self.options, self.selected.as_deref());

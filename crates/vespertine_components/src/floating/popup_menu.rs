@@ -241,6 +241,7 @@ impl PopupMenu {
                 trigger: Some(self.trigger_focus.clone()),
                 initial_focus: FocusTarget::Default,
                 final_focus: FocusTarget::Default,
+                trigger_first: false,
             },
         );
         let active = self

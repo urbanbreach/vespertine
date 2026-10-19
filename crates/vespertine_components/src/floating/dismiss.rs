@@ -29,6 +29,9 @@ pub enum EscapeOutcome {
     Dismissed,
     /// The layer undid its innermost depth and stays open.
     SteppedBack,
+    /// The layer consumed the Escape without changing anything (a dialog whose Escape
+    /// dismissal is switched off, CMP-003 R10): it stays open and focus indicators are kept.
+    Consumed,
 }
 
 /// A layer's Escape handler: runs the caller's Escape handler, then performs the dismissal or

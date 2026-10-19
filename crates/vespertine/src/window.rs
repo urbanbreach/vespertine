@@ -2725,6 +2725,45 @@ impl Window {
         }
     }
 
+    /// Move focus to the next tab stop inside `scope` (the scope element or any descendant),
+    /// wrapping from the last to the first (subset-constrained traversal, INP-004). When the
+    /// focused element is not a tab stop of the scope (nothing focused, or the scope element
+    /// itself) the search starts at the scope's first tab stop. Returns whether focus moved;
+    /// focus does not change when the scope has no tab stop or focus is disabled.
+    pub fn focus_next_within(&mut self, scope: &FocusHandle, cx: &mut App) -> bool {
+        self.focus_within(scope, true, cx)
+    }
+
+    /// Move focus to the previous tab stop inside `scope`, wrapping from the first to the last;
+    /// the backward counterpart of [`Self::focus_next_within`] (entering at the last tab stop).
+    pub fn focus_prev_within(&mut self, scope: &FocusHandle, cx: &mut App) -> bool {
+        self.focus_within(scope, false, cx)
+    }
+
+    fn focus_within(&mut self, scope: &FocusHandle, forward: bool, cx: &mut App) -> bool {
+        if !self.focus_enabled {
+            return false;
+        }
+        let tree = &self.rendered_frame.dispatch_tree;
+        let mut accept = |id: FocusId| tree.focus_contains(scope.id, id);
+        let handle = if forward {
+            self.rendered_frame
+                .tab_stops
+                .next_among(self.focus.as_ref(), &mut accept)
+        } else {
+            self.rendered_frame
+                .tab_stops
+                .prev_among(self.focus.as_ref(), &mut accept)
+        };
+        match handle {
+            Some(handle) => {
+                self.focus(&handle, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Accessor for the text system.
     pub fn text_system(&self) -> &Arc<WindowTextSystem> {
         &self.text_system
@@ -7783,6 +7822,13 @@ impl Window {
             }
         }
 
+        // Under a modal scope the listeners above the scope element are not dispatched.
+        let scope = self
+            .rendered_frame
+            .dispatch_tree
+            .modal_scope_start(dispatch_path);
+        let dispatch_path = &dispatch_path[scope..];
+
         // Capture phase along the focused dispatch path (root to focus)
         for node_id in dispatch_path {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
@@ -7825,7 +7871,11 @@ impl Window {
         let Some(event) = event.downcast_ref::<ModifiersChangedEvent>() else {
             return;
         };
-        for node_id in dispatch_path.iter().rev() {
+        let scope = self
+            .rendered_frame
+            .dispatch_tree
+            .modal_scope_start(dispatch_path);
+        for node_id in dispatch_path[scope..].iter().rev() {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
             for listener in node.modifiers_changed_listeners.clone() {
                 listener(event, self, cx);
@@ -8053,8 +8103,15 @@ impl Window {
             return;
         }
 
+        // Under a modal scope the window actions above the scope element are not dispatched.
+        let scope = self
+            .rendered_frame
+            .dispatch_tree
+            .modal_scope_start(&dispatch_path);
+        let dispatch_path = &dispatch_path[scope..];
+
         // Capture phase for window actions.
-        for node_id in &dispatch_path {
+        for node_id in dispatch_path {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
             for DispatchActionListener {
                 action_type,

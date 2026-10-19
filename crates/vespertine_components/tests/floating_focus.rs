@@ -133,6 +133,7 @@ impl Rig {
                         trigger: with_trigger.then_some(trigger),
                         initial_focus: initial,
                         final_focus: finally,
+                        trigger_first: false,
                     },
                 )
             })
