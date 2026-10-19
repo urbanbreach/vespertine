@@ -70,12 +70,8 @@ fn parts(
             cx.new(|cx| PickerSources::new(vec![(SourcePolicy::name_like(), fetcher)], cx));
         let activated = Rc::new(RefCell::new(Vec::new()));
         let provider_sources = sources.clone();
-        let (open, query, close, retry) = (
-            sources.clone(),
-            sources.clone(),
-            sources.clone(),
-            sources.clone(),
-        );
+        let (open, query, close, retry) =
+            (sources.clone(), sources.clone(), sources.clone(), sources);
         let log = activated.clone();
         let picker = cx.new(|cx| {
             Picker::new(
