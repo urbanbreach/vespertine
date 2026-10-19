@@ -20,4 +20,4 @@ test = false
 log = { workspace = true, features = ["serde"] }
 rustls.workspace = true
 rustls-platform-verifier.workspace = true
-rustls-native-certs.workspace = true
+webpki-roots.workspace = true

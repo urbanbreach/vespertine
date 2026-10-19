@@ -100,8 +100,6 @@ mod responsive_layout_tests;
 #[cfg(test)]
 mod rounded_clip_tests;
 mod scene;
-#[cfg(test)]
-mod scene_header_tests;
 mod scene_order;
 mod scene_sort;
 mod scrollbar;

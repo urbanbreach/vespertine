@@ -6,7 +6,7 @@
     scripts/third-party --stale    also fail when THIRD_PARTY.md differs from what would be written
 
 Policy: every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause,
-ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016 or OFL-1.1 (fonts). An SPDX `OR` expression is satisfied
+ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, CDLA-Permissive-2.0 or OFL-1.1 (fonts). An SPDX `OR` expression is satisfied
 when one alternative is allowed (that alternative is the elected license); an `AND` expression
 needs every part allowed. MPL-2.0 is accepted for unmodified crates used as ordinary dependencies.
 Anything else, in particular GPL, AGPL or LGPL, fails the audit and has to be replaced.
@@ -39,6 +39,8 @@ ALLOWED = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "OFL-1.1",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "Apache-2.0 WITH LLVM-exception",
     # File-level copyleft: acceptable only as an ordinary, unmodified dependency (never vendored or
     # patched in this repository); GPL, AGPL and LGPL are never accepted.
@@ -59,20 +61,6 @@ EXCEPTIONS = {
 # Crates vendored under third_party/, with what differs from the published crate.
 VENDORED = [
     ("taffy", "0.13.0", "MIT", "modified measurement cache for persistent layout nodes (LAY-001)"),
-    ("merman-core", "0.8.0-alpha.5", "MIT OR Apache-2.0",
-     "HTML sanitizer reimplemented without the MPL-2.0 `lol_html` crate"),
-    ("merman-render", "0.8.0-alpha.5", "MIT OR Apache-2.0",
-     "CSS parsing reimplemented without the MPL-2.0 `cssparser` crate"),
-    ("dirs-sys", "0.5.0", "MIT OR Apache-2.0",
-     "without the MPL-2.0 `option-ext` dependency (one `Option::contains` call inlined)"),
-    ("zed-font-kit", "0.14.1-zed", "MIT OR Apache-2.0",
-     "without the DirectWrite backend, which needed the MPL-2.0 `dwrote` crate; Vespertine's "
-     "Windows text system does not use font-kit"),
-    ("const-random-macro", "0.1.16", "MIT OR Apache-2.0",
-     "SHA-256 counter-mode expansion instead of the CC0-1.0 `tiny-keccak` SHAKE256"),
-    ("rustls-platform-verifier", "0.7.0", "MIT OR Apache-2.0",
-     "without the wasm32 branch, which needed the CDLA-Permissive-2.0 `webpki-root-certs` data; "
-     "tests removed"),
 ]
 
 # Files that ship with the repository or with a dependency, other than code.
@@ -279,12 +267,12 @@ def render(rust, lock_only, npm_rows, npm_first):
     out.append("## Policy\n")
     out.append(
         "Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, "
-        "ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, or OFL-1.1 for fonts. A dual-licensed crate "
+        "ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, CDLA-Permissive-2.0, or OFL-1.1 for "
+        "fonts. A dual-licensed crate "
         "(`A OR B`) is used under an allowed alternative, shown as the *used under* column. "
         "MPL-2.0 (file-level copyleft) is accepted for unmodified crates used as ordinary "
-        "dependencies; GPL, AGPL and LGPL are not. Some crates that needed MPL-2.0 or other "
-        "licenses outside the list were replaced or vendored with the dependency removed (see "
-        "*Vendored crates*; done before this rule was set, and kept). "
+        "dependencies; GPL, AGPL and LGPL are not. Only crates with functional modifications are "
+        "vendored (see *Vendored crates*). "
         "**No dependency is under an incompatible license.**\n"
     )
     out.append("## Summary\n")
