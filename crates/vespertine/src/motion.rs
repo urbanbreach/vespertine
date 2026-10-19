@@ -41,12 +41,18 @@ pub use track::{
 
 /// Elapsed time on the clock that drives motion tracks, glides and label rolls.
 ///
-/// This is the single place elements read time; it follows the executor's clock, so it is
-/// deterministic under the test platform.
+/// This is the single place elements read time. Once automation or a test host has operated the
+/// application's [`MotionClock`](crate::MotionClock) (pause, set, fast-forward, resume) motion
+/// follows that clock, so sampling at a chosen instant is deterministic. Until then it follows
+/// the executor's clock, which is deterministic under the test platform.
 pub(crate) fn now(cx: &App) -> Duration {
-    cx.background_executor()
-        .now()
-        .saturating_duration_since(cx.synced_animation_epoch)
+    match cx.try_global::<crate::MotionClock>() {
+        Some(clock) => Duration::from_secs_f64(clock.elapsed_ms().max(0.0) / 1000.0),
+        None => cx
+            .background_executor()
+            .now()
+            .saturating_duration_since(cx.synced_animation_epoch),
+    }
 }
 
 static TIMELINE_SCALE_BITS: AtomicU32 = AtomicU32::new(0x3f80_0000); // 1.0f32

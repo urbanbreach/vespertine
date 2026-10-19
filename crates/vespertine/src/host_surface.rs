@@ -6,7 +6,12 @@
 //!   (click, enter, leave, file drop) and the handlers that deliver them from any stateful
 //!   interactive element, including leaf elements such as images.
 
-use std::{cell::Cell, collections::BTreeSet, path::PathBuf, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    path::PathBuf,
+    rc::Rc,
+};
 
 use crate::{
     AnyElement, App, Bounds, Element, ExternalPaths, GlobalElementId, InspectorElementId,
@@ -96,11 +101,28 @@ pub type EmitEvent = Rc<dyn Fn(HostEvent, &mut Window, &mut App)>;
 /// The set of event names a host both subscribed to and the adapter declares.
 pub type EventSet = BTreeSet<SharedString>;
 
+/// Called with the border box an element has just painted.
+pub type BoundsObserver = Rc<dyn Fn(Bounds<Pixels>, &mut App)>;
+
 /// Shared record of the last painted border box of an element.
 ///
-/// Clone the tracker and pass one clone to [`track_bounds`]; read it from anywhere.
-#[derive(Clone, Debug, Default)]
-pub struct BoundsTracker(Rc<Cell<Option<Bounds<Pixels>>>>);
+/// Clone the tracker and pass one clone to [`track_bounds`]; read it from anywhere. An observer
+/// installed with [`BoundsTracker::observe`] is called right after each paint records the box,
+/// which is the only point at which deferred content (painted after the rest of the frame) can
+/// report its bounds within the frame that painted it.
+#[derive(Clone, Default)]
+pub struct BoundsTracker {
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    observer: Rc<RefCell<Option<BoundsObserver>>>,
+}
+
+impl std::fmt::Debug for BoundsTracker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundsTracker")
+            .field("bounds", &self.bounds.get())
+            .finish_non_exhaustive()
+    }
+}
 
 impl BoundsTracker {
     /// A new tracker that has not recorded any bounds.
@@ -110,16 +132,25 @@ impl BoundsTracker {
 
     /// The border box recorded by the most recent paint, if the element has painted.
     pub fn get(&self) -> Option<Bounds<Pixels>> {
-        self.0.get()
+        self.bounds.get()
     }
 
     /// Forgets the recorded bounds (the element is no longer painted).
     pub fn clear(&self) {
-        self.0.set(None);
+        self.bounds.set(None);
     }
 
-    fn set(&self, bounds: Bounds<Pixels>) {
-        self.0.set(Some(bounds));
+    /// Replaces the observer called after every paint that records bounds.
+    pub fn observe(&self, observer: Option<BoundsObserver>) {
+        *self.observer.borrow_mut() = observer;
+    }
+
+    fn set(&self, bounds: Bounds<Pixels>, cx: &mut App) {
+        self.bounds.set(Some(bounds));
+        let observer = self.observer.borrow().clone();
+        if let Some(observer) = observer {
+            observer(bounds, cx);
+        }
     }
 }
 
@@ -184,7 +215,7 @@ impl Element for TrackBounds {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.tracker.set(bounds);
+        self.tracker.set(bounds, cx);
         self.child.paint(window, cx);
     }
 }

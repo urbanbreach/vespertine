@@ -389,6 +389,15 @@ impl CustomElementRegistry {
         self.entries.get(&id).map(|entry| &*entry.type_name)
     }
 
+    /// Installs `observer` to be called with the border box of host `id` right after each paint
+    /// that records it, so a host's bounds are known within the frame that painted it even when
+    /// its content is deferred. Does nothing when the host has no adapter.
+    pub fn observe_bounds(&mut self, id: HostId, observer: Option<crate::BoundsObserver>) {
+        if let Some(entry) = self.entries.get(&id) {
+            entry.bounds.observe(observer);
+        }
+    }
+
     /// The last painted border box of host `id`, once it has painted.
     pub fn last_bounds(&self, id: HostId) -> Option<Bounds<Pixels>> {
         self.entries.get(&id)?.bounds.get()

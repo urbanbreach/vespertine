@@ -1849,6 +1849,52 @@ mod element_tests {
     }
 
     #[vespertine::test]
+    fn a_motion_track_samples_the_application_motion_clock_once_it_is_operated(
+        cx: &mut TestAppContext,
+    ) {
+        let width = Rc::new(Cell::new(100.0));
+        let window = open(cx, {
+            let width = width.clone();
+            move |_, _| {
+                div()
+                    .size_full()
+                    .child(
+                        div()
+                            .debug_selector(|| "pane".into())
+                            .h(px(10.0))
+                            .with_motion(
+                                "pane",
+                                MotionDescription::new(MotionProps::new().width(width.get()))
+                                    .initial(MotionInitial::False)
+                                    .transition(linear_one_second()),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        });
+        cx.update(|cx| {
+            crate::MotionClock::pause(cx);
+            crate::MotionClock::set(cx, 0.0);
+        });
+        redraw(&window, cx);
+        assert_eq!(
+            bounds_of(&window, cx, "pane").unwrap().size.width,
+            px(100.0)
+        );
+        width.set(0.0);
+        redraw(&window, cx);
+        for (at, expected) in [(0.0, 100.0), (250.0, 75.0), (500.0, 50.0), (1000.0, 0.0)] {
+            cx.update(|cx| crate::MotionClock::set(cx, at));
+            redraw(&window, cx);
+            assert_eq!(
+                bounds_of(&window, cx, "pane").unwrap().size.width,
+                px(expected),
+                "at {at} ms"
+            );
+        }
+    }
+
+    #[vespertine::test]
     fn closing_component_stays_painted_but_inert_until_completion(cx: &mut TestAppContext) {
         let clicks = Rc::new(Cell::new(0));
         let lifecycle = Rc::new(std::cell::RefCell::new(PresenceLifecycle::new(ms(140))));

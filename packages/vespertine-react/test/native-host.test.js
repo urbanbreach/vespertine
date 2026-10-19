@@ -325,3 +325,62 @@ native("a row of a virtual list reacts to input and scrolls into view", () => {
   const offset = renderer.getScrollOffset(id);
   assert.equal(offset.y, -(6 * 40 - 120), "the last row is brought fully into view with minimal movement");
 });
+
+native("the motion property interpolates the width with the motion clock and retargets from the visible value", () => {
+  const host = createTestHost({ width: 400, height: 200 });
+  const tree = (width) =>
+    h("div", {
+      testId: "pane",
+      style: { height: 40 },
+      motion: { initial: false, animate: { width }, transition: { duration: 1, ease: "linear" } },
+    });
+  host.renderer.clockPause();
+  host.renderer.clockSet(0);
+  host.render(tree(100));
+  assert.equal(byTestId(host, "pane").bounds.width, 100, "no initial animation: the first frame is at the target");
+  host.render(tree(0));
+  host.renderer.clockSet(500);
+  host.renderer.flush();
+  assert.equal(byTestId(host, "pane").bounds.width, 50);
+  host.renderer.clockSet(1000);
+  host.renderer.flush();
+  assert.equal(byTestId(host, "pane").bounds.width, 0);
+  assert.deepEqual(host.errors, []);
+});
+
+native("anchored hosts render through the adapter registry: placement properties, bounds and standard events (ELM-007)", () => {
+  const events = [];
+  const host = createTestHost({ width: 400, height: 300 });
+  const tree = (props) =>
+    h(
+      "div",
+      { style: { width: 400, height: 300 } },
+      h(
+        "div",
+        { testId: "trigger", style: { position: "relative", marginLeft: 20, marginTop: 20, width: 100, height: 30 } },
+        h(
+          "anchored",
+          {
+            testId: "pop",
+            align: "start",
+            style: { width: 60, height: 40 },
+            onClick: (event) => events.push(["click", event.button, event.clickCount]),
+            onKeyDown: () => events.push(["keyDown"]),
+            ...props,
+          },
+          h("div", { testId: "inner", style: { width: 60, height: 40 } }),
+        ),
+      ),
+    );
+  host.render(tree({ side: "bottom", gap: 4 }));
+  assert.deepEqual(byTestId(host, "pop").bounds, { x: 20, y: 54, width: 60, height: 40 });
+  assert.deepEqual(byTestId(host, "inner").bounds, { x: 20, y: 54, width: 60, height: 40 });
+  host.render(tree({ side: "right", gap: 6 }));
+  assert.deepEqual(byTestId(host, "pop").bounds, { x: 126, y: 20, width: 60, height: 40 });
+  host.renderer.nativeSimulateClick(150, 40);
+  host.renderer.simulateKeystrokes("a");
+  assert.deepEqual(events, [["click", 0, 1]], "declared standard events fire; undeclared ones never reach the adapter");
+  host.render(h("div", { style: { width: 400, height: 300 } }));
+  assert.equal(host.renderer.findByTestId("pop").length, 0);
+  assert.deepEqual(host.errors, []);
+});

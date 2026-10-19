@@ -14,16 +14,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
 use vespertine::host_events::{
-    HostContext, HostEvent, HostKeyEvent, HostNode, HostPointerEvent, HostScroll, HostTouchPhase,
+    HostContext, HostElement, HostEvent, HostKeyEvent, HostNode, HostPointerEvent, HostScroll,
+    HostTouchPhase,
+};
+use vespertine::motion::{
+    Easing, MotionDescription, MotionExt as _, MotionInitial, MotionProps, MotionTransition,
 };
 use vespertine::{
-    AnyElement, App, Bounds, DeclarativeAria, ElementId, HostStyle, ImageHostState,
-    InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, ParentElement, Pixels,
-    Styled, SvgHostState, Window, div, list, point, px,
+    AnyElement, App, Bounds, CustomElementRegistry, DeclarativeAria, ElementId, HostStyle,
+    ImageHostState, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
+    ParentElement, Pixels, Styled, SvgHostState, Window, div, list, point, px,
 };
+use vespertine::{HostId, KeyboardFocusPath, RenderContext, SharedString, Subscription};
 use vespertine_host_tree::{HostTree, NodeId, NodeRef};
 use vespertine_richtext::{
-    RichText, RunKey, TextService, UserSelect, highlight,
+    RichHostText, RichText, RunKey, TextService, UserSelect, highlight,
     search::spec::{HighlightDeclaration, default_hex_color},
     selection_color, text_root, user_select,
 };
@@ -219,6 +224,96 @@ pub struct HostScene {
     /// This scene, for rows of virtual lists that are built again during layout.
     me: std::rc::Weak<RefCell<HostScene>>,
     tree: Rc<dyn TreeSource>,
+    /// The persistent adapters of the registry types (ELM-007), one per live host identity.
+    registry: Rc<RefCell<CustomElementRegistry>>,
+    /// Destroys every adapter when the application quits, while its entities still exist.
+    quit: Option<Subscription>,
+    /// The control holding keyboard focus and its ancestors; `None` when nothing is focused or
+    /// the focus is a text editor.
+    focus_path: Option<KeyboardFocusPath>,
+}
+
+/// A motion property value from JSON. A value that is not a number becomes NaN, which the track
+/// validation rejects (ANM-002 R5), so a malformed description shows the ordinary style.
+fn motion_number(value: &Value) -> f64 {
+    value.as_f64().unwrap_or(f64::NAN)
+}
+
+fn motion_props(value: &Value) -> MotionProps {
+    let mut props = MotionProps::new();
+    let Some(map) = value.as_object() else {
+        return MotionProps::new().width(f64::NAN);
+    };
+    for (name, value) in map {
+        let number = motion_number(value);
+        props = match name.as_str() {
+            "width" => props.width(number),
+            "height" => props.height(number),
+            "top" => props.top(number),
+            "right" => props.right(number),
+            "bottom" => props.bottom(number),
+            "left" => props.left(number),
+            "borderRadius" => props.border_radius(number),
+            "opacity" => props.opacity(number),
+            _ => props,
+        };
+    }
+    props
+}
+
+fn motion_easing(value: &Value) -> Easing {
+    match value {
+        Value::String(name) => Easing::named(name),
+        Value::Array(points) if points.len() == 4 => {
+            let point = |index: usize| motion_number(&points[index]) as f32;
+            Easing::cubic_bezier(point(0), point(1), point(2), point(3))
+        }
+        _ => Easing::cubic_bezier(f32::NAN, 0.0, 0.0, 0.0),
+    }
+}
+
+/// The motion description of a node's `motion` property (ANM-002 public API): `initial`
+/// (false, or a style), `animate`, `exit`, `transition` (`duration` and `delay` in seconds, and
+/// `ease` as a name or four Bezier coordinates), plus an optional completion `generation` and
+/// `present` flag.
+fn motion_description(value: &Value) -> Option<MotionDescription> {
+    let map = value.as_object()?;
+    let mut description = MotionDescription::new(
+        map.get("animate")
+            .map(motion_props)
+            .unwrap_or_else(MotionProps::new),
+    );
+    match map.get("initial") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(false)) => description = description.initial(MotionInitial::False),
+        Some(Value::Object(_)) => {
+            description = description.initial(MotionInitial::Style(motion_props(&map["initial"])))
+        }
+        Some(_) => description = description.initial(MotionInitial::True),
+    }
+    if let Some(exit) = map.get("exit").filter(|exit| !exit.is_null()) {
+        description = description.exit(motion_props(exit));
+    }
+    if let Some(Value::Object(transition)) = map.get("transition") {
+        let mut timing = MotionTransition::new();
+        if let Some(duration) = transition.get("duration") {
+            timing = timing.duration(motion_number(duration));
+        }
+        if let Some(delay) = transition.get("delay") {
+            timing = timing.delay(motion_number(delay));
+        }
+        if let Some(ease) = transition.get("ease") {
+            timing = timing.easing(motion_easing(ease));
+        }
+        description = description.transition(timing);
+    }
+    if let Some(generation) = map.get("generation").and_then(Value::as_u64) {
+        description = description.generation(generation);
+    }
+    if let Some(present) = map.get("present").and_then(Value::as_bool) {
+        description = description.present(present);
+    }
+    Some(description)
 }
 
 fn mods(event: &HostPointerEvent) -> [(&'static str, bool); 4] {
@@ -241,6 +336,45 @@ fn pointer_payload(event: &HostPointerEvent) -> Value {
         payload[name] = Value::Bool(value);
     }
     payload
+}
+
+/// The wire name and payload of an event an adapter emitted (ELM-007 R9).
+fn host_event_payload(event: &vespertine::HostEvent) -> (String, Value) {
+    use vespertine::HostEvent as Adapter;
+    let modifiers = |payload: &mut Value, modifiers: &vespertine::Modifiers| {
+        payload["shift"] = Value::Bool(modifiers.shift);
+        payload["ctrl"] = Value::Bool(modifiers.control);
+        payload["alt"] = Value::Bool(modifiers.alt);
+        payload["cmd"] = Value::Bool(modifiers.platform);
+    };
+    let name = event.name().to_owned();
+    let payload = match event {
+        Adapter::Click(click) => {
+            let mut payload = json!({
+                "x": f32::from(click.position.x),
+                "y": f32::from(click.position.y),
+                "button": click.button,
+                "clickCount": click.click_count,
+            });
+            modifiers(&mut payload, &click.modifiers);
+            payload
+        }
+        Adapter::Enter(hover) | Adapter::Leave(hover) => {
+            let mut payload = json!({
+                "x": f32::from(hover.position.x),
+                "y": f32::from(hover.position.y),
+            });
+            modifiers(&mut payload, &hover.modifiers);
+            payload
+        }
+        Adapter::FileDrop(drop) => json!({
+            "paths": drop.paths,
+            "x": f32::from(drop.position.x),
+            "y": f32::from(drop.position.y),
+        }),
+        Adapter::Custom { payload, .. } => payload.clone(),
+    };
+    (name, payload)
 }
 
 fn key_payload(event: &HostKeyEvent) -> Value {
@@ -327,8 +461,17 @@ impl HostScene {
                 washes: None,
                 me: me.clone(),
                 tree,
+                registry: Rc::new(RefCell::new(CustomElementRegistry::default())),
+                quit: None,
+                focus_path: None,
             })
         })
+    }
+
+    /// The registry of persistent element adapters (ELM-007). Host types with a registered
+    /// factory render through it; register the factory of a type to enable it.
+    pub fn registry(&self) -> Rc<RefCell<CustomElementRegistry>> {
+        self.registry.clone()
     }
 
     /// Installs the hook that learns each node's painted bounds.
@@ -387,6 +530,7 @@ impl HostScene {
         self.sync(tree, window, cx);
         self.install_text_service(window, cx);
         self.run_owners.borrow_mut().clear();
+        self.focus_path = self.keyboard_focus_path(tree, window, cx);
         let content = match tree.root() {
             Some(root) => self.build(tree, root, window, cx),
             None => div().into_any_element(),
@@ -434,6 +578,7 @@ impl HostScene {
         if self.service.is_some() {
             return;
         }
+        self.quit = Some(CustomElementRegistry::destroy_on_quit(&self.registry, cx));
         let service = TextService::of(window, cx);
         let emit = self.emit.clone();
         let generation = self.generation.clone();
@@ -462,6 +607,7 @@ impl HostScene {
             .filter(|id| !live.contains(id))
             .collect();
         for id in dead {
+            self.registry.borrow_mut().destroy(HostId(id), window, cx);
             if let Some(mut node) = self.nodes.remove(&id) {
                 if let Some(image) = node.image.as_mut() {
                     image.release(window, cx);
@@ -479,6 +625,111 @@ impl HostScene {
             });
             Self::configure(&self.emit, id, scene_node, node);
         }
+        // An identity that now has a type without an adapter (or none of the registry's types)
+        // loses its adapter; a type change between adapter types is handled when it renders.
+        let registry = self.registry.clone();
+        let mut registry = registry.borrow_mut();
+        let live_adapters: HashSet<NodeId> = tree
+            .node_ids()
+            .filter(|id| {
+                tree.node(*id)
+                    .is_some_and(|node| Self::adapter_type(&registry, node.element_type()))
+            })
+            .collect();
+        registry.prune_missing(|host| live_adapters.contains(&host.0), window, cx);
+    }
+
+    /// Whether `element_type` renders through the adapter registry: it has a factory and is not
+    /// one of the types the scene renders itself.
+    fn adapter_type(registry: &CustomElementRegistry, element_type: &str) -> bool {
+        !matches!(
+            element_type,
+            "img" | "svg" | "virtual-list" | "div" | "text"
+        ) && registry.has_factory(element_type)
+    }
+
+    /// The path from the focused node up to the root; `None` when nothing is focused or the focus
+    /// is a text editor (ELM-007 R7).
+    fn keyboard_focus_path(
+        &self,
+        tree: &HostTree,
+        window: &Window,
+        cx: &App,
+    ) -> Option<KeyboardFocusPath> {
+        let mut at = Some(self.focused(window, cx)?);
+        let focused = tree.node(at?)?;
+        if matches!(focused.element_type(), "input" | "textarea") {
+            return None;
+        }
+        let mut ids = Vec::new();
+        while let Some(id) = at {
+            ids.push(HostId(id));
+            at = tree.node(id).and_then(|node| node.parent());
+        }
+        Some(KeyboardFocusPath { ids })
+    }
+
+    /// The render context of an adapter node: its properties, events, style, built children and
+    /// the focus, selection and highlight context inherited from its ancestors (ELM-007 R7).
+    fn adapter_context(
+        &mut self,
+        tree: &HostTree,
+        node: NodeRef<'_>,
+        style: Option<Rc<HostStyle>>,
+        children: Vec<AnyElement>,
+    ) -> RenderContext {
+        let id = node.id();
+        let emit = self.emit.clone();
+        let sink: vespertine::EmitEvent = Rc::new(move |event, _, cx| {
+            let (name, payload) = host_event_payload(&event);
+            emit(cx, id, &name, payload);
+        });
+        let mut context = RenderContext::new(HostId(id), sink);
+        context.properties = Arc::new(
+            node.props()
+                .map(|(key, value)| (key.to_owned(), value.clone()))
+                .collect(),
+        );
+        context.events = node.listeners().map(SharedString::from).collect();
+        context.focus_handle = self.focus_handle(id);
+        context.keyboard_focus = self.focus_path.clone();
+        context.style = style
+            .map(|style| Arc::new((*style).clone()))
+            .unwrap_or_default();
+        context.children = children;
+        context.text = Some(Rc::new(RichHostText));
+        let mut ancestor = node.parent();
+        let (mut selectable, mut color, mut highlight) = (None, None, None);
+        while let Some(parent) = ancestor.and_then(|parent| tree.node(parent)) {
+            if let Some(Value::Object(style)) = parent.style().map(|style| &**style) {
+                if selectable.is_none() {
+                    selectable = match style.get("userSelect").and_then(Value::as_str) {
+                        Some("none") => Some(false),
+                        Some("text") => Some(true),
+                        _ => None,
+                    };
+                }
+                if color.is_none() {
+                    color = style
+                        .get("selectionColor")
+                        .and_then(Value::as_str)
+                        .and_then(vespertine::css_color_to_rgba)
+                        .map(vespertine::Hsla::from);
+                }
+            }
+            if highlight.is_none() {
+                highlight = parent
+                    .prop("highlight")
+                    .map(|value| Arc::new(value.clone()));
+            }
+            ancestor = parent.parent();
+        }
+        context.selectable = selectable.unwrap_or(true);
+        if let Some(color) = color {
+            context.selection_color = color;
+        }
+        context.search_highlight = highlight;
+        context
     }
 
     fn configure(emit: &EmitEvent, id: NodeId, scene_node: &mut SceneNode, node: NodeRef<'_>) {
@@ -598,6 +849,25 @@ impl HostScene {
         let element_type = node.element_type();
         let painted = self.painted.clone();
 
+        if Self::adapter_type(&self.registry.borrow(), element_type) {
+            let children: Vec<NodeId> = node.children().collect();
+            let children = children
+                .into_iter()
+                .map(|child| self.build(tree, child, window, cx))
+                .collect();
+            let context = self.adapter_context(tree, node, style, children);
+            let registry = self.registry.clone();
+            let mut registry = registry.borrow_mut();
+            // An adapter's content may be painted after the rest of the frame (deferred), so its
+            // bounds are reported when it paints rather than at the end of the frame.
+            let observer: Option<vespertine::BoundsObserver> = painted.map(|painted| {
+                Rc::new(move |bounds: Bounds<Pixels>, cx: &mut App| painted(id, bounds, cx)) as _
+            });
+            let element = registry.render(element_type, context, window, cx);
+            registry.observe_bounds(HostId(id), observer);
+            return element;
+        }
+
         let Some(scene_node) = self.nodes.get_mut(&id) else {
             return div().into_any_element();
         };
@@ -656,7 +926,7 @@ impl HostScene {
                         }
                         row.unwrap_or_else(|| div().into_any_element())
                     });
-                    return host.child(rows.w_full().h_full()).into_any_element();
+                    return self.with_motion(id, node, host.child(rows.w_full().h_full()));
                 }
             }
             _ => {}
@@ -676,7 +946,7 @@ impl HostScene {
             let element = self.build(tree, child, window, cx);
             host = host.child(element);
         }
-        let mut element = host.into_any_element();
+        let mut element = self.with_motion(id, node, host);
         // `userSelect` and `selectionColor` are inherited by the subtree's text runs.
         if let Some(Value::Object(style)) = node.style().map(|style| &**style) {
             if let Some(color) = style
@@ -709,6 +979,29 @@ impl HostScene {
             });
         }
         scope.into_any_element()
+    }
+
+    /// Finishes a node's host element: a node with a `motion` property has its style driven by
+    /// a declarative motion track (ANM-002), keyed by the node identity so the track survives
+    /// rerenders. Completion reports reach a `motionComplete` listener.
+    fn with_motion(&self, id: NodeId, node: NodeRef<'_>, host: HostElement) -> AnyElement {
+        let Some(description) = node.prop("motion").and_then(motion_description) else {
+            return host.into_any_element();
+        };
+        let mut element =
+            host.with_motion(ElementId::NamedInteger("motion".into(), id), description);
+        if node.listeners().any(|name| name == "motionComplete") {
+            let emit = self.emit.clone();
+            element = element.on_motion_complete(move |completion, _, cx| {
+                emit(
+                    cx,
+                    id,
+                    "motionComplete",
+                    json!({ "generation": completion.generation, "exit": completion.exit }),
+                )
+            });
+        }
+        element.into_any_element()
     }
 
     // ---- ref-like operations --------------------------------------------------------------
