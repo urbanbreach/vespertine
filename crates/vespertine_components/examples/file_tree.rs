@@ -207,7 +207,8 @@ impl FileTreeExample {
             hover: theme.wash(0.055),
         };
         let field = cx.new(|cx| {
-            let mut field = AddressInput::new("Search files", field_theme, window, cx);
+            let mut field = AddressInput::new("Search files", window, cx);
+            field.set_theme(Some(field_theme), cx);
             field.set_label("Search");
             field
         });

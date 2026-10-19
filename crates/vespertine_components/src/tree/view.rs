@@ -946,9 +946,10 @@ impl Tree {
         self.reveal_cursor();
         let theme = self.current_theme(cx);
         let browser_theme = browser_theme(&theme);
-        let field = cx.new(|cx| AddressInput::new("", browser_theme, window, cx));
+        let field = cx.new(|cx| AddressInput::new("", window, cx));
         let range = basename_range(&entry.name, entry.is_dir());
         field.update(cx, |field, cx| {
+            field.set_theme(Some(browser_theme), cx);
             field.set_label("Rename");
             field.set_select_all_on_focus(false);
             field.set_text(&entry.name, window, cx);
