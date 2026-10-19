@@ -30,7 +30,7 @@ export function DirectImage({ width, height }) {
     h(
       "div",
       { testId: "image-surface", onPointerDown: () => setPhase((value) => value + PHASE_STEP), style: { width: ELEMENT_WIDTH, height: ELEMENT_HEIGHT } },
-      h("img", { testId: "direct-image", ref: image, style: { width: ELEMENT_WIDTH, height: ELEMENT_HEIGHT, objectFit: "fill", borderRadius: 10 } }),
+      h("img", { testId: "direct-image", ref: image, objectFit: "fill", style: { width: ELEMENT_WIDTH, height: ELEMENT_HEIGHT, borderRadius: 10 } }),
     ),
     h(
       "div",

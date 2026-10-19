@@ -105,8 +105,8 @@ export function createReferenceNative() {
       this.calls.push(["scrollIntoView", id, options]);
     }
 
-    setImageBytes(id, bytes) {
-      this.calls.push(["setImageBytes", id, bytes]);
+    setImage(id, bytes) {
+      this.calls.push(["setImage", id, bytes]);
     }
 
     setImagePixels(id, width, height, bytes, format) {

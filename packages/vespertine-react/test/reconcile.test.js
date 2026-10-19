@@ -295,8 +295,8 @@ test("host refs expose the element id, focus and scroll controls; image refs exp
   div.focus();
   const pixels = new Uint8Array(16);
   img.setImagePixels(2, 2, pixels, "bgra");
-  img.setImageBytes(new Uint8Array([1, 2, 3]));
-  assert.deepEqual(renderer.calls.map((c) => c[0]), ["scrollIntoView", "focusElement", "setImagePixels", "setImageBytes"]);
+  img.setImage(new Uint8Array([1, 2, 3]));
+  assert.deepEqual(renderer.calls.map((c) => c[0]), ["scrollIntoView", "focusElement", "setImagePixels", "setImage"]);
   assert.deepEqual(renderer.calls[2].slice(2), [2, 2, pixels, "bgra"]);
   const held = div;
   flushSync(() => root.render(null));

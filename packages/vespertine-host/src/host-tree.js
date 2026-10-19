@@ -163,9 +163,29 @@ class Node {
     return this.#call("scroll the element into view", "scrollIntoView", this.id, options ?? null);
   }
 
-  /** Replaces the image of an `img` element with encoded bytes (PNG, JPEG, ...). */
-  setImageBytes(bytes) {
-    return this.#call("set the image", "setImageBytes", this.id, bytes);
+  /** Scrolls a scrolling element to an absolute offset. */
+  scrollTo(x, y) {
+    return this.#call("scroll the element", "scrollTo", this.id, x, y);
+  }
+
+  /** Scrolls a virtual list to an item index with an optional pixel offset inside the item. */
+  scrollToItem(index, offset = 0) {
+    return this.#call("scroll to a list item", "scrollToItem", this.id, index, offset);
+  }
+
+  /** The scroll offset `{ x, y }` of a scrolling element (`null` when it does not scroll). */
+  getScrollOffset() {
+    return this.#call("read the scroll offset", "getScrollOffset", this.id);
+  }
+
+  /** The logical scroll position of a virtual list: item index, offset and content extent. */
+  getListScrollTop() {
+    return this.#call("read the list position", "getListScrollTop", this.id);
+  }
+
+  /** Replaces the image of an `img` element from encoded bytes (PNG, JPEG, ...). */
+  setImage(bytes) {
+    return this.#call("set the image", "setImage", this.id, bytes);
   }
 
   /** Replaces the image of an `img` element with raw pixels; `format` is `bgra` or `rgba`. */

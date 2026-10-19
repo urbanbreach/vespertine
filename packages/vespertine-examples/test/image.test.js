@@ -46,7 +46,7 @@ test("A3: a pointer press advances the phase by 0.6 and replaces the pixels thro
   assert.notDeepEqual(uploads()[0][4], uploads()[1][4]);
   assert.equal(ui.renderer.count("createElement"), created, "no element was recreated");
   assert.equal(ui.find("direct-image").id, image.id);
-  assert.deepEqual([image.style.width, image.style.height, image.style.borderRadius, image.style.objectFit], [720, 96, 10, "fill"]);
+  assert.deepEqual([image.style.width, image.style.height, image.style.borderRadius, image.props.objectFit], [720, 96, 10, "fill"]);
 });
 
 test("A3: the scroll-into-view control reveals the last of five 48 px rows through its reference", () => {
