@@ -44,6 +44,9 @@ mod tests_plate;
 mod tests_canvas;
 
 #[cfg(test)]
+mod tests_path_cache;
+
+#[cfg(test)]
 mod tests_image_mask;
 
 #[cfg(test)]

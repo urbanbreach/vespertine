@@ -1330,6 +1330,22 @@ impl Path<Pixels> {
         }
     }
 
+    /// A path of already tessellated triangle vertices starting at `start`; the bounds are
+    /// those of `start` and the vertices.
+    pub(crate) fn from_vertices(start: Point<Pixels>, vertices: Vec<PathVertex<Pixels>>) -> Self {
+        let mut min = start;
+        let mut max = start;
+        for vertex in &vertices {
+            let p = vertex.xy_position;
+            min = point(min.x.min(p.x), min.y.min(p.y));
+            max = point(max.x.max(p.x), max.y.max(p.y));
+        }
+        let mut path = Self::new(start);
+        path.bounds = Bounds::from_corners(min, max);
+        path.vertices = vertices;
+        path
+    }
+
     /// Scale this path by the given factor.
     pub fn scale(&self, factor: f32) -> Path<ScaledPixels> {
         Path {

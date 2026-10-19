@@ -4,13 +4,12 @@ use lyon::geom::Angle;
 use lyon::math::{Vector, vector};
 use lyon::path::traits::SvgPathBuilder;
 use lyon::path::{ArcFlags, Polygon};
-use lyon::tessellation::{
-    BuffersBuilder, FillTessellator, FillVertex, StrokeTessellator, StrokeVertex, VertexBuffers,
-};
+use lyon::tessellation::VertexBuffers;
 
 pub use lyon::math::Transform;
 pub use lyon::tessellation::{FillOptions, FillRule, LineCap, LineJoin, StrokeOptions};
 
+use crate::path_cache::{self, TessellationStyle};
 use crate::{Path, Pixels, Point, point, px};
 
 /// Style of the PathBuilder
@@ -240,6 +239,10 @@ impl PathBuilder {
     }
 
     /// Builds into a [`Path`].
+    ///
+    /// The requested transform is applied to the commands first; the tessellation of the result
+    /// is retained by its origin-relative shape and style, so a shape that is only translated is
+    /// tessellated once (per thread).
     #[inline]
     pub fn build(self) -> Result<Path<Pixels>, Error> {
         let path = if let Some(transform) = self.transform {
@@ -248,74 +251,14 @@ impl PathBuilder {
             self.raw.build()
         };
 
-        match self.style {
-            PathStyle::Stroke(options) => Self::tessellate_stroke(self.dash_array, &path, &options),
-            PathStyle::Fill(options) => Self::tessellate_fill(&path, &options),
-        }
-    }
-
-    fn tessellate_fill(
-        path: &lyon::path::Path,
-        options: &FillOptions,
-    ) -> Result<Path<Pixels>, Error> {
-        // Will contain the result of the tessellation.
-        let mut buf: VertexBuffers<lyon::math::Point, u16> = VertexBuffers::new();
-        let mut tessellator = FillTessellator::new();
-
-        // Compute the tessellation.
-        tessellator.tessellate_path(
-            path,
-            options,
-            &mut BuffersBuilder::new(&mut buf, |vertex: FillVertex| vertex.position()),
-        )?;
-
-        Ok(Self::build_path(buf))
-    }
-
-    fn tessellate_stroke(
-        dash_array: Option<Vec<Pixels>>,
-        path: &lyon::path::Path,
-        options: &StrokeOptions,
-    ) -> Result<Path<Pixels>, Error> {
-        let path = if let Some(dash_array) = dash_array {
-            let measurements = lyon::algorithms::measure::PathMeasurements::from_path(path, 0.01);
-            let mut sampler = measurements
-                .create_sampler(path, lyon::algorithms::measure::SampleType::Normalized);
-            let mut builder = lyon::path::Path::builder();
-
-            let total_length = sampler.length();
-            let dash_array_len = dash_array.len();
-            let mut pos = 0.;
-            let mut dash_index = 0;
-            while pos < total_length {
-                let dash_length = dash_array[dash_index % dash_array_len].0;
-                let next_pos = (pos + dash_length).min(total_length);
-                if dash_index % 2 == 0 {
-                    let start = pos / total_length;
-                    let end = next_pos / total_length;
-                    sampler.split_range(start..end, &mut builder);
-                }
-                pos = next_pos;
-                dash_index += 1;
-            }
-
-            &builder.build()
-        } else {
-            path
+        let style = match &self.style {
+            PathStyle::Stroke(options) => TessellationStyle::Stroke {
+                options,
+                dash_array: self.dash_array.as_deref(),
+            },
+            PathStyle::Fill(options) => TessellationStyle::Fill(options),
         };
-
-        // Will contain the result of the tessellation.
-        let mut buf: VertexBuffers<lyon::math::Point, u16> = VertexBuffers::new();
-        let mut tessellator = StrokeTessellator::new();
-
-        // Compute the tessellation.
-        tessellator.tessellate_path(
-            path,
-            options,
-            &mut BuffersBuilder::new(&mut buf, |vertex: StrokeVertex| vertex.position()),
-        )?;
-
-        Ok(Self::build_path(buf))
+        path_cache::build(&path, style)
     }
 
     /// Builds a [`Path`] from a [`lyon::tessellation::VertexBuffers`].

@@ -78,6 +78,7 @@ mod paint_scope;
 mod paint_scope_window_tests;
 pub mod panes;
 mod path_builder;
+mod path_cache;
 mod platform;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
@@ -283,6 +284,8 @@ pub use motion_policy::*;
 pub use native_prompt::*;
 pub use paint_scope::*;
 pub use path_builder::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use path_cache::{PathCacheStats, path_cache_stats, reset_path_cache};
 pub use platform::*;
 pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
