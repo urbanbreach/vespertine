@@ -33,6 +33,9 @@ pub struct UnderWash {
     pub inset_y: Pixels,
 }
 
+/// A callback run at the end of a run's paint with the geometry of the shaped text.
+type AfterPaint = Box<dyn FnOnce(&RichLayout, &mut Window, &mut App)>;
+
 /// A shaped text run of a document. Construct with [`RichText::new`].
 pub struct RichText {
     id: ElementId,
@@ -47,6 +50,7 @@ pub struct RichText {
     links: Vec<Link>,
     link_options: LinkOptions,
     styled: Option<StyledText>,
+    after_paint: Option<AfterPaint>,
 }
 
 impl RichText {
@@ -72,7 +76,18 @@ impl RichText {
             links: Vec::new(),
             link_options: LinkOptions::default(),
             styled: None,
+            after_paint: None,
         }
+    }
+
+    /// Runs `paint` at the end of this run's paint (after the glyphs) with the run's geometry:
+    /// the hook for overlays that paint over reserved slots, such as formulas.
+    pub fn after_paint(
+        mut self,
+        paint: impl FnOnce(&RichLayout, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.after_paint = Some(Box::new(paint));
+        self
     }
 
     /// Run list covering the displayed text exactly (otherwise the inherited text style is used).
@@ -357,6 +372,9 @@ impl Element for RichText {
         text_layout.paint_foreground(window, cx).ok();
         if let Some(links) = prepaint.links.as_mut() {
             links.paint(window, cx);
+        }
+        if let Some(after_paint) = self.after_paint.take() {
+            after_paint(layout, window, cx);
         }
     }
 }

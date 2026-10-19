@@ -14,6 +14,7 @@ pub mod chart;
 pub mod diff;
 pub mod elastic;
 pub mod floating;
+pub mod math;
 pub mod media;
 pub mod scroll;
 pub mod status;
