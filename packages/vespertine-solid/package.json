@@ -1,0 +1,34 @@
+{
+  "name": "@vespertine/solid",
+  "version": "0.1.0",
+  "description": "Solid adapter for the Vespertine native retained renderer",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./jsx-runtime": "./src/jsx-runtime.js",
+    "./jsx-dev-runtime": "./src/jsx-runtime.js",
+    "./preload": "./src/preload.js",
+    "./bun-plugin": "./src/bun-plugin.js",
+    "./testing": "./src/testing.js"
+  },
+  "scripts": {
+    "test": "node --conditions=browser --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@babel/core": "^7.26.0",
+    "@babel/preset-typescript": "^7.26.0",
+    "@vespertine/host": "*",
+    "babel-preset-solid": "^1.9.0"
+  },
+  "peerDependencies": {
+    "solid-js": "^1.9.0"
+  },
+  "devDependencies": {
+    "solid-js": "^1.9.16"
+  }
+}

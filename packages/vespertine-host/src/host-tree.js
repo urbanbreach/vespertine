@@ -111,6 +111,8 @@ class Node {
     this.mounted = false;
     this.hidden = false;
     this.tree = null;
+    /** True for a raw text node (as opposed to the `text` element). */
+    this.rawText = false;
     /** What the native side currently holds for this node. */
     this.sent = null;
   }
@@ -179,7 +181,9 @@ export function createHostNode(type, props = {}) {
 
 /** Creates an unplaced text description. */
 export function createTextNode(text) {
-  return new Node("text", {}, String(text));
+  const node = new Node("text", {}, String(text));
+  node.rawText = true;
+  return node;
 }
 
 /**
@@ -190,6 +194,16 @@ export function setNodeProps(node, props, text) {
   node.props = props;
   if (text !== undefined) node.text = text === null ? null : String(text);
   if (node.mounted) node.tree.syncNode(node);
+}
+
+/**
+ * Changes one property of a node in place (the node owns its property object); the native side
+ * only hears about it when the serialized value differs from what it holds.
+ */
+export function setNodeProp(node, name, value) {
+  if (value === undefined) delete node.props[name];
+  else node.props[name] = value;
+  if (node.mounted) node.tree.syncProp(node, name);
 }
 
 /** Replaces a node's own text content (`null` clears it). */
@@ -285,6 +299,21 @@ export class HostTree {
       registry.set(this.renderer, wanted);
     }
     return this.binding;
+  }
+
+  /**
+   * Starts a fresh event generation: detaches the root binding, drops every registered handler
+   * (callbacks of the previous content can no longer fire) and attaches again.
+   */
+  rebind(handlers = {}) {
+    this.binding?.detach();
+    this.handlers = createHandlerMap();
+    return this.attach(handlers);
+  }
+
+  /** Removes all content of the root (destroys the native subtree of every child). */
+  clear() {
+    for (const child of [...this.container.children]) this.remove(this.container, child);
   }
 
   get generation() {
@@ -401,18 +430,9 @@ export class HostTree {
 
   /** Queues the operations that bring the native node in line with the description. */
   syncNode(node) {
-    const { id, sent, props } = node;
-    const style = node.hidden ? hiddenStyle(props.style) : normalizeStyle(props.style);
-    if (!sameMutationValue(sent.style, style)) {
-      this.queue.setStyle(id, style);
-      sent.style = style;
-    }
-    const text = node.text;
-    if (text !== sent.text) {
-      this.queue.setText(id, text ?? "");
-      sent.text = text;
-    }
-
+    const { sent, props } = node;
+    this.#syncStyle(node);
+    this.#syncText(node);
     const customs = new Set();
     const handlers = new Map();
     for (const name of Object.keys(props)) {
@@ -432,6 +452,35 @@ export class HostTree {
       if (!handlers.has(type)) this.#syncHandler(node, type, null);
     }
     for (const [type, handler] of handlers) this.#syncHandler(node, type, handler);
+  }
+
+  /** Queues the operations for one changed property of a mounted node. */
+  syncProp(node, name) {
+    if (name === "style") {
+      this.#syncStyle(node);
+    } else if (RESERVED_PROPS.has(name)) {
+      // children, className, key and ref never reach the native side.
+    } else if (isEventProp(name)) {
+      const value = node.props[name];
+      this.#syncHandler(node, eventTypeOf(name), typeof value === "function" ? value : null);
+    } else if (acceptsCustomProp(node.type, name)) {
+      this.#syncCustom(node, name, serializeCustomProp(node.props[name]));
+    }
+  }
+
+  #syncStyle(node) {
+    const { sent, props } = node;
+    const style = node.hidden ? hiddenStyle(props.style) : normalizeStyle(props.style);
+    if (sameMutationValue(sent.style, style)) return;
+    this.queue.setStyle(node.id, style);
+    sent.style = style;
+  }
+
+  #syncText(node) {
+    const { sent, text } = node;
+    if (text === sent.text) return;
+    this.queue.setText(node.id, text ?? "");
+    sent.text = text;
   }
 
   #syncCustom(node, name, value) {

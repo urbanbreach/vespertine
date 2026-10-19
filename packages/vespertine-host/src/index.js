@@ -32,6 +32,7 @@ export {
   insertNode,
   removeNode,
   setNodeHidden,
+  setNodeProp,
   setNodeProps,
   setNodeText,
   eventTypeOf,
