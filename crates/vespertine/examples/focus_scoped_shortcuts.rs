@@ -153,9 +153,12 @@ fn bindings() -> Vec<KeyBinding> {
 async fn press(window: WindowHandle<Example>, cx: &mut AsyncApp, keys: &str) {
     for source in keys.split(' ') {
         let keystroke = Keystroke::parse(source).expect("valid keystroke");
-        window
-            .update(cx, |_, window, cx| window.dispatch_keystroke(keystroke, cx))
-            .expect("window is open");
+        // Not `WindowHandle::update`: it leases the root view, and a keystroke dispatched into a
+        // dirty window draws it first, which needs that lease.
+        cx.update_window(window.into(), |_, window, cx| {
+            window.dispatch_keystroke(keystroke, cx)
+        })
+        .expect("window is open");
         cx.background_executor()
             .timer(Duration::from_millis(50))
             .await;

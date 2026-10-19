@@ -11,13 +11,17 @@ Rows (under a `## <AREA>` section, header `| Spec | Acceptance | Verified by |`)
   once with `cargo test --workspace --no-run`, or only the needed crates when `--spec` is given),
   must not be `#[ignore]`d, and must pass (`<executable> --exact <names...>`).
 * `example:<crate>:<name>` is built (dev profile) and run for 10 s in the current graphical
-  session; it passes if it exits 0 or is still running at the timeout. `--no-run-examples` builds
-  the examples without launching them (used by `scripts/land`, so no windows open).
+  session; it passes if it exits 0 or is still running at the timeout. Examples that verify painted
+  frames need a display that delivers frame callbacks, and a compositor sends none to a blanked
+  (DPMS-off) monitor, so under Hyprland the monitors are woken before every example.
+  `--no-run-examples` builds the examples without launching them (used by `scripts/land`, so no
+  windows open).
 
 Exits 0 iff every selected row passes (empty tables pass).
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -30,6 +34,37 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEADER = ["spec", "acceptance", "verified by"]
 SPEC_RE = re.compile(r"^([A-Z0-9]+)-\d{3}$")
 AREAS = ["RND", "TXT", "LAY", "ELM", "CMP", "INP", "PLT", "ANM", "THM", "PRF", "APP", "A11Y", "DEV"]
+
+
+def wake_display():
+    """Wakes blanked Hyprland monitors; a no-op elsewhere. A blanked monitor gets no frame callbacks,
+    so windows on it never repaint after their first frame."""
+    env = dict(os.environ)
+    if "HYPRLAND_INSTANCE_SIGNATURE" not in env:
+        instances = sorted(glob.glob(f"/run/user/{os.getuid()}/hypr/*/"))
+        if not instances:
+            return
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = os.path.basename(instances[-1].rstrip("/"))
+
+    def hyprctl(*args):
+        try:
+            return subprocess.run(["hyprctl", *args], env=env, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    def blanked():
+        result = hyprctl("monitors")
+        return result is not None and "dpmsStatus: 0" in result.stdout
+
+    if not blanked():
+        return
+    print("== waking the blanked display (examples need frame callbacks)", flush=True)
+    # Hyprland with the Lua configuration takes a dispatcher expression, older versions a name.
+    for dispatch in (['hl.dsp.dpms({ action = "on" })'], ["dpms", "on"]):
+        hyprctl("dispatch", *dispatch)
+        if not blanked():
+            return
+    print("check-features: the display stays blanked; examples that need frames may fail", file=sys.stderr)
 
 
 class Row:
@@ -276,6 +311,7 @@ def check_examples(rows, packages, target_directory, seconds, run_examples):
 
 def run_example(crate, name, binary, seconds):
     """Returns None on success or a failure description."""
+    wake_display()
     print(f"== running example {crate}:{name} for {seconds} s", flush=True)
     process = subprocess.Popen([binary], cwd=ROOT, start_new_session=True)
     deadline = time.monotonic() + seconds

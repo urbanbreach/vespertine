@@ -217,11 +217,14 @@ input,button{margin:6px;font-size:16px}#f{width:420px}#tall{height:3000px;backgr
             if !loaded {
                 return self.failures;
             }
-            let width = self.eval("window.innerWidth").await;
-            self.check(
-                width.as_f64().is_some_and(|w| (w - 720.0).abs() <= 2.0),
-                "the CSS viewport matches the element width",
-            );
+            // The element's size reaches the helper with the first painted frame after the load,
+            // so the viewport settles shortly after the page reports itself loaded.
+            let sized = self
+                .until("window.innerWidth", |width| {
+                    width.as_f64().is_some_and(|w| (w - 720.0).abs() <= 2.0)
+                })
+                .await;
+            self.check(sized, "the CSS viewport matches the element width");
 
             // A real pointer click focuses the text field and the page.
             self.click_selector("#f").await;
