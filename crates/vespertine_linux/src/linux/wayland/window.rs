@@ -172,8 +172,19 @@ impl WaylandSurfaceState {
                 surface.id(),
             );
 
-            let width = f32::from(params.bounds.size.width);
-            let height = f32::from(params.bounds.size.height);
+            // Anchoring two opposite edges stretches the surface across that axis: the
+            // requested size on it is zero (the compositor decides) and the requested width or
+            // height constrains only the other axis.
+            let width = if options.anchor.contains(Anchor::LEFT | Anchor::RIGHT) {
+                0.0
+            } else {
+                f32::from(params.bounds.size.width)
+            };
+            let height = if options.anchor.contains(Anchor::TOP | Anchor::BOTTOM) {
+                0.0
+            } else {
+                f32::from(params.bounds.size.height)
+            };
             layer_surface.set_size(width as u32, height as u32);
 
             layer_surface.set_anchor(super::layer_shell::wayland_anchor(options.anchor));
