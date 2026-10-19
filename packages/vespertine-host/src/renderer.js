@@ -18,9 +18,9 @@ export function isNonInteractive() {
  * input and output after `init` succeeds.
  *
  * @param {{ onEvent?: Function, onError?: Function, native?: object,
- *           serveAutomation?: (renderer: object) => void }} [options]
+ *           serveAutomation?: (renderer: object) => void, rendererOptions?: object }} [options]
  */
-export function createNativeRenderer({ onEvent, onError, native, serveAutomation } = {}) {
+export function createNativeRenderer({ onEvent, onError, native, serveAutomation, rendererOptions } = {}) {
   const addon = native ?? loadNative();
   let renderer = null;
   renderer = new addon.Renderer((error, event) => {
@@ -33,7 +33,7 @@ export function createNativeRenderer({ onEvent, onError, native, serveAutomation
     } catch (thrown) {
       onError?.(thrown);
     }
-  });
+  }, rendererOptions);
 
   if (isNonInteractive()) {
     const init = renderer.init.bind(renderer);

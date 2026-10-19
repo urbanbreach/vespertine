@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.js",
     "./native": "./src/native.js",
-    "./reference": "./src/reference-native.js"
+    "./reference": "./src/reference-native.js",
+    "./testing": "./src/testing.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
