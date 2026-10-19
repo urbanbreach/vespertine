@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 use vespertine::{AnyElement, App, FocusHandle, Window};
 use vespertine_host_tree::{HostTree, NodeRef, TreeOptions};
 use vespertine_test_host::{
-    HostError, HostEvents, HostResult, ListAnchor, NativeEvent, PaintLog, PaintedWash, Rect, RetainedHost,
-    TreeNode,
+    HostError, HostEvents, HostResult, ListAnchor, NativeEvent, PaintLog, PaintedWash, Rect,
+    RetainedHost, TreeNode,
 };
 
 use crate::scene::{EmitEvent, HostScene};
@@ -47,35 +47,39 @@ impl HostTreeHost {
             ..TreeOptions::default()
         })));
         let scene = HostScene::new(emit, generation.clone(), Rc::new(tree.clone()));
-        scene.borrow_mut().set_painted_hook(Some(Rc::new(|id, bounds, cx| {
-            PaintLog::record_bounds(cx, id, bounds);
-        })));
-        scene.borrow_mut().set_washes_hook(Some(Rc::new(|washes, cx| {
-            for wash in washes {
-                PaintLog::record_wash(
-                    cx,
-                    PaintedWash {
-                        element_id: wash.element_id,
-                        // Every text node paints one run, with sub-index 0.
-                        run_index: 0,
-                        text: wash.text.clone(),
-                        start_utf16: wash.start_utf16,
-                        end_utf16: wash.end_utf16,
-                        active: wash.active,
-                        rects: wash
-                            .rects
-                            .iter()
-                            .map(|[x, y, width, height]| Rect {
-                                x: f64::from(*x),
-                                y: f64::from(*y),
-                                width: f64::from(*width),
-                                height: f64::from(*height),
-                            })
-                            .collect(),
-                    },
-                );
-            }
-        })));
+        scene
+            .borrow_mut()
+            .set_painted_hook(Some(Rc::new(|id, bounds, cx| {
+                PaintLog::record_bounds(cx, id, bounds);
+            })));
+        scene
+            .borrow_mut()
+            .set_washes_hook(Some(Rc::new(|washes, cx| {
+                for wash in washes {
+                    PaintLog::record_wash(
+                        cx,
+                        PaintedWash {
+                            element_id: wash.element_id,
+                            // Every text node paints one run, with sub-index 0.
+                            run_index: 0,
+                            text: wash.text.clone(),
+                            start_utf16: wash.start_utf16,
+                            end_utf16: wash.end_utf16,
+                            active: wash.active,
+                            rects: wash
+                                .rects
+                                .iter()
+                                .map(|[x, y, width, height]| Rect {
+                                    x: f64::from(*x),
+                                    y: f64::from(*y),
+                                    width: f64::from(*width),
+                                    height: f64::from(*height),
+                                })
+                                .collect(),
+                        },
+                    );
+                }
+            })));
         Self {
             tree,
             scene,
@@ -129,7 +133,9 @@ impl RetainedHost for HostTreeHost {
     }
 
     fn render(&mut self, window: &mut Window, cx: &mut App) -> AnyElement {
-        self.scene.borrow_mut().render(&self.tree.borrow(), window, cx)
+        self.scene
+            .borrow_mut()
+            .render(&self.tree.borrow(), window, cx)
     }
 
     fn root(&self) -> Option<u64> {
@@ -183,15 +189,25 @@ impl RetainedHost for HostTreeHost {
         window: &mut Window,
         _cx: &mut App,
     ) -> HostResult<()> {
-        if self.scene.borrow().scroll_to(id, x as f32, y as f32, window) {
+        if self
+            .scene
+            .borrow()
+            .scroll_to(id, x as f32, y as f32, window)
+        {
             Ok(())
         } else {
-            Err(HostError::Unsupported(format!("element {id} does not scroll")))
+            Err(HostError::Unsupported(format!(
+                "element {id} does not scroll"
+            )))
         }
     }
 
     fn scroll_into_view(&mut self, id: u64, window: &mut Window, _cx: &mut App) -> HostResult<()> {
-        if self.scene.borrow().scroll_into_view(&self.tree.borrow(), id, window) {
+        if self
+            .scene
+            .borrow()
+            .scroll_into_view(&self.tree.borrow(), id, window)
+        {
             Ok(())
         } else {
             Err(HostError::Unsupported(format!(
@@ -219,10 +235,16 @@ impl RetainedHost for HostTreeHost {
         window: &mut Window,
         _cx: &mut App,
     ) -> HostResult<()> {
-        if self.scene.borrow().scroll_to_item(id, item_index, offset as f32, window) {
+        if self
+            .scene
+            .borrow()
+            .scroll_to_item(id, item_index, offset as f32, window)
+        {
             Ok(())
         } else {
-            Err(HostError::Unsupported(format!("element {id} is not a virtual list")))
+            Err(HostError::Unsupported(format!(
+                "element {id} is not a virtual list"
+            )))
         }
     }
 
@@ -248,4 +270,3 @@ impl RetainedHost for HostTreeHost {
             .map_err(HostError::Unsupported)
     }
 }
-

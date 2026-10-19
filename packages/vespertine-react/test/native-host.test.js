@@ -170,7 +170,11 @@ native("the runtime error view shows in the same window and Reload remounts the 
   host.root.unmount();
   let broken = true;
   function App() {
-    if (broken) throw new Error("Example failure");
+    if (broken) {
+      const failure = new Error("Example failure");
+      failure.stack = "Example failure";
+      throw failure;
+    }
     return h("div", { testId: "app", style: { width: 100, height: 100 } });
   }
   const originalError = console.error;
@@ -196,6 +200,10 @@ native("the runtime error view shows in the same window and Reload remounts the 
     const button = byTestId(host, "error-reload");
     assert.equal(button.bounds.height, 40);
     assert.equal(button.bounds.x, 32);
+    assert.equal(button.bounds.y, 220);
+    assert.deepEqual(panel.bounds.height, 104);
+    const row = byTestId(host, "error-row-0");
+    assert.deepEqual([row.bounds.x, row.bounds.y, row.bounds.width, row.bounds.height], [48, 156, 504, 20]);
     broken = false;
     renderer.nativeSimulateClick(...centerOf(button));
     await settle(5);

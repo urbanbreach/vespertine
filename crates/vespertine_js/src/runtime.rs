@@ -10,8 +10,8 @@ use std::thread::JoinHandle;
 use futures::channel::oneshot;
 use serde::Serialize;
 use serde_json::Value;
-use vespertine::{App, AppContext, Pixels, QuitMode, WindowHandle};
 use vespertine::HostStyle;
+use vespertine::{App, AppContext, Pixels, QuitMode, WindowHandle};
 use vespertine_host_tree::{HostTree, TreeOptions};
 
 use crate::error::HostError;
@@ -433,7 +433,13 @@ impl HostRenderer {
     fn with_scene<T: Send + 'static>(
         &self,
         name: &'static str,
-        operation: impl FnOnce(&mut HostView, &mut vespertine::Window, &mut vespertine::Context<HostView>) -> T + Send + 'static,
+        operation: impl FnOnce(
+            &mut HostView,
+            &mut vespertine::Window,
+            &mut vespertine::Context<HostView>,
+        ) -> T
+        + Send
+        + 'static,
     ) -> Result<Option<T>, HostError> {
         self.query(name, move |cx, window| window.update(cx, operation).ok())
     }
@@ -441,20 +447,26 @@ impl HostRenderer {
     /// Focuses an element. Returns whether the element exists and is focusable.
     pub fn focus_element(&self, id: u64) -> Result<bool, HostError> {
         Ok(self
-            .with_scene("focus", move |view, window, cx| view.scene().focus(id, window, cx))?
+            .with_scene("focus", move |view, window, cx| {
+                view.scene().focus(id, window, cx)
+            })?
             .unwrap_or(false))
     }
 
     /// Removes focus from an element that holds it.
     pub fn blur_element(&self, id: u64) -> Result<(), HostError> {
-        self.with_scene("blur", move |view, window, cx| view.scene().blur(id, window, cx))?;
+        self.with_scene("blur", move |view, window, cx| {
+            view.scene().blur(id, window, cx)
+        })?;
         Ok(())
     }
 
     /// The element that holds keyboard focus, if any.
     pub fn focused_element(&self) -> Result<Option<u64>, HostError> {
         Ok(self
-            .with_scene("focused element", |view, window, cx| view.scene().focused(window, cx))?
+            .with_scene("focused element", |view, window, cx| {
+                view.scene().focused(window, cx)
+            })?
             .flatten())
     }
 
@@ -466,7 +478,8 @@ impl HostRenderer {
                 let before = view.scene().focused(window, cx);
                 let tree = view.tree().clone();
                 let tree = tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                view.scene().focus_traverse(&tree, scope, forward, window, cx);
+                view.scene()
+                    .focus_traverse(&tree, scope, forward, window, cx);
                 view.scene().focused(window, cx) != before
             })?
             .unwrap_or(false))
@@ -491,14 +504,18 @@ impl HostRenderer {
     /// far side), `None` for elements that do not scroll.
     pub fn scroll_offset(&self, id: u64) -> Result<Option<(f32, f32)>, HostError> {
         Ok(self
-            .with_scene("scroll offset", move |view, _, _| view.scene().scroll_offset(id))?
+            .with_scene("scroll offset", move |view, _, _| {
+                view.scene().scroll_offset(id)
+            })?
             .flatten())
     }
 
     /// Scrolls a scrolling element to an absolute offset (positive scrolls toward the far side).
     pub fn scroll_to(&self, id: u64, x: f32, y: f32) -> Result<bool, HostError> {
         Ok(self
-            .with_scene("scrolling", move |view, window, _| view.scene().scroll_to(id, x, y, window))?
+            .with_scene("scrolling", move |view, window, _| {
+                view.scene().scroll_to(id, x, y, window)
+            })?
             .unwrap_or(false))
     }
 
@@ -506,14 +523,18 @@ impl HostRenderer {
     /// Returns whether the element is a virtual list.
     pub fn scroll_to_item(&self, id: u64, index: usize, offset: f32) -> Result<bool, HostError> {
         Ok(self
-            .with_scene("scrolling to a list item", move |view, window, _| view.scene().scroll_to_item(id, index, offset, window))?
+            .with_scene("scrolling to a list item", move |view, window, _| {
+                view.scene().scroll_to_item(id, index, offset, window)
+            })?
             .unwrap_or(false))
     }
 
     /// The logical scroll anchor of a virtual list: `(row, offset within the row, viewport height)`.
     pub fn list_anchor(&self, id: u64) -> Result<Option<(usize, f32, f32)>, HostError> {
         Ok(self
-            .with_scene("list position", move |view, _, _| view.scene().list_anchor(id))?
+            .with_scene("list position", move |view, _, _| {
+                view.scene().list_anchor(id)
+            })?
             .flatten())
     }
 
@@ -529,9 +550,17 @@ impl HostRenderer {
     }
 
     /// Replaces an image element's image with packed pixels.
-    pub fn set_image_pixels(&self, id: u64, width: f64, height: f64, bytes: Vec<u8>, format: Option<String>) -> Result<(), HostError> {
+    pub fn set_image_pixels(
+        &self,
+        id: u64,
+        width: f64,
+        height: f64,
+        bytes: Vec<u8>,
+        format: Option<String>,
+    ) -> Result<(), HostError> {
         let result = self.with_scene("setting image pixels", move |view, window, _| {
-            view.scene().set_image_pixels(id, width, height, &bytes, format.as_deref(), window)
+            view.scene()
+                .set_image_pixels(id, width, height, &bytes, format.as_deref(), window)
         })?;
         result.unwrap_or(Ok(())).map_err(HostError::Failed)
     }
@@ -607,8 +636,9 @@ fn ui_main(
     let app = vespertine_platform::application().with_quit_mode(QuitMode::LastWindowClosed);
     app.run(move |cx| {
         let options = window.to_window_options(cx);
-        let handle = match cx.open_window(options, |_, cx| cx.new(|_| HostView::new(tree, renders, sink, generation)))
-        {
+        let handle = match cx.open_window(options, |_, cx| {
+            cx.new(|_| HostView::new(tree, renders, sink, generation))
+        }) {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = startup.send(Err(format!("failed to open the window: {error:#}")));

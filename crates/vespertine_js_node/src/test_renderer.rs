@@ -99,7 +99,9 @@ impl TestRenderer {
         let selection_notifications = tree.selection_notifications();
         let mut host = TestHost::with_tree(host_options, tree).map_err(fail)?;
         let queue = pending.clone();
-        host.set_event_dispatcher(Some(Box::new(move |event| queue.borrow_mut().push_back(event))));
+        host.set_event_dispatcher(Some(Box::new(move |event| {
+            queue.borrow_mut().push_back(event)
+        })));
         Ok(Self {
             host: RefCell::new(host),
             generation,
@@ -110,7 +112,11 @@ impl TestRenderer {
     }
 
     /// Runs `operation` on the host, then delivers the native events it produced.
-    fn run<T>(&self, env: &Env, operation: impl FnOnce(&mut TestHost) -> HostResult<T>) -> Result<T> {
+    fn run<T>(
+        &self,
+        env: &Env,
+        operation: impl FnOnce(&mut TestHost) -> HostResult<T>,
+    ) -> Result<T> {
         let result = {
             let mut host = self.host.borrow_mut();
             let result = operation(&mut host);
@@ -122,7 +128,11 @@ impl TestRenderer {
     }
 
     /// Like [`Self::run`] for operations that cannot fail.
-    fn run_infallible<T>(&self, env: &Env, operation: impl FnOnce(&mut TestHost) -> T) -> Result<T> {
+    fn run_infallible<T>(
+        &self,
+        env: &Env,
+        operation: impl FnOnce(&mut TestHost) -> T,
+    ) -> Result<T> {
         self.run(env, |host| Ok(operation(host)))
     }
 
@@ -181,43 +191,125 @@ impl TestRenderer {
     // ---- input -------------------------------------------------------------------------------
 
     #[napi]
-    pub fn simulate_keystrokes(&self, env: &Env, keys: String, element_id: Option<f64>) -> Result<()> {
-        self.run(env, |host| host.simulate_keystrokes(&keys, element_id.map(|id| id as u64)))
+    pub fn simulate_keystrokes(
+        &self,
+        env: &Env,
+        keys: String,
+        element_id: Option<f64>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.simulate_keystrokes(&keys, element_id.map(|id| id as u64))
+        })
     }
 
     #[napi]
-    pub fn native_simulate_keystrokes(&self, env: &Env, keys: String, element_id: Option<f64>) -> Result<()> {
+    pub fn native_simulate_keystrokes(
+        &self,
+        env: &Env,
+        keys: String,
+        element_id: Option<f64>,
+    ) -> Result<()> {
         self.simulate_keystrokes(env, keys, element_id)
     }
 
     #[napi]
-    pub fn native_simulate_key_down(&self, env: &Env, key: String, is_held: Option<bool>, element_id: Option<f64>) -> Result<()> {
-        self.run(env, |host| host.key_down(&key, is_held.unwrap_or(false), element_id.map(|id| id as u64)))
+    pub fn native_simulate_key_down(
+        &self,
+        env: &Env,
+        key: String,
+        is_held: Option<bool>,
+        element_id: Option<f64>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.key_down(
+                &key,
+                is_held.unwrap_or(false),
+                element_id.map(|id| id as u64),
+            )
+        })
     }
 
     #[napi]
-    pub fn native_simulate_key_up(&self, env: &Env, key: String, element_id: Option<f64>) -> Result<()> {
-        self.run(env, |host| host.key_up(&key, element_id.map(|id| id as u64)))
+    pub fn native_simulate_key_up(
+        &self,
+        env: &Env,
+        key: String,
+        element_id: Option<f64>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.key_up(&key, element_id.map(|id| id as u64))
+        })
     }
 
     #[napi]
-    pub fn native_simulate_click(&self, env: &Env, x: f64, y: f64, button: Option<u8>, modifiers: Option<String>) -> Result<()> {
-        self.run(env, |host| host.click(x, y, button.unwrap_or(0), modifiers.as_deref().unwrap_or("")))
+    pub fn native_simulate_click(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        button: Option<u8>,
+        modifiers: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.click(
+                x,
+                y,
+                button.unwrap_or(0),
+                modifiers.as_deref().unwrap_or(""),
+            )
+        })
     }
 
     #[napi]
-    pub fn native_simulate_mouse_down(&self, env: &Env, x: f64, y: f64, button: Option<u8>, modifiers: Option<String>) -> Result<()> {
-        self.run(env, |host| host.mouse_down(x, y, button.unwrap_or(0), modifiers.as_deref().unwrap_or("")))
+    pub fn native_simulate_mouse_down(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        button: Option<u8>,
+        modifiers: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.mouse_down(
+                x,
+                y,
+                button.unwrap_or(0),
+                modifiers.as_deref().unwrap_or(""),
+            )
+        })
     }
 
     #[napi]
-    pub fn native_simulate_mouse_up(&self, env: &Env, x: f64, y: f64, button: Option<u8>, modifiers: Option<String>) -> Result<()> {
-        self.run(env, |host| host.mouse_up(x, y, button.unwrap_or(0), modifiers.as_deref().unwrap_or("")))
+    pub fn native_simulate_mouse_up(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        button: Option<u8>,
+        modifiers: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.mouse_up(
+                x,
+                y,
+                button.unwrap_or(0),
+                modifiers.as_deref().unwrap_or(""),
+            )
+        })
     }
 
     #[napi]
-    pub fn native_simulate_mouse_move(&self, env: &Env, x: f64, y: f64, pressed_button: Option<u8>, modifiers: Option<String>) -> Result<()> {
-        self.run(env, |host| host.mouse_move(x, y, pressed_button, modifiers.as_deref().unwrap_or("")))
+    pub fn native_simulate_mouse_move(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        pressed_button: Option<u8>,
+        modifiers: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.mouse_move(x, y, pressed_button, modifiers.as_deref().unwrap_or(""))
+        })
     }
 
     #[napi]
@@ -227,19 +319,42 @@ impl TestRenderer {
 
     /// Wheel input in pixel deltas at a point.
     #[napi]
-    pub fn native_simulate_scroll_wheel(&self, env: &Env, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: Option<String>) -> Result<()> {
-        self.run(env, |host| host.scroll_wheel(x, y, delta_x, delta_y, modifiers.as_deref().unwrap_or("")))
+    pub fn native_simulate_scroll_wheel(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        modifiers: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.scroll_wheel(x, y, delta_x, delta_y, modifiers.as_deref().unwrap_or(""))
+        })
     }
 
     #[napi]
-    pub fn native_simulate_file_drop(&self, env: &Env, x: f64, y: f64, paths: Vec<String>) -> Result<()> {
+    pub fn native_simulate_file_drop(
+        &self,
+        env: &Env,
+        x: f64,
+        y: f64,
+        paths: Vec<String>,
+    ) -> Result<()> {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         self.run(env, |host| host.file_drop(x, y, &paths))
     }
 
     /// Drags from one point to another with the left button and returns the selected text.
     #[napi]
-    pub fn drag_select(&self, env: &Env, from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> Result<Option<String>> {
+    pub fn drag_select(
+        &self,
+        env: &Env,
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
+    ) -> Result<Option<String>> {
         self.run(env, |host| host.drag_select((from_x, from_y), (to_x, to_y)))
     }
 
@@ -296,27 +411,49 @@ impl TestRenderer {
 
     #[napi]
     pub fn get_root(&self) -> Result<Value> {
-        Ok(node_json(self.host.borrow_mut().root_element().map_err(fail)?))
+        Ok(node_json(
+            self.host.borrow_mut().root_element().map_err(fail)?,
+        ))
     }
 
     #[napi]
     pub fn get_element(&self, id: f64) -> Result<Value> {
-        Ok(node_json(self.host.borrow_mut().element_by_id(id as u64).map_err(fail)?))
+        Ok(node_json(
+            self.host
+                .borrow_mut()
+                .element_by_id(id as u64)
+                .map_err(fail)?,
+        ))
     }
 
     #[napi]
     pub fn find_by_type(&self, element_type: String) -> Result<Value> {
-        Ok(nodes_json(self.host.borrow_mut().elements_by_type(&element_type).map_err(fail)?))
+        Ok(nodes_json(
+            self.host
+                .borrow_mut()
+                .elements_by_type(&element_type)
+                .map_err(fail)?,
+        ))
     }
 
     #[napi]
     pub fn find_by_text(&self, text: String) -> Result<Value> {
-        Ok(nodes_json(self.host.borrow_mut().elements_by_text(&text).map_err(fail)?))
+        Ok(nodes_json(
+            self.host
+                .borrow_mut()
+                .elements_by_text(&text)
+                .map_err(fail)?,
+        ))
     }
 
     #[napi]
     pub fn find_by_test_id(&self, test_id: String) -> Result<Value> {
-        Ok(nodes_json(self.host.borrow_mut().elements_by_test_id(&test_id).map_err(fail)?))
+        Ok(nodes_json(
+            self.host
+                .borrow_mut()
+                .elements_by_test_id(&test_id)
+                .map_err(fail)?,
+        ))
     }
 
     #[napi]
@@ -356,7 +493,12 @@ impl TestRenderer {
     /// The identities of the elements painted at a point, topmost first.
     #[napi]
     pub fn get_elements_at(&self, x: f64, y: f64) -> Vec<f64> {
-        self.host.borrow().elements_at(x, y).into_iter().map(|id| id as f64).collect()
+        self.host
+            .borrow()
+            .elements_at(x, y)
+            .into_iter()
+            .map(|id| id as f64)
+            .collect()
     }
 
     #[napi]
@@ -367,7 +509,9 @@ impl TestRenderer {
     /// The retained tree from the root with painted bounds.
     #[napi(js_name = "toJSON")]
     pub fn to_json(&self) -> Result<Value> {
-        Ok(node_json(self.host.borrow_mut().serialize_tree().map_err(fail)?))
+        Ok(node_json(
+            self.host.borrow_mut().serialize_tree().map_err(fail)?,
+        ))
     }
 
     #[napi]
@@ -388,7 +532,12 @@ impl TestRenderer {
 
     #[napi]
     pub fn get_list_scroll_top(&self, id: f64) -> Result<Value> {
-        match self.host.borrow_mut().list_anchor(id as u64).map_err(fail)? {
+        match self
+            .host
+            .borrow_mut()
+            .list_anchor(id as u64)
+            .map_err(fail)?
+        {
             Some(anchor) => serialize(&anchor),
             None => Ok(Value::Null),
         }
@@ -412,12 +561,23 @@ impl TestRenderer {
 
     #[napi]
     pub fn get_syntax_cache_stats(&self) -> Result<Value> {
-        serialize(&self.host.borrow_mut().syntax_cache_counters().map_err(fail)?)
+        serialize(
+            &self
+                .host
+                .borrow_mut()
+                .syntax_cache_counters()
+                .map_err(fail)?,
+        )
     }
 
     #[napi]
     pub fn get_accessibility_tree(&self) -> Result<Value> {
-        Ok(self.host.borrow_mut().accessibility_tree().map_err(fail)?.unwrap_or(Value::Null))
+        Ok(self
+            .host
+            .borrow_mut()
+            .accessibility_tree()
+            .map_err(fail)?
+            .unwrap_or(Value::Null))
     }
 
     /// The viewport `{ width, height }` in logical pixels.
@@ -434,8 +594,16 @@ impl TestRenderer {
     }
 
     #[napi]
-    pub fn scroll_to_item(&self, env: &Env, id: f64, index: f64, offset: Option<f64>) -> Result<()> {
-        self.run(env, |host| host.scroll_to_item(id as u64, index as usize, offset.unwrap_or(0.0)))
+    pub fn scroll_to_item(
+        &self,
+        env: &Env,
+        id: f64,
+        index: f64,
+        offset: Option<f64>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.scroll_to_item(id as u64, index as usize, offset.unwrap_or(0.0))
+        })
     }
 
     #[napi]

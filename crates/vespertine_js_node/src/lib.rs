@@ -192,7 +192,9 @@ impl Renderer {
     /// Enables or disables selection-change events; enabled only while a subscriber exists.
     #[napi]
     pub fn set_selection_notifications(&self, enabled: bool) -> Result<()> {
-        self.inner.set_selection_notifications(enabled).map_err(to_napi)
+        self.inner
+            .set_selection_notifications(enabled)
+            .map_err(to_napi)
     }
 
     /// The selected document text, or null.
@@ -216,7 +218,11 @@ impl Renderer {
     /// The element that holds keyboard focus, or null.
     #[napi]
     pub fn get_focused_element(&self) -> Result<Option<f64>> {
-        Ok(self.inner.focused_element().map_err(to_napi)?.map(|id| id as f64))
+        Ok(self
+            .inner
+            .focused_element()
+            .map_err(to_napi)?
+            .map(|id| id as f64))
     }
 
     #[napi]
@@ -231,12 +237,16 @@ impl Renderer {
 
     #[napi]
     pub fn focus_next_within(&self, id: f64) -> Result<bool> {
-        self.inner.focus_traverse(Some(id as u64), true).map_err(to_napi)
+        self.inner
+            .focus_traverse(Some(id as u64), true)
+            .map_err(to_napi)
     }
 
     #[napi]
     pub fn focus_previous_within(&self, id: f64) -> Result<bool> {
-        self.inner.focus_traverse(Some(id as u64), false).map_err(to_napi)
+        self.inner
+            .focus_traverse(Some(id as u64), false)
+            .map_err(to_napi)
     }
 
     /// The scroll offset `{ x, y }` of a scrolling element, or null for elements that do not scroll.
@@ -252,7 +262,11 @@ impl Renderer {
     /// Scrolls a scrolling element to an absolute offset; throws when the element does not scroll.
     #[napi]
     pub fn scroll_to(&self, id: f64, x: f64, y: f64) -> Result<()> {
-        if self.inner.scroll_to(id as u64, x as f32, y as f32).map_err(to_napi)? {
+        if self
+            .inner
+            .scroll_to(id as u64, x as f32, y as f32)
+            .map_err(to_napi)?
+        {
             Ok(())
         } else {
             Err(Error::from_reason(format!("element {id} does not scroll")))
@@ -264,12 +278,18 @@ impl Renderer {
     pub fn scroll_to_item(&self, id: f64, index: f64, offset: Option<f64>) -> Result<()> {
         if self
             .inner
-            .scroll_to_item(id as u64, index.max(0.0) as usize, offset.unwrap_or(0.0) as f32)
+            .scroll_to_item(
+                id as u64,
+                index.max(0.0) as usize,
+                offset.unwrap_or(0.0) as f32,
+            )
             .map_err(to_napi)?
         {
             Ok(())
         } else {
-            Err(Error::from_reason(format!("element {id} is not a virtual list")))
+            Err(Error::from_reason(format!(
+                "element {id} is not a virtual list"
+            )))
         }
     }
 
@@ -287,19 +307,30 @@ impl Renderer {
         if self.inner.scroll_into_view(id as u64).map_err(to_napi)? {
             Ok(())
         } else {
-            Err(Error::from_reason(format!("element {id} has no scrolling ancestor")))
+            Err(Error::from_reason(format!(
+                "element {id} has no scrolling ancestor"
+            )))
         }
     }
 
     /// Replaces an image element's image with encoded bytes (PNG, JPEG, ...).
     #[napi]
     pub fn set_image(&self, id: f64, bytes: Uint8Array) -> Result<()> {
-        self.inner.set_image(id as u64, bytes.to_vec()).map_err(to_napi)
+        self.inner
+            .set_image(id as u64, bytes.to_vec())
+            .map_err(to_napi)
     }
 
     /// Replaces an image element's image with packed pixels (`bgra` by default, or `rgba`).
     #[napi]
-    pub fn set_image_pixels(&self, id: f64, width: f64, height: f64, bytes: Uint8Array, format: Option<String>) -> Result<()> {
+    pub fn set_image_pixels(
+        &self,
+        id: f64,
+        width: f64,
+        height: f64,
+        bytes: Uint8Array,
+        format: Option<String>,
+    ) -> Result<()> {
         self.inner
             .set_image_pixels(id as u64, width, height, bytes.to_vec(), format)
             .map_err(to_napi)

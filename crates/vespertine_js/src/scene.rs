@@ -51,11 +51,8 @@ pub struct SceneWash {
 pub type WashesHook = Rc<dyn Fn(&[SceneWash], &mut App)>;
 
 /// Element types that scroll their content by default.
-const SCROLL_STYLE_KEYS: [(&str, &str); 3] = [
-    ("overflow", "both"),
-    ("overflowX", "x"),
-    ("overflowY", "y"),
-];
+const SCROLL_STYLE_KEYS: [(&str, &str); 3] =
+    [("overflow", "both"), ("overflowX", "x"), ("overflowY", "y")];
 
 /// Temporary read access to the retained tree. Lets a row of a virtual list be built again
 /// during layout, when the tree is not otherwise borrowed.
@@ -92,11 +89,22 @@ impl ListConfig {
         let number = |name: &str| node.prop(name).and_then(Value::as_f64);
         Self {
             bottom: node.prop("alignment").and_then(Value::as_str) == Some("bottom"),
-            follow_tail: node.prop("followTail").and_then(Value::as_bool).unwrap_or(false),
-            overdraw: number("overdraw").filter(|value| value.is_finite()).map_or(512.0, |value| value.max(0.0) as f32),
-            estimate: number("estimatedItemHeight").filter(|value| value.is_finite() && *value > 0.0).map(|value| value as f32),
-            item_count: number("itemCount").filter(|value| value.is_finite() && *value >= 0.0).map(f64::trunc),
-            window_start: number("windowStart").filter(|value| value.is_finite() && *value >= 0.0).map_or(0, |value| value as usize),
+            follow_tail: node
+                .prop("followTail")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            overdraw: number("overdraw")
+                .filter(|value| value.is_finite())
+                .map_or(512.0, |value| value.max(0.0) as f32),
+            estimate: number("estimatedItemHeight")
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|value| value as f32),
+            item_count: number("itemCount")
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map(f64::trunc),
+            window_start: number("windowStart")
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map_or(0, |value| value as usize),
         }
     }
 }
@@ -129,7 +137,12 @@ impl ListHost {
                 );
             }
         });
-        Self { state, keys: Vec::new(), config: None, reports_range }
+        Self {
+            state,
+            keys: Vec::new(),
+            config: None,
+            reports_range,
+        }
     }
 
     /// Brings the state in line with the node: configuration changes first (each only when it
@@ -139,13 +152,18 @@ impl ListHost {
         if self.config.as_ref() != Some(&config) {
             let previous = self.config.as_ref();
             if previous.is_none_or(|old| old.bottom != config.bottom) {
-                self.state.set_alignment(if config.bottom { ListAlignment::Bottom } else { ListAlignment::Top });
+                self.state.set_alignment(if config.bottom {
+                    ListAlignment::Bottom
+                } else {
+                    ListAlignment::Top
+                });
             }
             if previous.is_none_or(|old| old.overdraw != config.overdraw) {
                 self.state.set_overdraw(px(config.overdraw));
             }
             if previous.is_none_or(|old| old.estimate != config.estimate) {
-                self.state.set_estimated_item_height(config.estimate.map(px));
+                self.state
+                    .set_estimated_item_height(config.estimate.map(px));
             }
             if previous.is_none_or(|old| old.follow_tail != config.follow_tail) {
                 self.state.set_follow_tail(config.follow_tail);
@@ -156,7 +174,8 @@ impl ListHost {
         }
         let keys: Vec<NodeId> = node.children().collect();
         if self.state.is_windowed() {
-            self.state.reconcile_keys_in_window(config.window_start, &self.keys, &keys);
+            self.state
+                .reconcile_keys_in_window(config.window_start, &self.keys, &keys);
         } else {
             self.state.reconcile_keys(&self.keys, &keys);
         }
@@ -265,14 +284,27 @@ impl HostScene {
     /// A shared scene delivering events through `emit`. `generation` is the identity of the
     /// mounted root's window-level key events (announced by `setWindowGeneration`); `tree`
     /// gives rows of virtual lists read access to the retained tree during layout.
-    pub fn new(emit: EmitEvent, generation: Arc<AtomicU64>, tree: Rc<dyn TreeSource>) -> Rc<RefCell<Self>> {
+    pub fn new(
+        emit: EmitEvent,
+        generation: Arc<AtomicU64>,
+        tree: Rc<dyn TreeSource>,
+    ) -> Rc<RefCell<Self>> {
         let context = HostContext::new();
         for key_up in [false, true] {
             let emit = emit.clone();
             let generation = generation.clone();
             let listener = move |event: &HostKeyEvent, _: &mut Window, cx: &mut App| {
-                let name = if key_up { "windowKeyUp" } else { "windowKeyDown" };
-                emit(cx, generation.load(Ordering::SeqCst), name, key_payload(event));
+                let name = if key_up {
+                    "windowKeyUp"
+                } else {
+                    "windowKeyDown"
+                };
+                emit(
+                    cx,
+                    generation.load(Ordering::SeqCst),
+                    name,
+                    key_payload(event),
+                );
             };
             if key_up {
                 context.set_window_key_up(Some(listener));
@@ -366,7 +398,9 @@ impl HostScene {
         let report = vespertine::canvas(
             |_, _, _| (),
             move |_, _, _, cx| {
-                let (Some(service), Some(hook)) = (service, washes) else { return };
+                let (Some(service), Some(hook)) = (service, washes) else {
+                    return;
+                };
                 let owners = owners.borrow();
                 let painted: Vec<SceneWash> = service
                     .painted_highlights()
@@ -406,7 +440,12 @@ impl HostScene {
         let enabled = self.selection_notifications.clone();
         service.on_selection_change(move |text, _, cx| {
             if enabled.get() {
-                emit(cx, generation.load(Ordering::SeqCst), "windowSelectionChange", json!({ "text": text }));
+                emit(
+                    cx,
+                    generation.load(Ordering::SeqCst),
+                    "windowSelectionChange",
+                    json!({ "text": text }),
+                );
             }
         });
         self.service = Some(service);
@@ -444,13 +483,25 @@ impl HostScene {
 
     fn configure(emit: &EmitEvent, id: NodeId, scene_node: &mut SceneNode, node: NodeRef<'_>) {
         let host = &scene_node.host;
-        let desired: HashSet<&'static str> = node.listeners().filter_map(|name| host_event(name).map(|(name, _)| name)).collect();
-        for name in scene_node.registered.difference(&desired).copied().collect::<Vec<_>>() {
+        let desired: HashSet<&'static str> = node
+            .listeners()
+            .filter_map(|name| host_event(name).map(|(name, _)| name))
+            .collect();
+        for name in scene_node
+            .registered
+            .difference(&desired)
+            .copied()
+            .collect::<Vec<_>>()
+        {
             if let Some((_, event)) = host_event(name) {
                 host.remove_listener(event);
             }
         }
-        for name in desired.difference(&scene_node.registered).copied().collect::<Vec<_>>() {
+        for name in desired
+            .difference(&scene_node.registered)
+            .copied()
+            .collect::<Vec<_>>()
+        {
             register(emit, id, host, name);
         }
         scene_node.registered = desired;
@@ -477,8 +528,11 @@ impl HostScene {
                 svg.set_source(node.prop("source").and_then(Value::as_str));
             }
             "virtual-list" => {
-                let list = scene_node.list.get_or_insert_with(|| ListHost::new(emit, id));
-                list.reports_range.set(node.listeners().any(|name| name == "visibleRange"));
+                let list = scene_node
+                    .list
+                    .get_or_insert_with(|| ListHost::new(emit, id));
+                list.reports_range
+                    .set(node.listeners().any(|name| name == "visibleRange"));
                 list.sync(node);
             }
             _ => {}
@@ -519,13 +573,23 @@ impl HostScene {
         }
         let live: HashSet<usize> = tree
             .node_ids()
-            .filter_map(|id| tree.node(id)?.style().map(|style| Arc::as_ptr(style) as usize))
+            .filter_map(|id| {
+                tree.node(id)?
+                    .style()
+                    .map(|style| Arc::as_ptr(style) as usize)
+            })
             .collect();
         self.styles.retain(|key, _| live.contains(key));
         self.rejected.retain(|key| live.contains(key));
     }
 
-    fn build(&mut self, tree: &HostTree, id: NodeId, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn build(
+        &mut self,
+        tree: &HostTree,
+        id: NodeId,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         self.sweep_styles(tree);
         let Some(node) = tree.node(id) else {
             return div().into_any_element();
@@ -556,7 +620,10 @@ impl HostScene {
         match element_type {
             "img" => {
                 if let Some(image) = scene_node.image.as_mut() {
-                    let refinement = style.as_ref().map(|style| style.to_refinement()).unwrap_or_default();
+                    let refinement = style
+                        .as_ref()
+                        .map(|style| style.to_refinement())
+                        .unwrap_or_default();
                     let mut element = image.element(ElementId::Integer(id), refinement, window, cx);
                     // The image element carries the host's identity for bounds tracking.
                     if let Some(painted) = self.painted.clone() {
@@ -567,7 +634,10 @@ impl HostScene {
             }
             "svg" => {
                 if let Some(svg) = scene_node.svg.as_mut() {
-                    let refinement = style.as_ref().map(|style| style.to_refinement()).unwrap_or_default();
+                    let refinement = style
+                        .as_ref()
+                        .map(|style| style.to_refinement())
+                        .unwrap_or_default();
                     return svg.render(ElementId::Integer(id), refinement, cx);
                 }
             }
@@ -580,7 +650,8 @@ impl HostScene {
                         if let Some(scene) = scene.upgrade() {
                             source.read(&mut |tree| {
                                 let child = tree.node(id).and_then(|list| list.children().nth(ix));
-                                row = child.map(|child| scene.borrow_mut().build(tree, child, window, cx));
+                                row = child
+                                    .map(|child| scene.borrow_mut().build(tree, child, window, cx));
                             });
                         }
                         row.unwrap_or_else(|| div().into_any_element())
@@ -595,7 +666,10 @@ impl HostScene {
             // The run is selectable and searchable; its key addresses it for the wash report.
             let key = RunKey::new(id, 0);
             self.run_owners.borrow_mut().insert(key.owner, id);
-            host = host.child(RichText::new(ElementId::NamedInteger("text".into(), id), text.to_string()).key(key));
+            host = host.child(
+                RichText::new(ElementId::NamedInteger("text".into(), id), text.to_string())
+                    .key(key),
+            );
         }
         let children: Vec<NodeId> = node.children().collect();
         for child in children {
@@ -610,7 +684,8 @@ impl HostScene {
                 .and_then(Value::as_str)
                 .and_then(vespertine::css_color_to_rgba)
             {
-                element = selection_color(vespertine::Hsla::from(color), element).into_any_element();
+                element =
+                    selection_color(vespertine::Hsla::from(color), element).into_any_element();
             }
             match style.get("userSelect").and_then(Value::as_str) {
                 Some("none") => element = user_select(UserSelect::None, element).into_any_element(),
@@ -622,10 +697,16 @@ impl HostScene {
             return element;
         };
         let declaration = HighlightDeclaration::from_value(declaration, &default_hex_color);
-        let mut scope = highlight(ElementId::NamedInteger("highlight".into(), id), declaration, element);
+        let mut scope = highlight(
+            ElementId::NamedInteger("highlight".into(), id),
+            declaration,
+            element,
+        );
         if node.listeners().any(|name| name == "highlight") {
             let emit = self.emit.clone();
-            scope = scope.on_match_count(move |count, _, cx| emit(cx, id, "highlight", json!({ "matchCount": count })));
+            scope = scope.on_match_count(move |count, _, cx| {
+                emit(cx, id, "highlight", json!({ "matchCount": count }))
+            });
         }
         scope.into_any_element()
     }
@@ -665,7 +746,14 @@ impl HostScene {
 
     /// Moves focus to the next (`forward`) or previous tab stop, optionally restricted to the
     /// subtree of `scope`.
-    pub fn focus_traverse(&self, tree: &HostTree, scope: Option<NodeId>, forward: bool, window: &mut Window, cx: &mut App) {
+    pub fn focus_traverse(
+        &self,
+        tree: &HostTree,
+        scope: Option<NodeId>,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         match scope {
             None => {
                 if let Some(node) = self.nodes.values().next() {
@@ -714,7 +802,9 @@ impl HostScene {
 
     /// Scrolls a scrolling node to an absolute offset (positive numbers scroll toward the far side).
     pub fn scroll_to(&self, id: NodeId, x: f32, y: f32, window: &mut Window) -> bool {
-        let Some(node) = self.nodes.get(&id) else { return false };
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
         if let Some(list) = &node.list {
             list.state.set_offset_from_scrollbar(point(px(-x), px(-y)));
             window.refresh();
@@ -733,14 +823,29 @@ impl HostScene {
         let list = self.nodes.get(&id)?.list.as_ref()?;
         let top = list.state.logical_scroll_top_and_extent().offset;
         let viewport = list.state.viewport_bounds().size.height;
-        Some((top.item_ix, f32::from(top.offset_in_item), f32::from(viewport)))
+        Some((
+            top.item_ix,
+            f32::from(top.offset_in_item),
+            f32::from(viewport),
+        ))
     }
 
     /// Scrolls a virtual list so that logical row `index` is at the top, `offset` pixels into
     /// the row (a negative offset places the row below the top). Returns whether `id` is a list.
-    pub fn scroll_to_item(&self, id: NodeId, index: usize, offset: f32, window: &mut Window) -> bool {
-        let Some(list) = self.nodes.get(&id).and_then(|node| node.list.as_ref()) else { return false };
-        list.state.scroll_to(ListOffset { item_ix: index, offset_in_item: px(offset) });
+    pub fn scroll_to_item(
+        &self,
+        id: NodeId,
+        index: usize,
+        offset: f32,
+        window: &mut Window,
+    ) -> bool {
+        let Some(list) = self.nodes.get(&id).and_then(|node| node.list.as_ref()) else {
+            return false;
+        };
+        list.state.scroll_to(ListOffset {
+            item_ix: index,
+            offset_in_item: px(offset),
+        });
         window.refresh();
         true
     }
@@ -751,12 +856,15 @@ impl HostScene {
         let mut child = id;
         let mut parent = tree.node(id).and_then(|node| node.parent());
         while let Some(current) = parent {
-            let Some(node) = tree.node(current) else { return false };
+            let Some(node) = tree.node(current) else {
+                return false;
+            };
             let scene = self.nodes.get(&current);
             if let Some(list) = scene.and_then(|scene| scene.list.as_ref()) {
                 if let Some(index) = node.children().position(|candidate| candidate == child) {
                     // Rows are indexed logically: the mounted window starts at `window_start`.
-                    list.state.scroll_to_reveal_item(list.state.window_start() + index);
+                    list.state
+                        .scroll_to_reveal_item(list.state.window_start() + index);
                     window.refresh();
                     return true;
                 }
@@ -776,7 +884,15 @@ impl HostScene {
     }
 
     /// Replaces an `img` node's image with packed pixels.
-    pub fn set_image_pixels(&mut self, id: NodeId, width: f64, height: f64, bytes: &[u8], format: Option<&str>, window: &mut Window) -> Result<(), String> {
+    pub fn set_image_pixels(
+        &mut self,
+        id: NodeId,
+        width: f64,
+        height: f64,
+        bytes: &[u8],
+        format: Option<&str>,
+        window: &mut Window,
+    ) -> Result<(), String> {
         let image = self
             .nodes
             .get_mut(&id)
@@ -790,13 +906,21 @@ impl HostScene {
     }
 
     /// Replaces an `img` node's image with encoded bytes.
-    pub fn set_image(&mut self, id: NodeId, bytes: &[u8], window: &mut Window, cx: &App) -> Result<(), String> {
+    pub fn set_image(
+        &mut self,
+        id: NodeId,
+        bytes: &[u8],
+        window: &mut Window,
+        cx: &App,
+    ) -> Result<(), String> {
         let image = self
             .nodes
             .get_mut(&id)
             .and_then(|node| node.image.as_mut())
             .ok_or_else(|| "the element is not an image".to_string())?;
-        image.set_image(bytes, cx).map_err(|error| error.to_string())?;
+        image
+            .set_image(bytes, cx)
+            .map_err(|error| error.to_string())?;
         window.refresh();
         Ok(())
     }
@@ -807,7 +931,12 @@ fn scroll_mode(style: Option<&Value>) -> HostScroll {
     let Some(Value::Object(style)) = style else {
         return HostScroll::None;
     };
-    let scrolls = |key: &str| matches!(style.get(key).and_then(Value::as_str), Some("scroll" | "auto"));
+    let scrolls = |key: &str| {
+        matches!(
+            style.get(key).and_then(Value::as_str),
+            Some("scroll" | "auto")
+        )
+    };
     let (mut x, mut y) = (false, false);
     for (key, axis) in SCROLL_STYLE_KEYS {
         if scrolls(key) {
@@ -894,8 +1023,17 @@ fn register(emit: &EmitEvent, id: NodeId, host: &HostNode, name: &'static str) {
         "fileDrop" => {
             let emit = emit.clone();
             host.on_file_drop(move |event, _, cx| {
-                let paths: Vec<String> = event.paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
-                emit(cx, id, "fileDrop", json!({ "paths": paths, "x": event.x, "y": event.y }));
+                let paths: Vec<String> = event
+                    .paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                emit(
+                    cx,
+                    id,
+                    "fileDrop",
+                    json!({ "paths": paths, "x": event.x, "y": event.y }),
+                );
             });
         }
         "layout" => {
@@ -907,7 +1045,12 @@ fn register(emit: &EmitEvent, id: NodeId, host: &HostNode, name: &'static str) {
         "scrollChange" => {
             let emit = emit.clone();
             host.on_scroll_change(move |event, _, cx| {
-                emit(cx, id, "scrollChange", json!({ "x": event.x + 0.0, "y": event.y + 0.0 }));
+                emit(
+                    cx,
+                    id,
+                    "scrollChange",
+                    json!({ "x": event.x + 0.0, "y": event.y + 0.0 }),
+                );
             });
         }
         _ => {}
