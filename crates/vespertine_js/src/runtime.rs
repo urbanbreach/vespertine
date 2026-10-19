@@ -11,7 +11,8 @@ use futures::channel::oneshot;
 use serde::Serialize;
 use serde_json::Value;
 use vespertine::{App, AppContext, Pixels, QuitMode, WindowHandle};
-use vespertine_host_tree::HostTree;
+use vespertine::HostStyle;
+use vespertine_host_tree::{HostTree, TreeOptions};
 
 use crate::error::HostError;
 use crate::link::{Reply, UiLink};
@@ -102,6 +103,8 @@ impl PromptAnswer {
 pub struct HostRenderer {
     tree: SharedTree,
     renders: Arc<AtomicU64>,
+    /// The identity window-level key events carry (the generation of the mounted root).
+    generation: Arc<AtomicU64>,
     prompts: PendingPrompts,
     sink: Option<EventSink>,
     lifecycle: Mutex<Lifecycle>,
@@ -124,8 +127,12 @@ fn panic_text(payload: &(dyn Any + Send)) -> String {
 impl HostRenderer {
     pub fn new(sink: Option<EventSink>) -> Self {
         Self {
-            tree: Arc::new(Mutex::new(HostTree::new())),
+            tree: Arc::new(Mutex::new(HostTree::with_options(TreeOptions {
+                style_validator: validate_style,
+                ..TreeOptions::default()
+            }))),
             renders: Arc::new(AtomicU64::new(0)),
+            generation: Arc::new(AtomicU64::new(0)),
             prompts: PendingPrompts::default(),
             sink,
             lifecycle: Mutex::new(Lifecycle::Uninitialized),
@@ -171,8 +178,13 @@ impl HostRenderer {
         let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
         let alive = Arc::new(AtomicBool::new(true));
         let thread = {
-            let view = (self.tree.clone(), self.renders.clone());
+            let view = (
+                self.tree.clone(),
+                self.renders.clone(),
+                self.generation.clone(),
+            );
             let sink = self.sink.clone();
+            let ui_sink = self.sink.clone();
             let alive = alive.clone();
             let prompts = self.prompts.clone();
             std::thread::Builder::new()
@@ -180,7 +192,7 @@ impl HostRenderer {
                 .spawn(move || {
                     let startup = startup_tx.clone();
                     let outcome = catch_unwind(AssertUnwindSafe(|| {
-                        ui_main(window, view, tasks, startup_tx);
+                        ui_main(window, view, ui_sink, tasks, startup_tx);
                     }));
                     if let Err(payload) = outcome {
                         let message = format!("The UI thread panicked: {}", panic_text(&*payload));
@@ -400,6 +412,87 @@ impl HostRenderer {
         Ok(PromptAnswer(answer_rx))
     }
 
+    /// Runs `operation` on the window's view on the UI thread.
+    fn with_scene<T: Send + 'static>(
+        &self,
+        name: &'static str,
+        operation: impl FnOnce(&mut HostView, &mut vespertine::Window, &mut vespertine::Context<HostView>) -> T + Send + 'static,
+    ) -> Result<Option<T>, HostError> {
+        self.query(name, move |cx, window| window.update(cx, operation).ok())
+    }
+
+    /// Focuses an element. Returns whether the element exists and is focusable.
+    pub fn focus_element(&self, id: u64) -> Result<bool, HostError> {
+        Ok(self
+            .with_scene("focus", move |view, window, cx| view.scene().focus(id, window, cx))?
+            .unwrap_or(false))
+    }
+
+    /// Removes focus from an element that holds it.
+    pub fn blur_element(&self, id: u64) -> Result<(), HostError> {
+        self.with_scene("blur", move |view, window, cx| view.scene().blur(id, window, cx))?;
+        Ok(())
+    }
+
+    /// The element that holds keyboard focus, if any.
+    pub fn focused_element(&self) -> Result<Option<u64>, HostError> {
+        Ok(self
+            .with_scene("focused element", |view, window, cx| view.scene().focused(window, cx))?
+            .flatten())
+    }
+
+    /// Moves focus to the next or previous tab stop, optionally within the subtree of `scope`.
+    pub fn focus_traverse(&self, scope: Option<u64>, forward: bool) -> Result<(), HostError> {
+        self.with_scene("focus traversal", move |view, window, cx| {
+            let tree = view.tree().clone();
+            let tree = tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            view.scene().focus_traverse(&tree, scope, forward, window, cx);
+        })?;
+        Ok(())
+    }
+
+    /// The scroll offset `(x, y)` of a scrolling element (zero at the start, negative toward the
+    /// far side), `None` for elements that do not scroll.
+    pub fn scroll_offset(&self, id: u64) -> Result<Option<(f32, f32)>, HostError> {
+        Ok(self
+            .with_scene("scroll offset", move |view, _, _| view.scene().scroll_offset(id))?
+            .flatten())
+    }
+
+    /// Scrolls a scrolling element to an absolute offset (positive scrolls toward the far side).
+    pub fn scroll_to(&self, id: u64, x: f32, y: f32) -> Result<bool, HostError> {
+        Ok(self
+            .with_scene("scrolling", move |view, window, _| view.scene().scroll_to(id, x, y, window))?
+            .unwrap_or(false))
+    }
+
+    /// Scrolls the nearest scrolling ancestor of an element so that the element is visible.
+    pub fn scroll_into_view(&self, id: u64) -> Result<bool, HostError> {
+        Ok(self
+            .with_scene("scrolling into view", move |view, window, _| {
+                let tree = view.tree().clone();
+                let tree = tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                view.scene().scroll_into_view(&tree, id, window)
+            })?
+            .unwrap_or(false))
+    }
+
+    /// Replaces an image element's image with packed pixels.
+    pub fn set_image_pixels(&self, id: u64, width: f64, height: f64, bytes: Vec<u8>, format: Option<String>) -> Result<(), HostError> {
+        let result = self.with_scene("setting image pixels", move |view, window, _| {
+            view.scene().set_image_pixels(id, width, height, &bytes, format.as_deref(), window)
+        })?;
+        result.unwrap_or(Ok(())).map_err(HostError::Failed)
+    }
+
+    /// Replaces an image element's image with encoded bytes.
+    pub fn set_image(&self, id: u64, bytes: Vec<u8>) -> Result<(), HostError> {
+        let result = self.with_scene("setting the image", move |view, window, cx| {
+            view.scene().set_image(id, &bytes, window, cx)
+        })?;
+        result.unwrap_or(Ok(())).map_err(HostError::Failed)
+    }
+
     /// Applies a mutation batch (APP-006) to the retained tree. When it changed anything a
     /// frame would draw, a repaint request is queued; if that request cannot be queued (the
     /// renderer is uninitialized or the UI loop stopped) the batch stays applied and the
@@ -426,7 +519,18 @@ impl HostRenderer {
     /// A root view drawing this renderer's retained tree (for embedders and tests that
     /// supply their own window).
     pub fn new_view(&self) -> HostView {
-        HostView::new(self.tree.clone(), self.renders.clone())
+        HostView::new(
+            self.tree.clone(),
+            self.renders.clone(),
+            self.sink.clone(),
+            self.generation.clone(),
+        )
+    }
+
+    /// Announces the generation of the mounted root: window-level key events carry it as their
+    /// identity so events of a replaced root are rejected by the JavaScript side.
+    pub fn set_window_generation(&self, generation: u64) {
+        self.generation.store(generation, Ordering::SeqCst);
     }
 
     /// The retained tree shared with the window's view.
@@ -444,14 +548,15 @@ impl HostRenderer {
 /// queued tasks until the last window closes.
 fn ui_main(
     window: ResolvedWindow,
-    (tree, renders): (SharedTree, Arc<AtomicU64>),
+    (tree, renders, generation): (SharedTree, Arc<AtomicU64>, Arc<AtomicU64>),
+    sink: Option<EventSink>,
     tasks: async_channel::Receiver<UiTask>,
     startup: mpsc::Sender<Result<(), String>>,
 ) {
     let app = vespertine_platform::application().with_quit_mode(QuitMode::LastWindowClosed);
     app.run(move |cx| {
         let options = window.to_window_options(cx);
-        let handle = match cx.open_window(options, |_, cx| cx.new(|_| HostView::new(tree, renders)))
+        let handle = match cx.open_window(options, |_, cx| cx.new(|_| HostView::new(tree, renders, sink, generation)))
         {
             Ok(handle) => handle,
             Err(error) => {
@@ -471,4 +576,11 @@ fn ui_main(
         .detach();
         let _ = startup.send(Ok(()));
     });
+}
+
+/// The style schema of the retained tree: the whole payload must decode as a [`HostStyle`].
+fn validate_style(value: &Value) -> Result<(), String> {
+    HostStyle::from_json(value, "setStyle")
+        .map(|_| ())
+        .map_err(|error| error.message().to_string())
 }

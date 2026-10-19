@@ -7771,12 +7771,14 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "futures",
+ "log",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
  "vespertine",
  "vespertine_host_tree",
  "vespertine_platform",
+ "vespertine_test_host",
 ]
 
 [[package]]

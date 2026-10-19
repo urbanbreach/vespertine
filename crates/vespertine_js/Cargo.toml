@@ -13,13 +13,20 @@ workspace = true
 path = "src/lib.rs"
 doctest = false
 
+[features]
+# The offscreen test host over the native scene (DEV-006): `HostTreeHost` implements the test
+# host's `RetainedHost`.
+test-host = ["dep:vespertine_test_host"]
+
 [dependencies]
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_host_tree.workspace = true
+vespertine_test_host = { path = "../vespertine_test_host", optional = true }
 anyhow.workspace = true
 async-channel = { workspace = true, features = ["std"] }
 futures.workspace = true
+log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
