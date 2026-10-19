@@ -23,6 +23,7 @@ vespertine_theme.workspace = true
 vespertine_webview.workspace = true
 thiserror.workspace = true
 image.workspace = true
+vespertine_richtext.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 ttf-parser.workspace = true
@@ -140,3 +141,7 @@ path = "examples/data_table.rs"
 [[example]]
 name = "status_kit"
 path = "examples/status_kit.rs"
+
+[[example]]
+name = "text_field"
+path = "examples/text_field.rs"

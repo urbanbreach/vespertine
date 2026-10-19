@@ -44,6 +44,8 @@ pub mod status;
 pub mod streaming;
 pub mod table;
 pub mod terminal;
+pub mod text;
 pub mod tokens;
 pub mod tooltip;
 pub mod tree;
+pub use text::{TextField, TextFieldEvent};

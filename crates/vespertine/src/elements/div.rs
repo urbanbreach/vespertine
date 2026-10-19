@@ -1568,6 +1568,18 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Report this element as read-only (a text input whose value cannot be edited).
+    fn aria_read_only(mut self, read_only: bool) -> Self {
+        self.interactivity().aria_mut().read_only = read_only;
+        self
+    }
+
+    /// Report this element as disabled to assistive technology.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria_mut().disabled = disabled;
+        self
+    }
+
     /// Set the minimum numeric value for this element.
     fn aria_min_numeric_value(mut self, value: f64) -> Self {
         self.interactivity().aria_mut().min_numeric_value = Some(value);
@@ -2305,6 +2317,8 @@ pub(crate) struct AriaProperties {
     pub(crate) numeric_value_step: Option<f64>,
     pub(crate) value: Option<SharedString>,
     pub(crate) placeholder: Option<SharedString>,
+    pub(crate) read_only: bool,
+    pub(crate) disabled: bool,
     pub(crate) orientation: Option<accesskit::Orientation>,
     pub(crate) level: Option<usize>,
     pub(crate) position_in_set: Option<usize>,
@@ -2357,6 +2371,8 @@ impl AriaProperties {
         alt: None,
         label_attribute_present: false,
         suppress_node: false,
+        read_only: false,
+        disabled: false,
     };
 }
 
@@ -3908,6 +3924,12 @@ impl Interactivity {
         }
         if let Some(placeholder) = &aria.placeholder {
             node.set_placeholder(placeholder.to_string());
+        }
+        if aria.read_only {
+            node.set_read_only();
+        }
+        if aria.disabled {
+            node.set_disabled();
         }
         if let Some(orientation) = aria.orientation {
             node.set_orientation(orientation);
