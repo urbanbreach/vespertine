@@ -2,6 +2,7 @@
 //! (APP-005, APP-006 R3/R7 boundary).
 
 use std::any::Any;
+use std::io::{self, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
@@ -14,6 +15,7 @@ use vespertine::HostStyle;
 use vespertine::{App, AppContext, Pixels, QuitMode, WindowHandle};
 use vespertine_host_tree::{HostTree, TreeOptions};
 
+use crate::automation::LiveAutomation;
 use crate::error::HostError;
 use crate::link::{Reply, UiLink};
 use crate::options::{ResolvedWindow, WindowConfig};
@@ -108,6 +110,8 @@ pub struct HostRenderer {
     prompts: PendingPrompts,
     sink: Option<EventSink>,
     lifecycle: Mutex<Lifecycle>,
+    /// Whether this process's standard input and output already serve automation.
+    serving: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -136,6 +140,7 @@ impl HostRenderer {
             prompts: PendingPrompts::default(),
             sink,
             lifecycle: Mutex::new(Lifecycle::Uninitialized),
+            serving: AtomicBool::new(false),
         }
     }
 
@@ -258,7 +263,7 @@ impl HostRenderer {
         }
     }
 
-    fn link(&self) -> Result<UiLink<UiTask>, HostError> {
+    pub(crate) fn link(&self) -> Result<UiLink<UiTask>, HostError> {
         match &*lock(&self.lifecycle) {
             Lifecycle::Uninitialized => Err(HostError::NotInitialized),
             Lifecycle::Stopped => Err(HostError::NotRunning),
@@ -280,9 +285,7 @@ impl HostRenderer {
         operation: &'static str,
         task: impl FnOnce(&mut App, &HostWindow) -> T + Send + 'static,
     ) -> Result<T, HostError> {
-        self.link()?.request(operation, move |reply: Reply<T>| {
-            Box::new(move |cx: &mut App, window: &HostWindow| reply.send(task(cx, window)))
-        })
+        query_on(&self.link()?, operation, task)
     }
 
     pub fn window_size(&self) -> Result<WindowSize, HostError> {
@@ -622,6 +625,77 @@ impl HostRenderer {
     pub fn with_tree<T>(&self, read: impl FnOnce(&HostTree) -> T) -> T {
         read(&lock(&self.tree))
     }
+
+    /// Serves live automation (DEV-007) over this process's standard input and output: one
+    /// dedicated thread (`vespertine-automation`) runs the protocol loop until standard input
+    /// reaches end of stream, driving the window through [`LiveAutomation`]. Standard output
+    /// is the protocol stream (Server-Sent-Events frames), so nothing else in this crate
+    /// writes to it.
+    ///
+    /// Requires a running renderer (`NotInitialized` / `NotRunning` otherwise). Standard input
+    /// and output can only be served once: a second call fails with an error instead of
+    /// starting a competing reader.
+    pub fn serve_automation(&self) -> Result<(), HostError> {
+        if self.serving.swap(true, Ordering::SeqCst) {
+            return Err(HostError::Invalid(
+                "automation is already being served over standard input and output".into(),
+            ));
+        }
+        let result = LiveAutomation::new(self).and_then(|host| {
+            spawn_automation(host, |host| {
+                vespertine_test_host::automation::serve_stdio(host)
+            })
+        });
+        if result.is_err() {
+            self.serving.store(false, Ordering::SeqCst);
+        }
+        result.map(drop)
+    }
+
+    /// Like [`HostRenderer::serve_automation`] over arbitrary byte streams (tests, other
+    /// transports): serves until `reader` reaches end of stream and returns the serving
+    /// thread's handle, which yields the loop's I/O result. May be called any number of times;
+    /// every call serves independently.
+    pub fn serve_automation_on(
+        &self,
+        reader: impl Read + Send + 'static,
+        writer: impl Write + Send + 'static,
+    ) -> Result<JoinHandle<io::Result<()>>, HostError> {
+        let host = LiveAutomation::new(self)?;
+        spawn_automation(host, move |host| {
+            vespertine_test_host::automation::serve(host, reader, writer)
+        })
+    }
+}
+
+/// Runs `task` on the UI thread behind `link` and returns its result, bounded by the link's
+/// response timeout.
+pub(crate) fn query_on<T: Send + 'static>(
+    link: &UiLink<UiTask>,
+    operation: &'static str,
+    task: impl FnOnce(&mut App, &HostWindow) -> T + Send + 'static,
+) -> Result<T, HostError> {
+    link.request(operation, move |reply: Reply<T>| {
+        Box::new(move |cx: &mut App, window: &HostWindow| reply.send(task(cx, window)))
+    })
+}
+
+fn spawn_automation(
+    mut host: LiveAutomation,
+    run: impl FnOnce(&mut LiveAutomation) -> io::Result<()> + Send + 'static,
+) -> Result<JoinHandle<io::Result<()>>, HostError> {
+    std::thread::Builder::new()
+        .name("vespertine-automation".into())
+        .spawn(move || {
+            let outcome = run(&mut host);
+            if let Err(error) = &outcome {
+                log::error!("automation channel failed: {error}");
+            }
+            outcome
+        })
+        .map_err(|error| {
+            HostError::Failed(format!("failed to start the automation thread: {error}"))
+        })
 }
 
 /// The UI thread: creates the application, opens the window, reports startup and serves

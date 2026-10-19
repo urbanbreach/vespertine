@@ -6,6 +6,7 @@
 //! ([`UiLink`]), window options ([`WindowConfig`]) and path prompts ([`PromptConfig`]). The
 //! Node-API binding lives in `vespertine_js_node`.
 
+mod automation;
 mod error;
 mod link;
 mod options;
@@ -15,6 +16,7 @@ mod scene;
 mod test_host;
 mod view;
 
+pub use automation::LiveAutomation;
 pub use error::HostError;
 pub use link::{RESPONSE_TIMEOUT, Reply, UiLink};
 pub use options::{

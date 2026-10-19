@@ -93,7 +93,9 @@ impl PaintLog {
         }
     }
 
-    pub(crate) fn push_text(&self, text: &str) {
+    /// Records a painted string, as the text-paint observer reports it. Hosts that install the
+    /// observer themselves (a live window) forward every painted line here.
+    pub fn push_text(&self, text: &str) {
         self.state.borrow_mut().strings.push(text.to_owned());
     }
 

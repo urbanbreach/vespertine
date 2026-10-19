@@ -96,30 +96,38 @@ impl HostTreeHost {
     pub fn generation(&self) -> &Arc<AtomicU64> {
         &self.generation
     }
+}
 
-    fn snapshot_node(tree: &HostTree, node: NodeRef<'_>) -> TreeNode {
-        let style = match node.style().map(|style| &**style) {
-            Some(Value::Object(map)) => map.clone(),
-            _ => Map::new(),
-        };
-        TreeNode {
-            id: node.id(),
-            element_type: node.element_type().to_owned(),
-            text: node.text().map(str::to_owned),
-            test_id: node.test_id().map(str::to_owned),
-            style,
-            events: node.listeners().map(str::to_owned).collect(),
-            custom_props: node
-                .props()
-                .map(|(key, value)| (key.to_owned(), value.clone()))
-                .collect(),
-            bounds: None,
-            children: node
-                .children()
-                .filter_map(|child| tree.node(child))
-                .map(|child| Self::snapshot_node(tree, child))
-                .collect(),
-        }
+/// The serialized retained tree from the root, without painted bounds; `None` for an empty tree.
+/// Shared by the offscreen test host and the live automation host so both report the same
+/// shape (DEV-007).
+pub(crate) fn snapshot_tree(tree: &HostTree) -> Option<TreeNode> {
+    let root = tree.node(tree.root()?)?;
+    Some(snapshot_node(tree, root))
+}
+
+fn snapshot_node(tree: &HostTree, node: NodeRef<'_>) -> TreeNode {
+    let style = match node.style().map(|style| &**style) {
+        Some(Value::Object(map)) => map.clone(),
+        _ => Map::new(),
+    };
+    TreeNode {
+        id: node.id(),
+        element_type: node.element_type().to_owned(),
+        text: node.text().map(str::to_owned),
+        test_id: node.test_id().map(str::to_owned),
+        style,
+        events: node.listeners().map(str::to_owned).collect(),
+        custom_props: node
+            .props()
+            .map(|(key, value)| (key.to_owned(), value.clone()))
+            .collect(),
+        bounds: None,
+        children: node
+            .children()
+            .filter_map(|child| tree.node(child))
+            .map(|child| snapshot_node(tree, child))
+            .collect(),
     }
 }
 
@@ -147,9 +155,7 @@ impl RetainedHost for HostTreeHost {
     }
 
     fn snapshot(&self) -> Option<TreeNode> {
-        let tree = self.tree.borrow();
-        let root = tree.node(tree.root()?)?;
-        Some(Self::snapshot_node(&tree, root))
+        snapshot_tree(&self.tree.borrow())
     }
 
     fn focus_handle(&self, id: u64, _cx: &App) -> Option<FocusHandle> {

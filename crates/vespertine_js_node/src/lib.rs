@@ -66,6 +66,15 @@ impl Renderer {
         self.inner.init(&config).map_err(to_napi)
     }
 
+    /// Serves live automation (DEV-007) over this process's standard input and output; called
+    /// by the JavaScript host after `init` when standard input is not a terminal. Standard
+    /// output is the protocol stream, so the process must not write anything else to it. A
+    /// second call is an error.
+    #[napi]
+    pub fn serve_automation(&self) -> Result<()> {
+        self.inner.serve_automation().map_err(to_napi)
+    }
+
     /// Whether the UI loop is still running; false after the last window closed.
     #[napi]
     pub fn tick(&self) -> Result<bool> {
