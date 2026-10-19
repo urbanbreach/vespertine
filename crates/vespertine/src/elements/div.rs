@@ -2336,6 +2336,8 @@ impl AriaProperties {
         description: None,
         keyshortcuts: None,
         selected: None,
+        disabled: false,
+        busy: false,
         expanded: None,
         toggled: None,
         numeric_value: None,
