@@ -5,4 +5,5 @@
 //! placeholder states) around the embedded web page of `vespertine_webview`.
 
 pub mod browser;
+pub mod floating;
 pub mod tokens;
