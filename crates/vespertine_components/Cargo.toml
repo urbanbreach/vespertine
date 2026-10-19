@@ -123,3 +123,7 @@ path = "examples/scene3d_cube.rs"
 [[example]]
 name = "shader_playground"
 path = "examples/shader_playground.rs"
+
+[[example]]
+name = "file_tree"
+path = "examples/file_tree.rs"

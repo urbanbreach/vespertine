@@ -41,6 +41,8 @@ pub struct AddressInput {
     is_selecting: bool,
     /// An explicit override of the colours; without one the active theme is read at paint time.
     theme: Option<BrowserTheme>,
+    label: SharedString,
+    select_all_on_focus: bool,
     _subscriptions: Vec<vespertine::Subscription>,
 }
 
@@ -61,7 +63,9 @@ impl AddressInput {
     ) -> Self {
         let focus_handle = cx.focus_handle();
         let subscriptions = vec![cx.on_focus(&focus_handle, window, |this, window, cx| {
-            this.select_all(window, cx);
+            if this.select_all_on_focus {
+                this.select_all(window, cx);
+            }
         })];
         Self {
             focus_handle,
@@ -75,6 +79,8 @@ impl AddressInput {
             scroll_x: px(0.),
             is_selecting: false,
             theme: None,
+            label: SharedString::new_static("Address"),
+            select_all_on_focus: true,
             _subscriptions: subscriptions,
         }
     }
@@ -124,6 +130,33 @@ impl AddressInput {
     /// Replaces the colours with an explicit set, or `None` to follow the active theme again.
     pub fn set_theme(&mut self, theme: Option<BrowserTheme>, cx: &mut Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    /// Sets the accessible label (default "Address").
+    pub fn set_label(&mut self, label: impl Into<SharedString>) {
+        self.label = label.into();
+    }
+
+    /// Whether gaining focus selects the whole text (default `true`). Embedders that place the
+    /// selection themselves, such as an inline rename, turn it off.
+    pub fn set_select_all_on_focus(&mut self, select_all: bool) {
+        self.select_all_on_focus = select_all;
+    }
+
+    /// Selects the byte `range` of the text (clamped to the text and to character boundaries).
+    pub fn set_selection(&mut self, range: Range<usize>, window: &Window, cx: &mut Context<Self>) {
+        let clamp = |offset: usize| {
+            let mut offset = offset.min(self.content.len());
+            while !self.content.is_char_boundary(offset) {
+                offset -= 1;
+            }
+            offset
+        };
+        let (start, end) = (clamp(range.start), clamp(range.end));
+        self.selected_range = start.min(end)..start.max(end);
+        self.selection_reversed = false;
+        window.notify_text_selection_changed(&self.focus_handle);
         cx.notify();
     }
 
@@ -589,7 +622,7 @@ impl Render for AddressInput {
         div()
             .id("browser-address-input")
             .role(Role::TextInput)
-            .aria_label("Address")
+            .aria_label(self.label.clone())
             .aria_placeholder(self.placeholder.clone())
             .aria_value(self.content.clone())
             .key_context("BrowserAddress")
