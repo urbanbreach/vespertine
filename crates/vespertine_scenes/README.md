@@ -94,3 +94,33 @@ Omit `--scene` for all six baseline scenes (`PERF-IDLE` runs in idle mode). Othe
 `--scene-size ID=WxH` (or `--scene-sizes FILE`) and run in perf mode. Runners are interleaved with
 rotated order within one invocation; measurements are only comparable within one invocation, and
 the machine is shared, so note its load.
+
+## Profiling
+
+`--features profile` builds the Vespertine runner with measurement aids that are inert unless their
+environment variable is set (pass them through the driver with `--runner-env KEY=VALUE`):
+
+- `VSP_IPROF=<file>`: samples the instruction pointer of the main thread every `VSP_IPROF_PERIOD`
+  (default 100 000) user instructions through the kernel's performance counters and, when the runner
+  exits, writes the samples per module and the cost per function and source line (inlined frames
+  resolved). The "stable samples" line counts the samples in the runner binary, libc and libm: the
+  instructions of the framework itself, without the spinning of GPU drivers and the compositor
+  connection, which make plain instruction and CPU-time counts vary by tens of percent between runs
+  on a loaded machine. Two runs with different `--frames` give the stable instructions of one frame
+  without startup.
+- `VSP_COUNT=<file>`: the whole process's user-space instruction and cycle counters (all threads),
+  polled every 20 ms, headed by the time the result file was written.
+- `VSP_PROFILE=<file>`: a timer-driven sampling CPU profiler (`pprof`, process CPU time of all
+  threads) starting at `VSP_PROFILE_DELAY_MS` (default 3500, past startup and warmup) at
+  `VSP_PROFILE_HZ` (default 500), reporting inclusive and self cost per function, self cost per
+  source line and per caller chain.
+
+Build with the driver's release settings (plus line tables for the profilers) in a separate target
+directory, and never compare timings of this binary with the driver's builds:
+
+```sh
+CARGO_TARGET_DIR=target/prof RUSTFLAGS="-C symbol-mangling-version=v0" RUSTUP_TOOLCHAIN=1.98.1 \
+CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release -p vespertine_scenes --features profile
+$D perf --runner vsp=target/prof/release/vsp-scene-runner --scene PERF-LIST --runs 1 --frames 1200 \
+    --runner-env 'VK_LOADER_DRIVERS_SELECT=*intel_icd*' --runner-env VSP_IPROF=$PWD/list.prof
+```
