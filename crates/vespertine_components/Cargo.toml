@@ -136,3 +136,7 @@ path = "examples/file_tree.rs"
 [[example]]
 name = "data_table"
 path = "examples/data_table.rs"
+
+[[example]]
+name = "status_kit"
+path = "examples/status_kit.rs"

@@ -423,8 +423,9 @@ fn roll_element(roll: Roll, window: &Window) -> AnyElement {
 
     let paint_plain = canvas(
         |_, _, _| (),
-        move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
-            window.request_animation_frame();
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, cx| {
+            // The shared ~30 Hz animation clock, only while a roll is active.
+            window.renew_animation_lease(cx, 1);
             let mask = vespertine::ContentMask {
                 bounds: Bounds {
                     origin: point(
