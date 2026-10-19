@@ -127,7 +127,7 @@ impl PaintLog {
             .filter(|(_, rect, _)| rect.contains(x, y))
             .map(|(id, _, order)| (*order, *id))
             .collect();
-        hits.sort_by(|a, b| b.0.cmp(&a.0));
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.0));
         hits.into_iter().map(|(_, id)| id).collect()
     }
 
