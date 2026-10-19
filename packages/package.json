@@ -1,0 +1,10 @@
+{
+  "name": "vespertine-packages",
+  "private": true,
+  "description": "npm workspace of the Vespertine JavaScript packages (one install, one lockfile)",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "vespertine-*",
+    "create-vespertine"
+  ]
+}

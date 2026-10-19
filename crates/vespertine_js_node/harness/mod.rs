@@ -21,7 +21,40 @@ pub fn workspace_root() -> PathBuf {
 }
 
 pub fn package_dir() -> PathBuf {
-    workspace_root().join("packages/vespertine-host")
+    packages_dir().join("vespertine-host")
+}
+
+/// The npm workspace holding every JavaScript package.
+pub fn packages_dir() -> PathBuf {
+    workspace_root().join("packages")
+}
+
+/// Installs the npm workspace dependencies (once per process; npm keeps its own cache, so a
+/// repeated install is quick and works offline once the packages were fetched).
+pub fn install_dependencies() {
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let status = Command::new("npm")
+            .current_dir(packages_dir())
+            .args(["install", "--no-audit", "--no-fund", "--prefer-offline"])
+            .stdin(Stdio::null())
+            .status()
+            .expect("failed to run npm");
+        assert!(status.success(), "npm install failed: {status}");
+    });
+}
+
+/// Runs `program args...` inside `packages/<package>` with the addon selected through the
+/// environment (dependencies are installed first).
+pub fn run_package(package: &str, program: &str, args: &[&str], addon: &Path) -> std::process::ExitStatus {
+    install_dependencies();
+    Command::new(program)
+        .current_dir(packages_dir().join(package))
+        .args(args)
+        .env("VESPERTINE_NATIVE_ADDON", addon)
+        .stdin(Stdio::null())
+        .status()
+        .unwrap_or_else(|error| panic!("failed to run {program}: {error}"))
 }
 
 /// Builds the addon with cargo and installs it as `<target>/vespertine-js/vespertine_js.node`
@@ -72,6 +105,7 @@ pub fn build_addon(release: bool) -> PathBuf {
 /// Runs `program args...` in the package directory with the addon selected through the
 /// environment. `unset` removes variables (used to force X11 by dropping `WAYLAND_DISPLAY`).
 pub fn run(program: &str, args: &[&str], addon: &Path, unset: &[&str]) -> std::process::ExitStatus {
+    install_dependencies();
     let mut command = Command::new(program);
     command
         .current_dir(package_dir())
