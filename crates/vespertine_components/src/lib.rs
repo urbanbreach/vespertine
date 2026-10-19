@@ -38,6 +38,7 @@ pub mod math;
 pub mod media;
 pub mod picker;
 pub mod scene3d;
+pub mod mentions;
 pub mod scroll;
 pub mod select;
 pub mod shader;

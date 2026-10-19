@@ -23,6 +23,8 @@ vespertine_theme.workspace = true
 vespertine_webview.workspace = true
 thiserror.workspace = true
 image.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 ttf-parser.workspace = true
