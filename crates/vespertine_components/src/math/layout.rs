@@ -1334,7 +1334,13 @@ mod tests {
             layout(&"x".repeat(16385), false, MathFace::DEFAULT).unwrap_err(),
             MathError::TooLong
         );
-        assert!(layout(&"x".repeat(16384), false, MathFace::DEFAULT).is_ok());
+        let at_limit = format!("x{}", " ".repeat(16383));
+        assert!(layout(&at_limit, false, MathFace::DEFAULT).is_ok());
+        // 16384 glyphs are accepted by the source limit but are wider than 2000 em.
+        assert_eq!(
+            layout(&"x".repeat(16384), false, MathFace::DEFAULT).unwrap_err(),
+            MathError::TooWide
+        );
         let wide = r"\qquad ".repeat(1200);
         assert_eq!(
             layout(&wide, false, MathFace::DEFAULT).unwrap_err(),
