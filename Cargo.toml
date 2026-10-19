@@ -726,6 +726,12 @@ rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
 git = "https://github.com/zed-industries/async-task.git"
 rev = "015845a19fc31752c02367567d3b8900a406f9da"
 
+[patch.crates-io.merman-core]
+path = "third_party/merman-core"
+
+[patch.crates-io.merman-render]
+path = "third_party/merman-render"
+
 [patch.crates-io.taffy]
 path = "third_party/taffy"
 

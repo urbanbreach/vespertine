@@ -11,6 +11,13 @@ Vendored third-party code:
 - third_party/taffy is a copy of taffy 0.13.0 (https://github.com/DioxusLabs/taffy), licensed
   under the MIT license (see the license field of third_party/taffy/Cargo.toml), with a
   modified measurement cache (src/tree/cache.rs) for persistent layout nodes (LAY-001).
+- third_party/merman-core and third_party/merman-render are copies of merman-core and
+  merman-render 0.8.0-alpha.5 (https://github.com/Latias94/merman), licensed MIT OR Apache-2.0
+  (LICENSE-MIT and LICENSE-APACHE in each directory; their THIRD_PARTY_NOTICES.md and
+  THIRD_PARTY_LICENSES/ stay in place). Modified: the HTML front end (lol_html, MPL-2.0) is
+  replaced by an own HTML tokenizer (merman-core/src/html_lexer.rs, html_simulator.rs,
+  sanitize.rs) and the CSS front end (cssparser, MPL-2.0) by an own CSS Syntax tokenizer and
+  parser plus color name table (merman-render/src/css_syntax.rs).
 
 Math faces bundled by vespertine_components (CMP-012), each under its own license:
 - Noto Sans Math: Copyright 2022 Google LLC; SIL Open Font License 1.1;

@@ -1,0 +1,290 @@
+use super::FlowchartLexemeComponent;
+use crate::{DiagramWarningFact, SourceSpan};
+use indexmap::IndexMap;
+use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowchartModel {
+    #[serde(default)]
+    pub keyword: String,
+    #[serde(default, rename = "accDescr")]
+    pub acc_descr: Option<String>,
+    #[serde(default, rename = "accTitle")]
+    pub acc_title: Option<String>,
+    #[serde(default, rename = "classDefs")]
+    pub class_defs: IndexMap<String, Vec<String>>,
+    #[serde(default)]
+    pub direction: Option<String>,
+    #[serde(default, rename = "edgeDefaults")]
+    pub edge_defaults: Option<FlowEdgeDefaults>,
+    #[serde(default, rename = "vertexCalls")]
+    pub vertex_calls: Vec<String>,
+    pub nodes: Vec<FlowNode>,
+    pub edges: Vec<FlowEdge>,
+    #[serde(default)]
+    pub subgraphs: Vec<FlowSubgraph>,
+    #[serde(default)]
+    pub tooltips: FxHashMap<String, String>,
+    #[serde(
+        default,
+        rename = "warningFacts",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub warning_facts: Vec<DiagramWarningFact>,
+}
+
+impl FlowchartModel {
+    pub(crate) fn sanitize_common_db_fields(&mut self, config: &crate::MermaidConfig) {
+        crate::common_db::sanitize_optional_acc_title(&mut self.acc_title, config);
+        crate::common_db::sanitize_optional_acc_descr(&mut self.acc_descr, config);
+    }
+}
+
+#[doc(hidden)]
+#[derive(Debug, Clone, Default)]
+pub struct FlowchartRenderLabelSources {
+    nodes: FxHashMap<String, String>,
+    edges: FxHashMap<String, String>,
+    subgraphs: FxHashMap<String, String>,
+}
+
+impl FlowchartRenderLabelSources {
+    #[doc(hidden)]
+    pub fn node_label_for_render<'a>(&'a self, node: &'a FlowNode) -> Option<&'a str> {
+        self.nodes
+            .get(&node.id)
+            .map(String::as_str)
+            .or(node.label.as_deref())
+    }
+
+    #[doc(hidden)]
+    pub fn edge_label_for_render<'a>(&'a self, edge: &'a FlowEdge) -> Option<&'a str> {
+        self.edges
+            .get(&edge.id)
+            .map(String::as_str)
+            .or(edge.label.as_deref())
+    }
+
+    #[doc(hidden)]
+    pub fn subgraph_title_for_render<'a>(&'a self, subgraph: &'a FlowSubgraph) -> &'a str {
+        self.subgraphs
+            .get(&subgraph.id)
+            .map(String::as_str)
+            .unwrap_or(subgraph.title.as_str())
+    }
+
+    pub(crate) fn insert_node(&mut self, id: String, source: String) {
+        self.nodes.insert(id, source);
+    }
+
+    pub(crate) fn insert_edge(&mut self, id: String, source: String) {
+        self.edges.insert(id, source);
+    }
+
+    pub(crate) fn set_subgraph(&mut self, id: String, source: Option<String>) {
+        if let Some(source) = source {
+            self.subgraphs.insert(id, source);
+        } else {
+            // Flowchart's renderer indexes subgraphs by id with last-declaration-wins semantics.
+            // A later ordinary title must therefore retire an earlier provenance override.
+            self.subgraphs.remove(&id);
+        }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.nodes
+            .iter()
+            .chain(&self.edges)
+            .chain(&self.subgraphs)
+            .fold(0usize, |total, (id, label)| {
+                total.saturating_add(id.len()).saturating_add(label.len())
+            })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowEdgeDefaults {
+    #[serde(default)]
+    pub interpolate: Option<String>,
+    #[serde(default)]
+    pub style: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowNode {
+    pub id: String,
+    pub label: Option<String>,
+    #[serde(default, rename = "labelType")]
+    pub label_type: Option<String>,
+    #[serde(rename = "layoutShape")]
+    pub layout_shape: Option<String>,
+    #[serde(default)]
+    pub shape: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub form: Option<String>,
+    #[serde(default)]
+    pub pos: Option<String>,
+    #[serde(default)]
+    pub img: Option<String>,
+    #[serde(default)]
+    pub constraint: Option<String>,
+    #[serde(default, rename = "assetWidth")]
+    pub asset_width: Option<f64>,
+    #[serde(default, rename = "assetHeight")]
+    pub asset_height: Option<f64>,
+    #[serde(default)]
+    pub classes: Vec<String>,
+    #[serde(default)]
+    pub styles: Vec<String>,
+    #[serde(default)]
+    pub link: Option<String>,
+    #[serde(default, rename = "linkTarget")]
+    pub link_target: Option<String>,
+    #[serde(default, rename = "haveCallback")]
+    pub have_callback: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowEdge {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub label: Option<String>,
+    #[serde(default, rename = "labelType")]
+    pub label_type: Option<String>,
+    #[serde(default, rename = "type")]
+    pub edge_type: Option<String>,
+    #[serde(default)]
+    pub arrow: String,
+    #[serde(default, rename = "isUserDefinedId")]
+    pub is_user_defined_id: bool,
+    #[serde(default)]
+    pub stroke: Option<String>,
+    #[serde(default)]
+    pub interpolate: Option<String>,
+    #[serde(default)]
+    pub classes: Vec<String>,
+    #[serde(default)]
+    pub style: Vec<String>,
+    #[serde(default)]
+    pub animate: Option<bool>,
+    #[serde(default)]
+    pub animation: Option<String>,
+    pub length: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowSubgraph {
+    pub id: String,
+    pub title: String,
+    pub dir: Option<String>,
+    #[serde(default, rename = "hasExplicitDir")]
+    pub has_explicit_dir: bool,
+    #[serde(default, rename = "labelType")]
+    pub label_type: Option<String>,
+    #[serde(default)]
+    pub classes: Vec<String>,
+    #[serde(default)]
+    pub styles: Vec<String>,
+    pub nodes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Node {
+    pub id: String,
+    pub id_span: Option<SourceSpan>,
+    pub label: Option<String>,
+    pub label_type: TitleKind,
+    pub label_span: Option<SourceSpan>,
+    pub label_selection: Option<SourceSpan>,
+    pub shape: Option<String>,
+    pub shape_data: Option<String>,
+    pub icon: Option<String>,
+    pub form: Option<String>,
+    pub pos: Option<String>,
+    pub img: Option<String>,
+    pub constraint: Option<String>,
+    pub asset_width: Option<f64>,
+    pub asset_height: Option<f64>,
+    pub styles: Vec<String>,
+    pub classes: Vec<String>,
+    pub link: Option<String>,
+    pub link_target: Option<String>,
+    pub have_callback: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Edge {
+    pub from: String,
+    pub to: String,
+    pub id: Option<String>,
+    pub link: LinkToken,
+    pub label: Option<String>,
+    pub label_type: TitleKind,
+    pub label_span: Option<SourceSpan>,
+    pub label_selection: Option<SourceSpan>,
+    pub style: Vec<String>,
+    pub classes: Vec<String>,
+    pub interpolate: Option<String>,
+    pub is_user_defined_id: bool,
+    pub animate: Option<bool>,
+    pub animation: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LinkToken {
+    pub end: String,
+    pub edge_type: String,
+    pub stroke: String,
+    pub length: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EdgeDefaults {
+    pub style: Vec<String>,
+    pub interpolate: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TitleKind {
+    Text,
+    String,
+    Markdown,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LabeledText {
+    pub text: String,
+    pub kind: TitleKind,
+    pub span: Option<SourceSpan>,
+    pub selection: Option<SourceSpan>,
+    pub lexeme_components: Vec<FlowchartLexemeComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubgraphHeader {
+    pub raw_id: String,
+    pub header_span: Option<SourceSpan>,
+    pub raw_id_span: Option<SourceSpan>,
+    pub raw_title: String,
+    pub title_kind: TitleKind,
+    pub id_equals_title: bool,
+    pub lexeme_components: Vec<FlowchartLexemeComponent>,
+}
+
+impl Default for SubgraphHeader {
+    fn default() -> Self {
+        Self {
+            raw_id: String::new(),
+            header_span: None,
+            raw_id_span: None,
+            raw_title: String::new(),
+            title_kind: TitleKind::Text,
+            id_equals_title: true,
+            lexeme_components: Vec::new(),
+        }
+    }
+}
