@@ -1,7 +1,7 @@
 //! The diff viewer element: the native unified patch viewer (R9-R19) and the split, annotated
 //! presentation (R20-R29) over one parsed model.
 
-use super::highlight::{FileDocuments, syntax_colors};
+use super::highlight::FileDocuments;
 use super::render::{self, Palette};
 use super::rows::{Annotation, DiffMode, RowMetrics, Side, SourceRef, scaled_text_metrics};
 use super::state::{DiffViewState, Layout, Model, OVERDRAW, SyncInput};
@@ -461,7 +461,7 @@ impl RenderOnce for DiffView {
         let syntax = self
             .syntax_colors
             .map(|colors| colors.with_plain(plain))
-            .unwrap_or_else(|| syntax_colors(&theme, plain));
+            .unwrap_or_else(|| SyntaxColors::from_palette(&theme.syntax, plain));
         let props = Rc::new(Props {
             theme: theme.clone(),
             word_diff: self.word_diff,

@@ -405,31 +405,6 @@ pub fn parse_file_destination(text: &str) -> Option<FileLink> {
     })
 }
 
-/// The default scheme policy: navigation is allowed for `http`, `https`, `mailto` and `file`
-/// destinations and for scheme-less file paths.
-pub fn default_navigation_allowed(destination: &str) -> bool {
-    let destination = destination.trim();
-    match destination.split_once(':') {
-        Some((scheme, rest))
-            if scheme.len() > 1
-                && scheme
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b)) =>
-        {
-            let scheme = scheme.to_ascii_lowercase();
-            // `name:123` is a path with a line suffix, not a scheme.
-            if digits(rest.split(['-', ':']).next().unwrap_or("")).is_some()
-                && !rest.starts_with("//")
-                && !matches!(scheme.as_str(), "mailto")
-            {
-                return true;
-            }
-            matches!(scheme.as_str(), "http" | "https" | "mailto" | "file")
-        }
-        _ => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,29 +714,5 @@ mod tests {
             end.convert(line, ColumnUnit::Byte).unwrap().value as usize,
             line.len() + 1
         );
-    }
-
-    #[test]
-    fn default_policy_allows_web_mail_file_and_paths() {
-        for allowed in [
-            "https://example.com",
-            "http://x",
-            "mailto:a@b.c",
-            "file:///tmp/a",
-            "src/a.rs",
-            "src/a.rs:12",
-            "a.rs:12:3",
-            "/abs/path",
-        ] {
-            assert!(default_navigation_allowed(allowed), "{allowed}");
-        }
-        for blocked in [
-            "javascript:alert(1)",
-            "data:text/html,x",
-            "vbscript:x",
-            "custom-scheme://x",
-        ] {
-            assert!(!default_navigation_allowed(blocked), "{blocked}");
-        }
     }
 }

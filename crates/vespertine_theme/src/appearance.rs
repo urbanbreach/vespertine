@@ -242,23 +242,27 @@ pub fn init(
     };
     state.install();
     cx.set_global(state);
-    if cx.has_global::<vespertine::Typography>() {
-        bind_typography(cx).detach();
-    }
+    // Bind whether or not the typography global exists yet: it may be installed after the theme.
+    bind_typography(cx).detach();
 }
 
 /// Follows the TXT-004 typography global: the theme carries its families and sizes, so a
 /// typography change is a theme change (THM-003 R18). The roles are copied now and again
-/// whenever the `Typography` global is published. [`init`] binds automatically when the
-/// global already exists; call this after initializing typography otherwise. Keep the
-/// returned subscription for as long as the binding should last (or `detach` it).
+/// whenever the `Typography` global is published (each accepted change advances its
+/// generation and republishes it). [`init`] binds automatically, whether the global exists
+/// yet or is installed later; the binding is idempotent, so calling this again only adds an
+/// observer that sets the same roles. Keep the returned subscription for as long as the
+/// binding should last (or `detach` it).
 pub fn bind_typography(cx: &mut App) -> Subscription {
     sync_typography(cx);
     cx.observe_global::<vespertine::Typography>(sync_typography)
 }
 
 fn sync_typography(cx: &mut App) {
-    let roles = TypographyRoles::from_typography(vespertine::Typography::global(cx));
+    let Some(typography) = cx.try_global::<vespertine::Typography>() else {
+        return;
+    };
+    let roles = TypographyRoles::from_typography(typography);
     set_typography(cx, roles);
 }
 

@@ -15,6 +15,7 @@ doctest = false
 
 [dependencies]
 vespertine.workspace = true
+vespertine_theme.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 unicode-segmentation.workspace = true

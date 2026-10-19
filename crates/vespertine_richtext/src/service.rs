@@ -14,14 +14,15 @@ use crate::registry::{
     PaintedHighlight, PaintedText, RegisteredRun, Registry, RunKey, StartRegion, SurfaceId,
 };
 use crate::selection::{Outcome, Selection, resolve_spans};
+use crate::theme::TextTheme;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use vespertine::{
     AnyElement, App, Bounds, ClipboardItem, DispatchPhase, Element, ElementId, Global,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Window, WindowId, rgb,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TextStyle, TextStyleRefinement,
+    Window, WindowId,
 };
 
 /// `userSelect` of a subtree.
@@ -36,23 +37,6 @@ pub enum UserSelect {
     #[default]
     Auto,
 }
-
-/// Colors the text service needs from the theme.
-#[derive(Clone, Copy, Debug)]
-pub struct TextTheme {
-    /// The accent: selection and search washes default to it with their own alpha.
-    pub accent: Hsla,
-}
-
-impl Default for TextTheme {
-    fn default() -> Self {
-        Self {
-            accent: rgb(0x7c86ff).into(),
-        }
-    }
-}
-
-impl Global for TextTheme {}
 
 /// Default alpha of the selection wash.
 pub const SELECTION_ALPHA: f32 = 0.35;
@@ -75,8 +59,6 @@ struct State {
     selection: Selection,
     accent: Option<Hsla>,
     surfaces: Vec<SurfaceId>,
-    user_select: Vec<UserSelect>,
-    selection_colors: Vec<Hsla>,
     highlights: Vec<Rc<HostFrame>>,
     lists: Vec<RegisteredList>,
     autoscroll: Autoscroll,
@@ -206,15 +188,6 @@ impl TextService {
         self.0.borrow().surfaces.last().copied().unwrap_or_default()
     }
 
-    /// Whether text painted now may be selected (R2).
-    pub fn selectable_now(&self) -> bool {
-        self.0
-            .borrow()
-            .user_select
-            .last()
-            .is_none_or(|mode| *mode != UserSelect::None)
-    }
-
     /// Registers a run (document order = paint order).
     pub fn register_run(&self, run: RegisteredRun, window: &mut Window, cx: &mut App) {
         let service = self.clone();
@@ -268,16 +241,18 @@ impl TextService {
         state.selection.wash_range(surface, key)
     }
 
-    /// Color of the selection wash: the inherited `selectionColor`, otherwise the accent with
-    /// alpha 0.35 (R14).
-    pub fn selection_color(&self) -> Hsla {
-        let state = self.0.borrow();
-        state.selection_colors.last().copied().unwrap_or_else(|| {
-            let accent = state.accent.unwrap_or_else(|| TextTheme::default().accent);
-            Hsla {
-                a: SELECTION_ALPHA,
-                ..accent
-            }
+    /// Color of the selection wash for text painted now: the `selection_color` of the inherited
+    /// text style (set by `Styled::selection_color` or the [`selection_color`] scope), otherwise
+    /// the accent with alpha 0.35 (R14).
+    pub fn selection_color(&self, window: &Window) -> Hsla {
+        self.selection_color_in(&window.text_style())
+    }
+
+    /// [`TextService::selection_color`] for an already resolved text style.
+    pub fn selection_color_in(&self, style: &TextStyle) -> Hsla {
+        style.selection_color.unwrap_or_else(|| Hsla {
+            a: SELECTION_ALPHA,
+            ..self.accent()
         })
     }
 
@@ -315,10 +290,8 @@ impl TextService {
         state.registry.reset();
         state.lists.clear();
         state.surfaces.clear();
-        state.user_select.clear();
-        state.selection_colors.clear();
         state.highlights.clear();
-        state.accent = cx.try_global::<TextTheme>().map(|theme| theme.accent);
+        state.accent = Some(TextTheme::current(cx).accent);
         state.frames += 1;
     }
 
@@ -555,8 +528,7 @@ impl ScopeKind {
         match self {
             ScopeKind::Root => {}
             ScopeKind::Surface(id) => state.surfaces.push(id),
-            ScopeKind::UserSelect(mode) => state.user_select.push(mode),
-            ScopeKind::SelectionColor(color) => state.selection_colors.push(color),
+            ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => {}
         }
     }
 
@@ -568,33 +540,42 @@ impl ScopeKind {
             ScopeKind::Surface(_) => {
                 state.surfaces.pop();
             }
-            ScopeKind::UserSelect(_) => {
-                state.user_select.pop();
-            }
-            ScopeKind::SelectionColor(_) => {
-                state.selection_colors.pop();
+            ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => {}
+        }
+    }
+
+    /// The text style a scope contributes: `userSelect` and `selectionColor` are the inherited
+    /// `TextStyle` properties of the framework (ELM-006), so these scopes and `Styled::user_select`
+    /// / `Styled::selection_color` are one mechanism.
+    fn text_style(self) -> Option<TextStyleRefinement> {
+        match self {
+            ScopeKind::UserSelect(UserSelect::None) => Some(TextStyleRefinement {
+                user_select: Some(false),
+                ..Default::default()
+            }),
+            ScopeKind::UserSelect(UserSelect::Text) => Some(TextStyleRefinement {
+                user_select: Some(true),
+                ..Default::default()
+            }),
+            ScopeKind::SelectionColor(color) => Some(TextStyleRefinement {
+                selection_color: Some(color),
+                ..Default::default()
+            }),
+            ScopeKind::Root | ScopeKind::Surface(_) | ScopeKind::UserSelect(UserSelect::Auto) => {
+                None
             }
         }
     }
 
     /// The token views nested in the scope are replayed under: a nested view is replayed only
-    /// while the scope it inherits is unchanged (its output depends on the inherited setting).
+    /// while the surface it inherits is unchanged (its run keys depend on it). The inherited
+    /// text style properties need no token: the framework already rebuilds views whose
+    /// inherited text style changed.
     fn retention_token(self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         match self {
-            ScopeKind::Root => 0u8.hash(&mut hasher),
-            ScopeKind::Surface(id) => (1u8, id.0).hash(&mut hasher),
-            ScopeKind::UserSelect(mode) => (2u8, mode as u8).hash(&mut hasher),
-            ScopeKind::SelectionColor(color) => (
-                3u8,
-                color.h.to_bits(),
-                color.s.to_bits(),
-                color.l.to_bits(),
-                color.a.to_bits(),
-            )
-                .hash(&mut hasher),
+            ScopeKind::Surface(id) => id.0 ^ 0x9e37_79b9_7f4a_7c15,
+            ScopeKind::Root | ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => 0,
         }
-        hasher.finish()
     }
 }
 
@@ -623,10 +604,13 @@ impl Element for Scope {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let layout_id = match self.kind {
-            ScopeKind::Root => self.child.request_layout(window, cx),
-            kind => window.with_retention_context(kind.retention_token(), |window| {
+            ScopeKind::Surface(_) => window
+                .with_retention_context(self.kind.retention_token(), |window| {
+                    self.child.request_layout(window, cx)
+                }),
+            ScopeKind::Root | ScopeKind::UserSelect(_) | ScopeKind::SelectionColor(_) => {
                 self.child.request_layout(window, cx)
-            }),
+            }
         };
         (layout_id, ())
     }
@@ -660,9 +644,15 @@ impl Element for Scope {
         let service = TextService::current();
         let entering = service.clone();
         window.prepaint_effect(cx, Rc::new(move |_, _| kind.enter(entering.as_ref())));
-        window.with_retention_context(kind.retention_token(), |window| {
-            self.child.prepaint(window, cx)
-        });
+        let style = kind.text_style();
+        let retention = matches!(kind, ScopeKind::Surface(_));
+        if retention {
+            window.with_retention_context(kind.retention_token(), |window| {
+                self.child.prepaint(window, cx)
+            });
+        } else {
+            window.with_text_style(style, |window| self.child.prepaint(window, cx));
+        }
         let exiting = service.clone();
         window.prepaint_effect(cx, Rc::new(move |_, _| kind.exit(exiting.as_ref())));
         ScopeState { service }
@@ -708,7 +698,7 @@ impl Element for Scope {
         }
         let entering = service.clone();
         window.paint_effect(cx, Rc::new(move |_, _| kind.enter(entering.as_ref())));
-        self.child.paint(window, cx);
+        window.with_text_style(kind.text_style(), |window| self.child.paint(window, cx));
         window.paint_effect(cx, Rc::new(move |_, _| kind.exit(service.as_ref())));
     }
 }

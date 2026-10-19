@@ -7981,6 +7981,7 @@ dependencies = [
  "unicode-segmentation",
  "vespertine",
  "vespertine_platform",
+ "vespertine_theme",
  "vespertine_wgpu",
 ]
 

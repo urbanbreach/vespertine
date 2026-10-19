@@ -38,6 +38,7 @@ pub mod selection;
 pub mod service;
 pub mod slot;
 pub mod syntax;
+pub mod theme;
 
 pub use display_map::{DisplayMap, OriginalText, Replacement, with_break_opportunities};
 pub use geometry::{IndexHit, MAX_RANGE_ROWS, RichLayout, RowGeometry, RowInfo, range_rects};
@@ -55,10 +56,11 @@ pub use registry::{
 pub use rich_text::{RichText, UnderWash};
 pub use selection::{Outcome, Selection, Span, resolve_spans, word_range};
 pub use service::{
-    SELECTION_ALPHA, Scope, SelectionRequest, TextService, TextTheme, UserSelect, selection_color,
-    surface, text_root, user_select,
+    SELECTION_ALPHA, Scope, SelectionRequest, TextService, UserSelect, selection_color, surface,
+    text_root, user_select,
 };
 pub use slot::{FILE_LINK_SLOT, SlottedText, insert_slots};
+pub use theme::TextTheme;
 
 pub use runs::{
     CoverError, RichSpans, floor_char_boundary, plain_run, runs_from_spans, shaping_key,

@@ -659,3 +659,43 @@ fn typography_global_changes_are_theme_changes(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// The typography global installed after the theme state is followed too: the binding does not
+/// depend on the initialization order, and the generation of every accepted change reaches the
+/// theme.
+#[vespertine::test]
+fn typography_installed_after_the_theme_is_followed(cx: &mut TestAppContext) {
+    use vespertine::{FontCatalog, Typography, TypographySettings};
+    let _guard = serialize();
+    cx.update(|cx| {
+        appearance::init(
+            cx,
+            AppearanceMode::Dark,
+            ThemeSelection::default(),
+            AccentSelection::ThemeDefault,
+            SurfacePreference::ThemeDefault,
+        );
+        assert_eq!(theme_of(cx).typography, TypographyRoles::default());
+        let catalog = FontCatalog::register(cx, &[]);
+        let settings = TypographySettings::defaults(&catalog);
+        Typography::init(catalog, settings, cx);
+    });
+    cx.run_until_parked();
+    let before = Cell::new(0);
+    cx.update(|cx| {
+        assert_eq!(
+            theme_of(cx).typography,
+            TypographyRoles::from_typography(Typography::global(cx)),
+            "installing the global is a typography change"
+        );
+        before.set(style_generation());
+        let typography_generation = Typography::global(cx).generation();
+        assert!(Typography::set_code_size(19.0, cx));
+        assert_ne!(Typography::global(cx).generation(), typography_generation);
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(theme_of(cx).typography.code_size, 19.0);
+        assert_eq!(style_generation(), before.get().wrapping_add(1));
+    });
+}

@@ -9,11 +9,9 @@
 use super::model::{DiffFile, DiffLine, LineKind};
 use std::collections::HashMap;
 use std::sync::Arc;
-use vespertine::Hsla;
 use vespertine_richtext::syntax::{
-    HighlightCache, HighlightRequest, HighlightedDocument, Span, SyntaxColors, detect,
+    HighlightCache, HighlightRequest, HighlightedDocument, Span, detect,
 };
-use vespertine_theme::document::{DocumentTheme, SyntaxCategory};
 
 /// A side whose largest line number exceeds this is not highlighted (R14); it bounds the table
 /// for hostile hunk numbers.
@@ -259,15 +257,6 @@ impl FileHighlights {
     pub fn new_side(&self) -> &SideSpans {
         &self.new
     }
-}
-
-/// The syntax palette of a theme as the richtext palette, with `plain` for unclassified text.
-pub fn syntax_colors(theme: &DocumentTheme, plain: Hsla) -> SyntaxColors {
-    let mut colors = SyntaxColors::dark().with_plain(plain);
-    for category in SyntaxCategory::ALL {
-        colors.set_category(category.key(), theme.syntax.get(category).into());
-    }
-    colors
 }
 
 #[cfg(test)]

@@ -8,7 +8,8 @@ use crate::highlight::{Wash, group_id, log_entry};
 use crate::link_layer::{LinkLayer, LinkOptions};
 use crate::links::Link;
 use crate::registry::{PaintedText, RegisteredRun, RunKey};
-use crate::service::TextService;
+use crate::service::{SELECTION_ALPHA, TextService};
+use crate::theme::TextTheme;
 use std::rc::Rc;
 use std::sync::Arc;
 use vespertine::{
@@ -178,6 +179,10 @@ struct RunPaint {
     chrome: bool,
     native: bool,
     service: Option<TextService>,
+    /// The inherited `user_select` of the text style the run paints under.
+    selectable: bool,
+    /// The wash color of the run's selection (inherited `selection_color` or the accent).
+    selection_color: Hsla,
 }
 
 /// The washes a run paints.
@@ -217,7 +222,7 @@ impl RunPaint {
                 text: text.to_string(),
                 chrome: self.chrome,
             });
-            if !self.chrome && service.selectable_now() {
+            if !self.chrome && self.selectable {
                 service.register_run_now(RegisteredRun {
                     key: self.key,
                     surface: service.surface(),
@@ -227,7 +232,7 @@ impl RunPaint {
                 });
                 selection = service
                     .selection_wash(self.key)
-                    .map(|range| (range, service.selection_color()));
+                    .map(|range| (range, self.selection_color));
             }
         }
         RunWashes {
@@ -331,6 +336,10 @@ impl Element for RichText {
         cx: &mut App,
     ) {
         let layout = &prepaint.layout;
+        let service = TextService::current();
+        // `userSelect` and `selectionColor` are the framework's inherited text style properties
+        // (ELM-006); they are read here, where the style stack is live, and recorded with the run.
+        let style = window.text_style();
         let run = Rc::new(RunPaint {
             key: prepaint.key,
             group_id: prepaint.group_id,
@@ -339,7 +348,14 @@ impl Element for RichText {
             layout: Rc::new(layout.clone()),
             chrome: self.chrome,
             native: self.native,
-            service: TextService::current(),
+            selectable: style.user_select,
+            selection_color: style.selection_color.unwrap_or(Hsla {
+                a: SELECTION_ALPHA,
+                ..service
+                    .as_ref()
+                    .map_or_else(|| TextTheme::current(cx).accent, TextService::accent)
+            }),
+            service,
         });
         let RunWashes {
             highlights,

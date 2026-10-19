@@ -7,17 +7,18 @@ use crate::geometry::RichLayout;
 use crate::links::{
     DISCLOSURE_LINE_HEIGHT, DISCLOSURE_PADDING_X, DISCLOSURE_PADDING_Y, DISCLOSURE_TEXT_SIZE,
     DISCLOSURE_WINDOW_MARGIN, DisclosureSize, FileLink, Link, LinkActionKind, LinkMenu, LinkPress,
-    MENU_WIDTH, default_navigation_allowed, parse_file_destination, pointer_activates,
+    MENU_WIDTH, parse_file_destination, pointer_activates,
 };
-use crate::service::TextService;
+use crate::service::{SELECTION_ALPHA, TextService};
+use crate::theme::TextTheme;
 use std::cell::RefCell;
 use std::rc::Rc;
 use vespertine::{
     AnyElement, AnyView, App, AppContext as _, AvailableSpace, ClipboardItem, Context,
     DispatchPhase, ElementId, FocusHandle, GlobalElementId, Hsla, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point,
-    prelude::FluentBuilder as _, px, rgb, size,
+    LinkPolicy, LinkRoutes, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred,
+    div, point, prelude::FluentBuilder as _, px, rgb, size,
 };
 
 /// What activating a link asks the host to do.
@@ -37,7 +38,8 @@ pub struct LinkOptions {
     /// Called for navigation actions (open, open externally) that the policy allows. Without a
     /// callback the destination is handed to the platform's default handler.
     pub on_activate: Option<Rc<dyn Fn(&LinkActivation, &mut Window, &mut App)>>,
-    /// Whether navigation is allowed for a destination; copying is always allowed.
+    /// Whether navigation is allowed for a destination; copying is always allowed. The default
+    /// is the framework's [`LinkPolicy`] (explicit `http`/`https` destinations only, PLT-010 R4).
     pub navigation_allowed: Rc<dyn Fn(&str) -> bool>,
 }
 
@@ -45,7 +47,7 @@ impl Default for LinkOptions {
     fn default() -> Self {
         Self {
             on_activate: None,
-            navigation_allowed: Rc::new(default_navigation_allowed),
+            navigation_allowed: policy_predicate(LinkPolicy::default()),
         }
     }
 }
@@ -60,11 +62,29 @@ impl LinkOptions {
         self
     }
 
-    /// Sets the scheme policy.
+    /// Sets the navigation predicate directly.
     pub fn navigation_allowed(mut self, policy: impl Fn(&str) -> bool + 'static) -> Self {
         self.navigation_allowed = Rc::new(policy);
         self
     }
+
+    /// Allows navigation exactly where `policy` accepts the original destination.
+    pub fn policy(mut self, policy: LinkPolicy) -> Self {
+        self.navigation_allowed = policy_predicate(policy);
+        self
+    }
+
+    /// Allows navigation exactly where `routes` accepts the original destination, so mail and
+    /// file destinations can be enabled (application policy, TXT-008 notes).
+    pub fn routes(mut self, routes: LinkRoutes) -> Self {
+        self.navigation_allowed =
+            Rc::new(move |destination| routes.classify(destination).0.is_ok());
+        self
+    }
+}
+
+fn policy_predicate(policy: LinkPolicy) -> Rc<dyn Fn(&str) -> bool> {
+    Rc::new(move |destination| policy.validate(destination).is_ok())
 }
 
 struct OpenMenu {
@@ -151,13 +171,16 @@ impl LinkLayer {
         cx: &mut App,
     ) {
         let service = TextService::current();
-        let accent = service.as_ref().map_or_else(
-            || crate::service::TextTheme::default().accent,
-            TextService::accent,
-        );
-        let selection = service
+        let accent = service
             .as_ref()
-            .map_or(Hsla { a: 0.35, ..accent }, TextService::selection_color);
+            .map_or_else(|| TextTheme::current(cx).accent, TextService::accent);
+        let selection = service.as_ref().map_or(
+            Hsla {
+                a: SELECTION_ALPHA,
+                ..accent
+            },
+            |service| service.selection_color(window),
+        );
         let runtime = self.runtime.clone();
         let mut signature = Vec::new();
         let window_size = window.viewport_size();

@@ -1,11 +1,15 @@
 //! Theme mapping of token kinds to syntax palette categories and colors (TXT-007 R11).
 //!
-//! [`SyntaxColors`] is a neutral palette struct with the twenty-four THM-002 categories; the
-//! theme crate's palette converts into it. Colors live outside the document cache, so changing
+//! [`SyntaxColors`] is a palette struct with the twenty-four THM-002 categories; the palette of
+//! `vespertine_theme` (document theme or resolved variant) converts into it. Colors live outside the document cache, so changing
 //! them recolors cached spans without any parse or lookup.
 
 use super::kind::TokenKind;
-use vespertine::{Hsla, rgb};
+use std::sync::OnceLock;
+use vespertine::{App, Hsla};
+use vespertine_theme::appearance::try_theme_of;
+use vespertine_theme::document::{DocumentTheme, SyntaxCategory, SyntaxPalette};
+use vespertine_theme::theme::{SyntaxCategory as ThemeCategory, ThemeVariant};
 
 /// The twenty-four syntax categories of THM-002 R11, spelled as their theme keys.
 pub const CATEGORY_KEYS: [&str; 24] = [
@@ -99,46 +103,77 @@ pub struct SyntaxColors {
     pub invalid: Hsla,
 }
 
-fn hex(value: u32) -> Hsla {
-    rgb(value).into()
-}
-
 impl SyntaxColors {
-    /// The THM-002 dark defaults: softened indigo, emerald, pink and amber, the neutral comment
-    /// gray, softened danger, and the dark `text` color for variable, parameter, operator and
-    /// punctuation. The plain foreground is the dark `text` color as well.
+    /// The THM-002 dark defaults: the syntax colors and text color of the built-in neutral dark
+    /// variant of `vespertine_theme`.
     pub fn dark() -> Self {
-        let text = hex(0xE5E5E5);
-        let indigo = hex(0x8F96ED);
-        let emerald = hex(0x1EB787);
-        let pink = hex(0xE679B4);
-        let amber = hex(0xDBA924);
+        static DARK: OnceLock<SyntaxColors> = OnceLock::new();
+        *DARK.get_or_init(|| Self::from_variant(crate::theme::neutral_dark()))
+    }
+
+    /// A palette of one color for every category.
+    fn uniform(plain: Hsla) -> Self {
         Self {
-            plain: text,
-            comment: hex(0x808080),
-            keyword: indigo,
-            string: emerald,
-            string_special: pink,
-            escape: pink,
-            number: amber,
-            boolean: amber,
-            type_name: amber,
-            type_builtin: emerald,
-            constructor: amber,
-            function: indigo,
-            function_builtin: pink,
-            macro_name: pink,
-            property: amber,
-            constant: emerald,
-            variable: text,
-            variable_special: pink,
-            parameter: text,
-            operator: text,
-            punctuation: text,
-            tag: pink,
-            attribute: amber,
-            label: amber,
-            invalid: hex(0xE9797C),
+            plain,
+            comment: plain,
+            keyword: plain,
+            string: plain,
+            string_special: plain,
+            escape: plain,
+            number: plain,
+            boolean: plain,
+            type_name: plain,
+            type_builtin: plain,
+            constructor: plain,
+            function: plain,
+            function_builtin: plain,
+            macro_name: plain,
+            property: plain,
+            constant: plain,
+            variable: plain,
+            variable_special: plain,
+            parameter: plain,
+            operator: plain,
+            punctuation: plain,
+            tag: plain,
+            attribute: plain,
+            label: plain,
+            invalid: plain,
+        }
+    }
+
+    /// The THM-002 syntax palette of a document theme with `plain` for unclassified text.
+    pub fn from_palette(palette: &SyntaxPalette, plain: Hsla) -> Self {
+        let mut colors = Self::uniform(plain);
+        for category in SyntaxCategory::ALL {
+            colors.set_category(category.key(), palette.get(category).into());
+        }
+        colors
+    }
+
+    /// The syntax palette of a document theme; unclassified text uses its `text` color.
+    pub fn from_document(theme: &DocumentTheme) -> Self {
+        Self::from_palette(&theme.syntax, theme.text.into())
+    }
+
+    /// The syntax colors of a theme variant (THM-003); unclassified text uses its `text` color.
+    pub fn from_variant(variant: &ThemeVariant) -> Self {
+        let mut colors = Self::uniform(variant.colors.text.to_hsla());
+        for category in ThemeCategory::ALL {
+            // The 24 core categories are the THM-002 keys; markup categories have no key here.
+            if let Some(key) = CATEGORY_KEYS.iter().find(|key| **key == category.name()) {
+                colors.set_category(key, variant.syntax_color(category).to_hsla());
+            }
+        }
+        colors
+    }
+
+    /// The syntax colors of the active theme, or the neutral dark defaults when no theme is
+    /// installed.
+    pub fn current(cx: &App) -> Self {
+        match try_theme_of(cx) {
+            Some(theme) => Self::from_variant(theme),
+            None => Self::dark(),
         }
     }
 
