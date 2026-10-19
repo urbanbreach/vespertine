@@ -6,6 +6,7 @@ members = [
     "crates/vespertine_bench_metrics",
     "crates/vespertine_collections",
     "crates/vespertine_derive_refineable",
+    "crates/vespertine_host_tree",
     "crates/vespertine_http_client",
     "crates/vespertine_http_client_tls",
     "crates/vespertine_linux",
@@ -558,6 +559,9 @@ default-features = false
 [workspace.dependencies.vespertine_macos]
 path = "crates/vespertine_macos"
 default-features = false
+
+[workspace.dependencies.vespertine_host_tree]
+path = "crates/vespertine_host_tree"
 
 [workspace.dependencies.vespertine_macros]
 path = "crates/vespertine_macros"
