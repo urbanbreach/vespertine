@@ -6,3 +6,4 @@
 pub mod destination;
 pub mod hover_card;
 pub mod text;
+pub mod trigger;

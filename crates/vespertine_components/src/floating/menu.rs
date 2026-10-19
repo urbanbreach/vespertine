@@ -21,7 +21,7 @@
 
 use super::{
     motion::{Side, SurfaceMotion},
-    placement::{ContainedAlign, contained_max_size, place_contained},
+    placement::{ContainedAlign, contained_max_size, place_contained, rows_max_height},
     trigger::{OutsidePress, TriggerBounds},
 };
 use crate::tokens::ComponentTokens;
@@ -115,6 +115,7 @@ pub struct AnchoredMenu {
     observer: Option<Rc<dyn Fn(Bounds<Pixels>, &mut App)>>,
     style: StyleRefinement,
     rows: Vec<AnyElement>,
+    heading: Option<(AnyElement, Pixels)>,
 }
 
 type KeyDownListener = Box<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
@@ -142,6 +143,7 @@ fn menu(id: impl Into<ElementId>, trigger: &TriggerBounds, placement: Placement)
         observer: None,
         style: StyleRefinement::default(),
         rows: Vec::new(),
+        heading: None,
     }
 }
 
@@ -299,6 +301,13 @@ impl AnchoredMenu {
         self
     }
 
+    /// Fixed heading chrome above the rows, `height` tall. Only the rows scroll: in a contained
+    /// menu their available height is the card's maximum height minus the chrome (R19).
+    pub fn heading(mut self, heading: impl IntoElement, height: Pixels) -> Self {
+        self.heading = Some((heading.into_any_element(), height));
+        self
+    }
+
     /// The placement.
     pub fn placement(&self) -> Placement {
         self.placement
@@ -356,6 +365,10 @@ impl RenderOnce for AnchoredMenu {
         }
 
         let rows = self.rows;
+        let (heading, chrome) = match self.heading {
+            Some((element, height)) => (Some(element), height),
+            None => (None, px(0.)),
+        };
         let body = if let Some((limits, _)) = contained {
             let trigger_height = trigger.map_or(px(0.), |bounds| bounds.size.height);
             let max = contained_max_size(limits, trigger_height);
@@ -365,17 +378,18 @@ impl RenderOnce for AnchoredMenu {
                 .flex()
                 .flex_col()
                 .gap(self.row_gap)
-                .max_h(px(
-                    (f32::from(max.height) - 2. * f32::from(MENU_PADDING)).max(1.)
+                .max_h(rows_max_height(
+                    max.height,
+                    chrome + MENU_PADDING * 2.,
                 ))
                 .overflow_y_scroll();
             if let Some(handle) = &self.scroll {
                 inner = inner.track_scroll(handle);
             }
-            card = card.child(inner.children(rows));
+            card = card.children(heading).child(inner.children(rows));
             card
         } else {
-            card.gap(self.row_gap).children(rows)
+            card.gap(self.row_gap).children(heading).children(rows)
         };
         let mut card = body;
         if let Some(press) = self.outside {

@@ -46,7 +46,8 @@ pub struct TextTooltip {
 }
 
 impl TextTooltip {
-    fn chip(&self) -> impl IntoElement {
+    /// The chip element for `text`: token-driven, 320 px maximum width, wrapping.
+    pub fn chip_for(text: SharedString, tokens: ComponentTokens) -> impl IntoElement {
         div()
             .debug_selector(|| "text-tooltip".to_string())
             .max_w(MAX_WIDTH)
@@ -54,12 +55,16 @@ impl TextTooltip {
             .py(px(4.))
             .rounded(px(4.))
             .border_1()
-            .border_color(self.tokens.border)
-            .bg(self.tokens.surface_raised)
-            .text_color(self.tokens.text_muted)
+            .border_color(tokens.border)
+            .bg(tokens.surface_raised)
+            .text_color(tokens.text_muted)
             .text_size(TEXT_SIZE)
             .line_height(LINE_HEIGHT)
-            .child(self.text.clone())
+            .child(text)
+    }
+
+    fn chip(&self) -> impl IntoElement {
+        Self::chip_for(self.text.clone(), self.tokens.clone())
     }
 }
 
