@@ -100,6 +100,7 @@ raw-window-handle = "0.6"
 rayon = "1.8"
 rustc-hash = "2.1.0"
 rustls = "0.23.26"
+rustls-native-certs = "0.8"
 rustls-platform-verifier = "0.7"
 serde_urlencoded = "0.7"
 sha2 = "0.10"
@@ -127,7 +128,6 @@ merman = { version = "=0.8.0-alpha.5", default-features = false, features = ["sv
 url = "2.2"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 walkdir = "2.5"
-webpki-roots = "1.0.8"
 which = "8"
 windows-core = "0.62"
 windows-registry = "0.6.0"
@@ -173,10 +173,6 @@ features = [
     "deflate",
     "deflate64",
 ]
-
-[workspace.dependencies.cbindgen]
-version = "0.28.0"
-default-features = false
 
 [workspace.dependencies.chrono]
 version = "0.4"
@@ -740,6 +736,17 @@ path = "third_party/merman-render"
 
 [patch.crates-io.taffy]
 path = "third_party/taffy"
+
+# Vendored without their MPL-2.0 / CC0-1.0 dependencies (`option-ext`, `dwrote`, `tiny-keccak`); see
+# THIRD_PARTY.md.
+[patch.crates-io.dirs-sys]
+path = "third_party/dirs-sys"
+
+[patch.crates-io.const-random-macro]
+path = "third_party/const-random-macro"
+
+[patch."https://github.com/zed-industries/font-kit"]
+zed-font-kit = { path = "third_party/zed-font-kit" }
 
 [patch.crates-io.windows-capture]
 git = "https://github.com/zed-industries/windows-capture.git"

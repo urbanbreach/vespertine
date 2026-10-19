@@ -12,10 +12,8 @@ mod apple_build {
         path::{Path, PathBuf},
     };
 
-    use cbindgen::Config;
-
     pub fn run() {
-        let header_path = generate_shader_bindings();
+        let header_path = shader_bindings();
 
         #[cfg(feature = "runtime_shaders")]
         emit_stitched_shaders(&header_path);
@@ -23,87 +21,25 @@ mod apple_build {
         compile_metal_shaders(&header_path);
     }
 
-    fn generate_shader_bindings() -> PathBuf {
+    /// The C header of the scene types the Metal shaders read.
+    ///
+    /// It is committed as `src/scene.h` instead of being generated at build time: cbindgen, the
+    /// only tool that generated it, is MPL-2.0 licensed and is not a dependency of this repository.
+    /// The header was produced once by `cbindgen` 0.28 (`Language::C`, include guard `SCENE_H`,
+    /// `no_includes`, enumeration prefix with name) over `vespertine/src/{scene, paint_scope,
+    /// geometry, color, window, platform}.rs` and this crate's `src/metal_renderer.rs`, exporting
+    /// the types the shaders use; regenerate it the same way when a scene type changes. The test
+    /// `scene_header_tests` of the `vespertine` crate checks every struct of the header against
+    /// the size and alignment of its Rust type on every platform.
+    ///
+    /// The header is copied to `OUT_DIR` so that the compiler records the build's output
+    /// directory, never the checkout, when it includes it.
+    fn shader_bindings() -> PathBuf {
+        let source = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src/scene.h");
+        println!("cargo:rerun-if-changed={}", source.display());
         let output_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("scene.h");
-
-        let vespertine_dir = find_vespertine_crate_dir();
-
-        let mut config = Config {
-            include_guard: Some("SCENE_H".into()),
-            language: cbindgen::Language::C,
-            no_includes: true,
-            ..Default::default()
-        };
-        config.export.include.extend([
-            "Bounds".into(),
-            "Corners".into(),
-            "Edges".into(),
-            "ScopeParams".into(),
-            "ImageEffects".into(),
-            "Size".into(),
-            "Pixels".into(),
-            "PointF".into(),
-            "Hsla".into(),
-            "ContentMask".into(),
-            "Uniforms".into(),
-            "AtlasTile".into(),
-            "PathRasterizationInputIndex".into(),
-            "PathVertex_ScaledPixels".into(),
-            "PathRasterizationVertex".into(),
-            "ShadowInputIndex".into(),
-            "Shadow".into(),
-            "QuadInputIndex".into(),
-            "Underline".into(),
-            "UnderlineInputIndex".into(),
-            "Quad".into(),
-            "BorderStyle".into(),
-            "SpriteInputIndex".into(),
-            "MonochromeSprite".into(),
-            "PolychromeSprite".into(),
-            "PathSprite".into(),
-            "SurfaceInputIndex".into(),
-            "SurfaceBounds".into(),
-            "TransformationMatrix".into(),
-        ]);
-        config.no_includes = true;
-        config.enumeration.prefix_with_name = true;
-
-        let mut builder = cbindgen::Builder::new();
-
-        let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-
-        // Source files from vespertine that define types used in shaders
-        let vespertine_src_paths = [
-            vespertine_dir.join("src/scene.rs"),
-            vespertine_dir.join("src/paint_scope.rs"),
-            vespertine_dir.join("src/geometry.rs"),
-            vespertine_dir.join("src/color.rs"),
-            vespertine_dir.join("src/window.rs"),
-            vespertine_dir.join("src/platform.rs"),
-        ];
-
-        // Source files from this crate
-        let local_src_paths = [crate_dir.join("src/metal_renderer.rs")];
-
-        for src_path in vespertine_src_paths.iter().chain(local_src_paths.iter()) {
-            println!("cargo:rerun-if-changed={}", src_path.display());
-            builder = builder.with_src(src_path);
-        }
-
-        builder
-            .with_config(config)
-            .generate()
-            .expect("Unable to generate bindings")
-            .write_to_file(&output_path);
-
+        std::fs::copy(&source, &output_path).expect("unable to copy the scene header");
         output_path
-    }
-
-    /// Locate the vespertine crate directory relative to this crate. Resolved at
-    /// build-script runtime against this crate's manifest dir, so no checkout
-    /// path is baked into a compiled artifact (which corgi rejects).
-    fn find_vespertine_crate_dir() -> PathBuf {
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../vespertine")
     }
 
     /// To enable runtime compilation, we need to "stitch" the shaders file with the generated header
