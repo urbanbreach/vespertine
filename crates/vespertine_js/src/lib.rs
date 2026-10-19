@@ -12,7 +12,6 @@ mod options;
 mod prompt;
 mod runtime;
 mod scene;
-#[cfg(feature = "test-host")]
 mod test_host;
 mod view;
 
@@ -28,6 +27,5 @@ pub use runtime::{
     WindowInsets, WindowSize,
 };
 pub use scene::{EmitEvent, HostScene, PaintedHook};
-#[cfg(feature = "test-host")]
 pub use test_host::HostTreeHost;
 pub use view::{HostView, SharedTree, sink_emitter};

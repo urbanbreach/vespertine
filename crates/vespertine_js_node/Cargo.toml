@@ -19,6 +19,7 @@ doctest = false
 
 [dependencies]
 vespertine_js.workspace = true
+vespertine_test_host = { path = "../vespertine_test_host" }
 vespertine_http_client.workspace = true
 vespertine_reqwest_client.workspace = true
 vespertine_updater.workspace = true

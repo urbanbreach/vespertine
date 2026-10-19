@@ -35,7 +35,7 @@ export function createNativeRenderer({ onEvent, onError, native, serveAutomation
     }
   }, rendererOptions);
 
-  if (isNonInteractive()) {
+  if (typeof renderer.init === "function" && isNonInteractive()) {
     const init = renderer.init.bind(renderer);
     renderer.init = (options) => {
       const result = init(options);

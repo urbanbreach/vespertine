@@ -371,6 +371,23 @@ impl HostRenderer {
         })?
     }
 
+    /// Sets the debug frame overlay (`hidden`, `minimal` or `full`, case-insensitive).
+    pub fn set_debug_overlay(&self, mode: &str) -> Result<(), HostError> {
+        let mode = match mode.to_ascii_lowercase().as_str() {
+            "hidden" => vespertine::DebugFrameOverlayMode::Hidden,
+            "minimal" => vespertine::DebugFrameOverlayMode::Minimal,
+            "full" => vespertine::DebugFrameOverlayMode::Full,
+            other => {
+                return Err(HostError::Invalid(format!(
+                    "unknown debug overlay mode \"{other}\"; expected hidden, minimal or full"
+                )));
+            }
+        };
+        self.post(move |cx, window| {
+            let _ = window.update(cx, |_, window, _| window.set_debug_frame_overlay_mode(mode));
+        })
+    }
+
     /// Asks the window to rebuild its elements and repaint.
     pub fn request_repaint(&self) -> Result<(), HostError> {
         self.post(|cx, window| {
@@ -442,13 +459,17 @@ impl HostRenderer {
     }
 
     /// Moves focus to the next or previous tab stop, optionally within the subtree of `scope`.
-    pub fn focus_traverse(&self, scope: Option<u64>, forward: bool) -> Result<(), HostError> {
-        self.with_scene("focus traversal", move |view, window, cx| {
-            let tree = view.tree().clone();
-            let tree = tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            view.scene().focus_traverse(&tree, scope, forward, window, cx);
-        })?;
-        Ok(())
+    /// Returns whether the focused element changed.
+    pub fn focus_traverse(&self, scope: Option<u64>, forward: bool) -> Result<bool, HostError> {
+        Ok(self
+            .with_scene("focus traversal", move |view, window, cx| {
+                let before = view.scene().focused(window, cx);
+                let tree = view.tree().clone();
+                let tree = tree.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                view.scene().focus_traverse(&tree, scope, forward, window, cx);
+                view.scene().focused(window, cx) != before
+            })?
+            .unwrap_or(false))
     }
 
     /// The scroll offset `(x, y)` of a scrolling element (zero at the start, negative toward the

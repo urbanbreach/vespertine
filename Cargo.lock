@@ -7793,6 +7793,7 @@ dependencies = [
  "vespertine_http_client",
  "vespertine_js",
  "vespertine_reqwest_client",
+ "vespertine_test_host",
  "vespertine_updater",
 ]
 

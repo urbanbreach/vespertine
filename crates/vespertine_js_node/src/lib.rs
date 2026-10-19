@@ -5,6 +5,7 @@
 //! rejections) carrying the core's messages, and UI-thread events are delivered to the
 //! constructor callback through a thread-safe function so the UI thread never blocks.
 
+pub mod test_renderer;
 pub mod updater;
 
 use std::sync::Arc;
@@ -174,5 +175,99 @@ impl Renderer {
     pub fn apply_batch(&self, batch: String) -> Result<Vec<f64>> {
         let outcome = self.inner.apply_batch(&batch).map_err(to_napi)?;
         Ok(outcome.destroyed.into_iter().map(|id| id as f64).collect())
+    }
+
+    /// Announces the generation of the mounted root; window-level key events carry it.
+    #[napi]
+    pub fn set_window_generation(&self, generation: f64) {
+        self.inner.set_window_generation(generation as u64);
+    }
+
+    /// Sets the debug frame overlay: "hidden", "minimal" or "full".
+    #[napi]
+    pub fn set_debug_overlay(&self, mode: String) -> Result<()> {
+        self.inner.set_debug_overlay(&mode).map_err(to_napi)
+    }
+
+    /// Focuses an element; false when it does not exist or cannot take focus.
+    #[napi]
+    pub fn focus_element(&self, id: f64) -> Result<bool> {
+        self.inner.focus_element(id as u64).map_err(to_napi)
+    }
+
+    /// Removes focus from an element that holds it.
+    #[napi]
+    pub fn blur_element(&self, id: f64) -> Result<()> {
+        self.inner.blur_element(id as u64).map_err(to_napi)
+    }
+
+    /// The element that holds keyboard focus, or null.
+    #[napi]
+    pub fn get_focused_element(&self) -> Result<Option<f64>> {
+        Ok(self.inner.focused_element().map_err(to_napi)?.map(|id| id as f64))
+    }
+
+    #[napi]
+    pub fn focus_next(&self) -> Result<bool> {
+        self.inner.focus_traverse(None, true).map_err(to_napi)
+    }
+
+    #[napi]
+    pub fn focus_previous(&self) -> Result<bool> {
+        self.inner.focus_traverse(None, false).map_err(to_napi)
+    }
+
+    #[napi]
+    pub fn focus_next_within(&self, id: f64) -> Result<bool> {
+        self.inner.focus_traverse(Some(id as u64), true).map_err(to_napi)
+    }
+
+    #[napi]
+    pub fn focus_previous_within(&self, id: f64) -> Result<bool> {
+        self.inner.focus_traverse(Some(id as u64), false).map_err(to_napi)
+    }
+
+    /// The scroll offset `{ x, y }` of a scrolling element, or null for elements that do not scroll.
+    #[napi]
+    pub fn get_scroll_offset(&self, id: f64) -> Result<Option<Value>> {
+        Ok(self
+            .inner
+            .scroll_offset(id as u64)
+            .map_err(to_napi)?
+            .map(|(x, y)| serde_json::json!({ "x": x, "y": y })))
+    }
+
+    /// Scrolls a scrolling element to an absolute offset; throws when the element does not scroll.
+    #[napi]
+    pub fn scroll_to(&self, id: f64, x: f64, y: f64) -> Result<()> {
+        if self.inner.scroll_to(id as u64, x as f32, y as f32).map_err(to_napi)? {
+            Ok(())
+        } else {
+            Err(Error::from_reason(format!("element {id} does not scroll")))
+        }
+    }
+
+    /// Scrolls the nearest scrolling ancestor so the element is visible; throws when none scrolls.
+    #[napi]
+    pub fn scroll_into_view(&self, id: f64, _options: Option<Value>) -> Result<()> {
+        if self.inner.scroll_into_view(id as u64).map_err(to_napi)? {
+            Ok(())
+        } else {
+            Err(Error::from_reason(format!("element {id} has no scrolling ancestor")))
+        }
+    }
+
+    /// Replaces an image element's image with encoded bytes (PNG, JPEG, ...).
+    #[napi]
+    pub fn set_image(&self, id: f64, bytes: Uint8Array) -> Result<()> {
+        self.inner.set_image(id as u64, bytes.to_vec()).map_err(to_napi)
+    }
+
+    /// Replaces an image element's image with packed pixels (`bgra` by default, or `rgba`).
+    #[napi]
+    pub fn set_image_pixels(&self, id: f64, width: f64, height: f64, bytes: Uint8Array, format: Option<String>) -> Result<()> {
+        self.inner
+            .set_image_pixels(id as u64, width, height, bytes.to_vec(), format)
+            .map_err(to_napi)
     }
 }
