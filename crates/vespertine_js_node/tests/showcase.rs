@@ -3,6 +3,11 @@
 //! task-list reference surface (APP-011) on the offscreen test host through Node and checks that
 //! the PNG exists and has the window's size.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the test runs Node as a child process"
+)]
+
 #[path = "../harness/mod.rs"]
 mod harness;
 
