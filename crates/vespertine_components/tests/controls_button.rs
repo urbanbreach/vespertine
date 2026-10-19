@@ -1,0 +1,480 @@
+//! CMP-001 native button: A1 (activation rules), A3, A4, A10-facing accessibility, R7-R11 states
+//! and A11 (focus indicator).
+
+mod controls_support;
+
+use std::{cell::Cell, rc::Rc};
+
+use controls_support::*;
+use vespertine::{IntoElement, ParentElement, Styled, div, px, rgb};
+use vespertine_components::controls::{Button, disabled_group};
+use vespertine_test_host::require_backend;
+
+/// A button column: [0] `a`, [1] `b`, each 120 x 36 logical px at x = 20.
+fn column(
+    clicks: Rc<[Cell<u32>; 2]>,
+    configure: impl Fn(usize, Button) -> Button + 'static,
+) -> impl Fn(&mut vespertine::Window, &mut vespertine::App) -> vespertine::AnyElement {
+    move |_, _| {
+        let mut column = div()
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(12.));
+        for index in 0..2 {
+            let clicks = clicks.clone();
+            let button = Button::new(if index == 0 { "a" } else { "b" })
+                .label(if index == 0 { "Alpha" } else { "Beta" })
+                .w(px(120.))
+                .on_click(move |_, window, _| {
+                    clicks[index].set(clicks[index].get() + 1);
+                    window.refresh();
+                });
+            column = column.child(configure(index, button));
+        }
+        column.into_any_element()
+    }
+}
+
+fn counts() -> Rc<[Cell<u32>; 2]> {
+    Rc::new([Cell::new(0), Cell::new(0)])
+}
+
+#[test]
+fn controls_a1_enter_activates_once_per_physical_press_and_space_on_release() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(300.0, 200.0, column(clicks.clone(), |_, button| button));
+    tab(&mut host); // focus Alpha, keyboard modality
+    let alpha = || clicks[0].get();
+
+    // One physical Enter press: the first key-down activates; a synthesized second key-down
+    // that is not flagged as held, a flagged repeat and more repeats do not.
+    host.key_down("enter", false, None).unwrap();
+    assert_eq!(alpha(), 1, "first key-down activates");
+    host.key_down("enter", false, None).unwrap();
+    host.key_down("enter", true, None).unwrap();
+    host.key_down("enter", false, None).unwrap();
+    assert_eq!(alpha(), 1, "unflagged and flagged repeats are ignored");
+    host.key_up("enter", None).unwrap();
+    assert_eq!(
+        alpha(),
+        1,
+        "the release does not activate a second time (base keyboard-click)"
+    );
+
+    // The next physical press activates again.
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(alpha(), 2);
+
+    // Space: nothing on key-down (or on repeats), one activation on key-up.
+    host.key_down("space", false, None).unwrap();
+    host.key_down("space", true, None).unwrap();
+    assert_eq!(alpha(), 2, "Space does not activate on key-down");
+    host.key_up("space", None).unwrap();
+    assert_eq!(alpha(), 3, "Space activates on key-up");
+    host.key_up("space", None).unwrap();
+    assert_eq!(alpha(), 3, "a lone release does nothing");
+
+    // Another key between press and release cancels the Space activation.
+    host.key_down("space", false, None).unwrap();
+    host.key_down("a", false, None).unwrap();
+    host.key_up("space", None).unwrap();
+    assert_eq!(alpha(), 3);
+
+    // Modified Enter is not an activation.
+    host.key_down("shift-enter", false, None).unwrap();
+    host.key_up("shift-enter", None).unwrap();
+    assert_eq!(alpha(), 3);
+    assert_eq!(clicks[1].get(), 0, "the other button never activated");
+}
+
+#[test]
+fn controls_a1_pointer_click_activates_once_and_disabled_never() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(
+        300.0,
+        200.0,
+        column(clicks.clone(), |index, button| button.disabled(index == 1)),
+    );
+    host.click(60.0, 38.0, 0, "").unwrap();
+    assert_eq!(clicks[0].get(), 1);
+    host.click(60.0, 86.0, 0, "").unwrap();
+    assert_eq!(clicks[1].get(), 0, "no activation while disabled");
+    // A right click is not an activation.
+    host.click(60.0, 38.0, 2, "").unwrap();
+    assert_eq!(clicks[0].get(), 1);
+}
+
+#[test]
+fn controls_a3_disabled_button_leaves_the_tab_order_and_never_activates() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(
+        300.0,
+        200.0,
+        column(clicks.clone(), |index, button| button.disabled(index == 0)),
+    );
+    // Sequential focus skips the disabled first button and lands on the second.
+    tab(&mut host);
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(clicks[0].get(), 0);
+    assert_eq!(clicks[1].get(), 1, "Tab skipped the disabled button");
+
+    // Click and assistive technology cannot activate it either.
+    host.click(60.0, 38.0, 0, "").unwrap();
+    let alpha = node(&mut host, "button", Some("Alpha"));
+    assert!(alpha.disabled());
+    assert!(!alpha.can_click(), "no click action is offered");
+    a11y_click(&mut host, &alpha);
+    assert_eq!(clicks[0].get(), 0);
+}
+
+#[test]
+fn controls_a3_focusable_when_disabled_is_focusable_but_never_activates() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(
+        300.0,
+        200.0,
+        column(clicks.clone(), |index, button| {
+            button
+                .disabled(index == 0)
+                .focusable_when_disabled(index == 0)
+        }),
+    );
+    // Not a tab stop: Tab goes to the enabled button.
+    tab(&mut host);
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(clicks[1].get(), 1);
+    // A pointer press focuses it, but no key or click activates it.
+    host.click(60.0, 38.0, 0, "").unwrap();
+    for key in ["enter", "space"] {
+        host.key_down(key, false, None).unwrap();
+        host.key_up(key, None).unwrap();
+    }
+    assert_eq!(clicks[0].get(), 0);
+    assert_eq!(
+        clicks[1].get(),
+        1,
+        "the focused disabled button took the keys"
+    );
+}
+
+#[test]
+fn controls_a4_disabled_group_disables_enabled_looking_children() {
+    require_backend!();
+    let clicks = counts();
+    let inner = clicks.clone();
+    let mut host = host(300.0, 200.0, move |window, cx| {
+        let _ = (&window, &cx);
+        let clicks = inner.clone();
+        let group = div()
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(12.))
+            .child(Button::new("child").label("Child").w(px(120.)).on_click({
+                let clicks = clicks.clone();
+                move |_, _, _| clicks[0].set(clicks[0].get() + 1)
+            }));
+        let outside = Button::new("outside")
+            .label("Outside")
+            .w(px(120.))
+            .on_click(move |_, _, _| clicks[1].set(clicks[1].get() + 1));
+        div()
+            .child(disabled_group(true, group))
+            .child(div().px(px(20.)).child(outside))
+            .into_any_element()
+    });
+
+    // The child exposes role, label and the disabled state.
+    let child = node(&mut host, "button", Some("Child"));
+    assert!(child.disabled());
+    assert!(!child.can_click());
+    let outside = node(&mut host, "button", Some("Outside"));
+    assert!(
+        !outside.disabled(),
+        "controls outside the group are unaffected"
+    );
+
+    // It is skipped by sequential focus: Tab lands on the control outside the group.
+    tab(&mut host);
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(clicks[0].get(), 0);
+    assert_eq!(clicks[1].get(), 1);
+
+    // It does not activate by pointer, keyboard or assistive technology.
+    host.click(60.0, 38.0, 0, "").unwrap();
+    a11y_click(&mut host, &child);
+    host.key_down("space", false, None).unwrap();
+    host.key_up("space", None).unwrap();
+    assert_eq!(clicks[0].get(), 0);
+}
+
+#[test]
+fn controls_busy_button_exposes_busy_stays_focusable_and_starts_nothing() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(
+        300.0,
+        200.0,
+        column(clicks.clone(), |index, button| button.busy(index == 0)),
+    );
+    let alpha = node(&mut host, "button", Some("Alpha"));
+    assert!(alpha.busy());
+    assert!(!alpha.disabled());
+    // Focusable: the first Tab lands on the busy button, which swallows no activation.
+    tab(&mut host);
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    host.key_down("space", false, None).unwrap();
+    host.key_up("space", None).unwrap();
+    host.click(60.0, 38.0, 0, "").unwrap();
+    assert_eq!(clicks[0].get(), 0, "a busy control starts no activation");
+    // Focus really was on the busy button (the second button received nothing either).
+    assert_eq!(clicks[1].get(), 0);
+    tab(&mut host);
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    assert_eq!(
+        clicks[1].get(),
+        1,
+        "the second Tab reached the second button"
+    );
+}
+
+#[test]
+fn controls_button_exposes_selected_as_toggled_and_icon_only_label() {
+    require_backend!();
+    let mut host = host(300.0, 200.0, |_, _| {
+        div()
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(12.))
+            .child(Button::new("on").label("Bold").selected(true))
+            .child(Button::new("plain").label("Plain"))
+            .child(
+                Button::icon_only(
+                    "save",
+                    "Save document",
+                    div().size(px(14.)).bg(rgb(0xffffff)),
+                )
+                .disabled(true),
+            )
+            .into_any_element()
+    });
+    let bold = node(&mut host, "button", Some("Bold"));
+    assert_eq!(bold.text("toggled"), Some("true"));
+    let plain = node(&mut host, "button", Some("Plain"));
+    assert_eq!(
+        plain.text("toggled"),
+        None,
+        "not a toggle unless selected is given"
+    );
+    // A disabled icon-only button still exposes its role, label and disabled state.
+    let save = node(&mut host, "button", Some("Save document"));
+    assert!(save.disabled());
+}
+
+#[test]
+fn controls_icon_only_button_shows_its_label_as_the_tooltip() {
+    require_backend!();
+    let mut host = host(300.0, 200.0, |_, _| {
+        div()
+            .p(px(20.))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(12.))
+            .child(Button::icon_only(
+                "save",
+                "Save document",
+                div().size(px(14.)).bg(rgb(0xffffff)),
+            ))
+            .child(
+                Button::icon_only("find", "Find", div().size(px(14.)).bg(rgb(0xffffff)))
+                    .tooltip_text("Find in file (Ctrl+F)"),
+            )
+            .into_any_element()
+    });
+    assert!(!host.painted_text().iter().any(|text| text.contains("Save")));
+    host.mouse_move(38.0, 38.0, None, "").unwrap();
+    host.advance_executor_time(1000.0).unwrap();
+    assert!(
+        host.painted_text()
+            .iter()
+            .any(|text| text == "Save document"),
+        "the label is the tooltip text: {:?}",
+        host.painted_text()
+    );
+    // An explicit tooltip text wins over the label.
+    host.mouse_move(38.0, 86.0, None, "").unwrap();
+    host.advance_executor_time(1000.0).unwrap();
+    assert!(
+        host.painted_text()
+            .iter()
+            .any(|text| text == "Find in file (Ctrl+F)"),
+        "{:?}",
+        host.painted_text()
+    );
+    // The accessible name is the label either way.
+    node(&mut host, "button", Some("Find"));
+}
+
+/// The fill sampled inside the button box at (30, 38), clear of the label.
+fn fill(host: &mut vespertine_test_host::TestHost) -> [u8; 3] {
+    host.flush();
+    pixel(host, 30.0, 38.0)
+}
+
+#[test]
+fn controls_button_states_share_one_box_and_follow_precedence() {
+    require_backend!();
+    let busy = Rc::new(Cell::new(false));
+    let disabled = Rc::new(Cell::new(false));
+    let selected = Rc::new(Cell::new(false));
+    let (b, d, s) = (busy.clone(), disabled.clone(), selected.clone());
+    let mut host = host(300.0, 120.0, move |_, _| {
+        div()
+            .p(px(20.))
+            .child(
+                Button::new("state")
+                    .label("State")
+                    .w(px(120.))
+                    .busy(b.get())
+                    .disabled(d.get())
+                    .selected(s.get()),
+            )
+            .into_any_element()
+    });
+    let reference = node(&mut host, "button", Some("State")).bounds();
+    let same_box = |host: &mut vespertine_test_host::TestHost, what: &str| {
+        assert_eq!(
+            node(host, "button", Some("State")).bounds(),
+            reference,
+            "{what}"
+        );
+    };
+
+    // Default.
+    host.mouse_move(250.0, 100.0, None, "").unwrap();
+    assert!(
+        is_color(fill(&mut host), 0x30343D, 2),
+        "default {:?}",
+        fill(&mut host)
+    );
+    // Hovered.
+    host.mouse_move(80.0, 38.0, None, "").unwrap();
+    assert!(
+        is_color(fill(&mut host), 0x3A3F49, 2),
+        "hovered {:?}",
+        fill(&mut host)
+    );
+    same_box(&mut host, "hovered");
+    // Pressed beats hovered.
+    host.mouse_down(80.0, 38.0, 0, "").unwrap();
+    assert!(
+        is_color(fill(&mut host), 0x262A31, 2),
+        "pressed {:?}",
+        fill(&mut host)
+    );
+    same_box(&mut host, "pressed");
+    host.mouse_up(80.0, 38.0, 0, "").unwrap();
+
+    // Busy beats pressed and hovered: the pointer is still over the button, nothing changes.
+    busy.set(true);
+    host.paint_frame();
+    host.mouse_move(250.0, 100.0, None, "").unwrap();
+    let busy_rest = fill(&mut host);
+    assert!(is_color(busy_rest, 0x30343D, 2), "busy {busy_rest:?}");
+    same_box(&mut host, "busy");
+    host.mouse_move(80.0, 38.0, None, "").unwrap();
+    assert_eq!(fill(&mut host), busy_rest, "hover is suppressed while busy");
+    host.mouse_down(80.0, 38.0, 0, "").unwrap();
+    assert_eq!(fill(&mut host), busy_rest, "press is suppressed while busy");
+    host.mouse_up(80.0, 38.0, 0, "").unwrap();
+
+    // Disabled beats busy: dimmed, and hover or press change nothing.
+    disabled.set(true);
+    host.paint_frame();
+    host.mouse_move(250.0, 100.0, None, "").unwrap();
+    let disabled_rest = fill(&mut host);
+    assert_ne!(disabled_rest, busy_rest, "disabled paints dimmed");
+    same_box(&mut host, "disabled");
+    host.mouse_move(80.0, 38.0, None, "").unwrap();
+    assert_eq!(fill(&mut host), disabled_rest);
+    host.mouse_down(80.0, 38.0, 0, "").unwrap();
+    assert_eq!(fill(&mut host), disabled_rest);
+    host.mouse_up(80.0, 38.0, 0, "").unwrap();
+    disabled.set(false);
+    busy.set(false);
+    host.paint_frame();
+
+    // Selected is an overlay: the accent fill in the rest state, still hover/press reactive.
+    selected.set(true);
+    host.paint_frame();
+    host.mouse_move(250.0, 100.0, None, "").unwrap();
+    assert!(
+        is_color(fill(&mut host), 0x4C8DF6, 2),
+        "selected {:?}",
+        fill(&mut host)
+    );
+    same_box(&mut host, "selected");
+    host.mouse_move(80.0, 38.0, None, "").unwrap();
+    let selected_hover = fill(&mut host);
+    assert_ne!(selected_hover, [0x4C, 0x8D, 0xF6]);
+}
+
+#[test]
+fn controls_a11_focus_indicator_follows_keyboard_modality() {
+    require_backend!();
+    let clicks = counts();
+    let mut host = host(300.0, 200.0, column(clicks, |_, button| button));
+    // The reserved focus edge: the 2 px border at the left of the first button.
+    let edge = |host: &mut vespertine_test_host::TestHost| {
+        host.flush();
+        pixel(host, 21.0, 38.0)
+    };
+    let resting = edge(&mut host);
+    assert!(
+        is_color(resting, 0x30343D, 3),
+        "transparent edge shows the fill {resting:?}"
+    );
+
+    // Tab: focus indicator.
+    tab(&mut host);
+    assert!(
+        is_color(edge(&mut host), 0x7AA7FF, 3),
+        "after Tab {:?}",
+        edge(&mut host)
+    );
+    let focused_box = node(&mut host, "button", Some("Alpha")).bounds();
+
+    // A mouse press on the same control: focused, but no indicator, and the box is unchanged.
+    host.click(60.0, 38.0, 0, "").unwrap();
+    host.mouse_move(250.0, 180.0, None, "").unwrap();
+    host.paint_frame();
+    let after_mouse = edge(&mut host);
+    assert!(
+        is_color(after_mouse, 0x30343D, 3),
+        "after a mouse press {after_mouse:?}"
+    );
+    assert_eq!(
+        node(&mut host, "button", Some("Alpha")).bounds(),
+        focused_box
+    );
+
+    // Keyboard modality again (a key press) brings it back on the still-focused control.
+    host.key_down("a", false, None).unwrap();
+    assert!(is_color(edge(&mut host), 0x7AA7FF, 3), "after a key press");
+}

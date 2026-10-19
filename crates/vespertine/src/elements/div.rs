@@ -1513,6 +1513,22 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Expose the disabled state to assistive technology. A disabled node keeps its role,
+    /// label and value in the accessibility tree; it only reports that it cannot be operated.
+    /// This does not change event handling: a disabled control must also not register its
+    /// activation listeners.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria_mut().disabled = disabled;
+        self
+    }
+
+    /// Expose the busy state to assistive technology: the element is being updated and
+    /// stays focusable.
+    fn aria_busy(mut self, busy: bool) -> Self {
+        self.interactivity().aria_mut().busy = busy;
+        self
+    }
+
     /// Set the expanded state for this element.
     fn aria_expanded(mut self, expanded: bool) -> Self {
         self.interactivity().aria_mut().expanded = Some(expanded);
@@ -2279,6 +2295,8 @@ pub(crate) struct AriaProperties {
     pub(crate) description: Option<SharedString>,
     pub(crate) keyshortcuts: Option<SharedString>,
     pub(crate) selected: Option<bool>,
+    pub(crate) disabled: bool,
+    pub(crate) busy: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) toggled: Option<accesskit::Toggled>,
     pub(crate) numeric_value: Option<f64>,
@@ -3858,6 +3876,12 @@ impl Interactivity {
         }
         if let Some(selected) = aria.selected {
             node.set_selected(selected);
+        }
+        if aria.disabled {
+            node.set_disabled();
+        }
+        if aria.busy {
+            node.set_busy();
         }
         if let Some(expanded) = aria.expanded {
             node.set_expanded(expanded);

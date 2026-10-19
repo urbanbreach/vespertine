@@ -98,6 +98,18 @@ impl HeadlessAppContext {
             .simulate_accessibility_activation())
     }
 
+    /// Delivers an accessibility action request, as assistive technology would, to the window.
+    /// A node without a handler for the action ignores it.
+    pub fn simulate_accessibility_action(
+        &mut self,
+        window: AnyWindowHandle,
+        request: accesskit::ActionRequest,
+    ) -> Result<()> {
+        self.update_window(window, |_, window, cx| {
+            window.handle_a11y_action(request, cx)
+        })
+    }
+
     /// The accessibility tree update most recently delivered to the window's platform.
     pub fn last_accessibility_update(
         &mut self,

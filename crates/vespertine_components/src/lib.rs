@@ -10,10 +10,13 @@
 //! [`floating`] is the foundation under every popup control (CMP-002): the popup lifecycle,
 //! anchored and contained menu surfaces, the window-scoped dismissal-layer stack, trigger press
 //! tracking, and the shared stepping, ranking and hover-intent rules.
+//!
+//! [`controls`] holds the activation controls of CMP-001: buttons, switches and sliders.
 
 pub mod audio;
 pub mod browser;
 pub mod chart;
+pub mod controls;
 pub mod dialog;
 pub mod diff;
 pub mod elastic;
