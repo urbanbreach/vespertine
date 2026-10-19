@@ -126,7 +126,6 @@ impl Spec {
 struct Fixture {
     host: TestHost,
     picker: Entity<Picker>,
-    sources: Entity<PickerSources<String>>,
     doc: FocusHandle,
     shared: Shared,
 }
@@ -285,11 +284,10 @@ fn fixture(spec: Spec) -> Fixture {
         },
     )
     .expect("host");
-    let (picker, sources, doc) = slot.borrow_mut().take().expect("entities");
+    let (picker, _sources, doc) = slot.borrow_mut().take().expect("entities");
     Fixture {
         host,
         picker,
-        sources,
         doc,
         shared,
     }

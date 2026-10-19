@@ -223,7 +223,6 @@ fn main() {
     );
     let restored = {
         let window = host.window();
-        let doc_focus = doc_focus.clone();
         host.app()
             .update_window(window, |_, window, _| doc_focus.is_focused(window))
             .unwrap()
