@@ -10,3 +10,4 @@ export {
 } from "./root.js";
 export { render, resetRender } from "./convenience.js";
 export { ErrorView, normalizeFailure, stackRows } from "./error-view.js";
+export { findRanges, useTextSearch, useWindowInsets, useWindowSize } from "./hooks.js";

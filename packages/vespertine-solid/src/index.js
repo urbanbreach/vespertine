@@ -21,3 +21,5 @@ export {
   useRenderer,
   useRendererContext,
 } from "./root.js";
+export { render, resetRender } from "./convenience.js";
+export { createSelectedText, createTextSearch, createWindowInsets, createWindowSize, findRanges } from "./primitives.js";

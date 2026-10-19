@@ -39,6 +39,10 @@ export function createReferenceNative() {
       this.initialized = 0;
       this.ticks = 0;
       this.debugOverlay = null;
+      this.windowSize = { width: 800, height: 600 };
+      this.windowInsets = null;
+      this.selectedText = null;
+      this.selectionNotifications = [];
       this.destroyedLog = [];
     }
 
@@ -62,6 +66,22 @@ export function createReferenceNative() {
 
     setDebugOverlay(mode) {
       this.debugOverlay = mode;
+    }
+
+    getWindowSize() {
+      return this.windowSize;
+    }
+
+    getWindowInsets() {
+      return this.windowInsets;
+    }
+
+    getSelectedText() {
+      return this.selectedText;
+    }
+
+    setSelectionNotifications(enabled) {
+      this.selectionNotifications.push(enabled);
     }
 
     getFocusedElement() {

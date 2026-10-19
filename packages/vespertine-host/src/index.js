@@ -39,3 +39,4 @@ export {
   isEventProp,
   isHostNode,
 } from "./host-tree.js";
+export { createSearchCursor, createTextSearchController, findRanges } from "./text-search.js";

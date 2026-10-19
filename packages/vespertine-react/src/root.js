@@ -97,6 +97,8 @@ export function createRoot(renderer, options = {}) {
     scheduler: dispatchDiscrete,
   });
   let unmounted = false;
+  // Native selection notifications run only while a callback wants them.
+  if (options.onSelectionChange) renderer.setSelectionNotifications?.(true);
   if (options.onUncaughtError) tree.reportError = (error) => options.onUncaughtError(error, undefined);
   const onUncaughtError = options.onUncaughtError
     ? (error, info) => options.onUncaughtError(error, info?.componentStack)
@@ -147,6 +149,7 @@ export function createRoot(renderer, options = {}) {
     unmount() {
       if (unmounted) return;
       unmounted = true;
+      if (options.onSelectionChange) renderer.setSelectionNotifications?.(false);
       tree.deferFlush = true;
       try {
         reconciler.updateContainerSync(null, container, null, null);
