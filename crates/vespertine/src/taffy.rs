@@ -568,7 +568,6 @@ fn style_fingerprint(style: &Style, rem_size: Pixels, scale_factor: f32) -> u64 
     h.tag(&style.display);
     h.tag(&style.overflow.x);
     h.tag(&style.overflow.y);
-    h.absolute(&style.scrollbar_width);
     h.tag(&style.position);
     h.edges(&style.inset, |h, v| h.length(v));
     h.pair(&style.size, |h, v| h.length(v));
