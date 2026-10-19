@@ -1,0 +1,31 @@
+{
+  "name": "@vespertine/examples",
+  "version": "0.1.0",
+  "description": "Reference example surfaces for the Vespertine adapters: task list, hierarchical mosaic, direct image and a synchronized multi-pane editing surface",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./editing": "./src/editing/index.js",
+    "./mosaic": "./src/mosaic/index.js",
+    "./tasks": "./src/tasks/index.js",
+    "./image": "./src/image/index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vespertine/host": "*",
+    "@vespertine/react": "*"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0"
+  },
+  "devDependencies": {
+    "react": "19.2.0"
+  }
+}

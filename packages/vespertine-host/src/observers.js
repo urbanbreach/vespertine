@@ -74,6 +74,8 @@ function observe(read, same, callback, intervalMs) {
     last = next;
     callback(next);
   }, period);
+  // Polling a window never keeps a process alive on its own.
+  timer?.unref?.();
   return () => globalThis.clearInterval(timer);
 }
 

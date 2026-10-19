@@ -31,3 +31,13 @@ fn solid_adapter_tests_pass_under_node() {
 fn solid_adapter_tests_pass_under_bun() {
     suite("vespertine-solid", "bun", &["test"]);
 }
+
+#[test]
+fn example_surface_tests_pass_under_node() {
+    suite("vespertine-examples", "node", &["--test", "test/*.test.js"]);
+}
+
+#[test]
+fn example_surface_tests_pass_under_bun() {
+    suite("vespertine-examples", "bun", &["test"]);
+}
