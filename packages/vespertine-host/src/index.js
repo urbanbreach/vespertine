@@ -40,3 +40,27 @@ export {
   isHostNode,
 } from "./host-tree.js";
 export { createSearchCursor, createTextSearchController, findRanges } from "./text-search.js";
+export {
+  COMPOSED_HANDLERS,
+  TOOLTIP_DEFAULTS,
+  TOOLTIP_HIDE_GRACE_MS,
+  buttonProps,
+  buttonTabIndex,
+  classifyKey,
+  composeHandlers,
+  composeRefs,
+  createButtonLatch,
+  createPressFlag,
+  createTooltipProvider,
+  createTooltipRoot,
+  defaultFinalFocus,
+  edgeIndex,
+  isControlled,
+  isWithin,
+  mergeSlotProps,
+  mergeStyles,
+  rankMatches,
+  requestControlledChange,
+  resolveStyle,
+  stepIndex,
+} from "./components/index.js";

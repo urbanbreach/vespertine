@@ -61,7 +61,7 @@ function createState(renderer) {
     return latest;
   }
 
-  function runDefaults(event, flags) {
+  function runDefaults(event, flags, run) {
     if (event.type !== "keyDown" || flags.defaulted || flags.defaultPrevented) return false;
     flags.defaulted = true;
     if (COMMAND_MODIFIERS.some((modifier) => event[modifier])) return false;
@@ -74,7 +74,8 @@ function createState(renderer) {
     if (event.key === "escape") {
       const top = layers[layers.length - 1];
       if (!top) return false;
-      top.layer.onEscape?.();
+      // Like every handler, the layer's Escape callback runs through the root's scheduler.
+      run(() => top.layer.onEscape?.());
       return true;
     }
     return false;
@@ -103,7 +104,7 @@ function createState(renderer) {
         if (handler && !flags.stopped) {
           invoke(handler, keyEvent({ ...event, id: 0 }, flags, type));
         }
-        if (runDefaults({ ...event, type }, flags)) handled = true;
+        if (runDefaults({ ...event, type }, flags, run)) handled = true;
         return handled;
       }
       case "windowSelectionChange": {
