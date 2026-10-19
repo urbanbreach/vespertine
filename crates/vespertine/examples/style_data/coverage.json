@@ -1,0 +1,87 @@
+{
+  "panels": [
+    {
+      "title": "flex layout: shorthands first, longhands override (gap, padding, margin, border width, radius, overflow)",
+      "container": {
+        "display": "flex", "flexDirection": "row", "flexWrap": "wrap",
+        "alignItems": "center", "alignContent": "start", "justifyContent": "between",
+        "gap": 8, "rowGap": 4, "columnGap": 14,
+        "width": "100%", "height": 96, "minWidth": 200, "minHeight": "auto",
+        "maxWidth": "100%", "maxHeight": 200,
+        "padding": 8, "paddingLeft": 20, "paddingTop": 12, "paddingRight": 8, "paddingBottom": 4,
+        "borderWidth": 1, "borderLeftWidth": 4, "borderTopWidth": 2, "borderRightWidth": 1, "borderBottomWidth": 3,
+        "borderColor": "#808080", "borderStyle": "dashed",
+        "borderRadius": 10, "borderTopLeftRadius": 0, "borderTopRightRadius": 20,
+        "borderBottomLeftRadius": 4, "borderBottomRightRadius": 12,
+        "backgroundColor": "#1f2937", "overflow": "hidden", "overflowX": "scroll", "overflowY": "hidden"
+      },
+      "child": {
+        "width": 64, "height": 32, "flexGrow": 0, "flexShrink": 1, "flexBasis": 64,
+        "alignSelf": "end", "margin": 2, "marginTop": 4, "marginRight": 6, "marginBottom": 2, "marginLeft": 6,
+        "backgroundColor": "#2563eb", "color": "#ffffff", "aspectRatio": 2
+      },
+      "removal": { "display": "flex", "width": 200, "height": 40, "backgroundColor": "#1f2937" }
+    },
+    {
+      "title": "grid layout: counts, track minimums, percentage sizes (99.9% is full)",
+      "container": {
+        "display": "grid", "gridTemplateColumns": 3, "gridTemplateRows": 2,
+        "gridColumnMin": "min-content", "gridRowMin": "max-content",
+        "gap": 6, "width": "99.9%", "height": "50%", "backgroundColor": "#111827"
+      },
+      "child": { "backgroundColor": "#7c3aed", "color": "#ffffff", "padding": 6 }
+    },
+    {
+      "title": "positioning: relative container, absolute and fixed children with edge offsets",
+      "container": {
+        "position": "relative", "width": 280, "height": 90, "backgroundColor": "#1f2937", "opacity": 0.95
+      },
+      "child": {
+        "position": "absolute", "top": 8, "right": 8, "bottom": 8, "left": 8,
+        "backgroundColor": "#f59e0b", "color": "#111827", "visibility": "hidden"
+      },
+      "removal": { "position": "relative", "width": 280, "height": 90, "visibility": "hidden" }
+    },
+    {
+      "title": "paint: gradient (Oklab), shadows (inset + outer), outline (offset), border radius",
+      "container": {
+        "width": 300, "height": 120, "borderRadius": 12, "borderWidth": 2,
+        "borderColor": "#808080", "padding": 16,
+        "background": {
+          "type": "linear-gradient", "angle": 90, "colorSpace": "oklab",
+          "stops": [ { "color": "#FF0000", "position": 0 }, { "color": "#0000FF", "position": 1 } ]
+        },
+        "backgroundColor": "hsl(210, 20%, 18%)",
+        "boxShadow": [
+          { "offsetX": 0, "offsetY": 1, "blurRadius": 4, "spreadRadius": 0, "color": "#00000040", "inset": true },
+          { "offsetX": 0, "offsetY": 4, "blurRadius": 12, "spreadRadius": 0, "color": "#00000033" }
+        ],
+        "outlineWidth": 2, "outlineColor": "#60A5FA", "outlineOffset": 2
+      },
+      "child": { "color": "#ffffff", "fontSize": 13 }
+    },
+    {
+      "title": "text: cascade from the container, weight names, line clamp, ellipsis, decoration",
+      "container": {
+        "width": 260, "padding": 10, "backgroundColor": "#0f172a", "color": "#e2e8f0",
+        "fontFamily": "Noto Sans", "fontSize": 14, "fontWeight": "semibold", "lineHeight": 20,
+        "textAlign": "center", "whiteSpace": "normal", "textOverflow": "ellipsis",
+        "lineClamp": 2.7, "textDecoration": "underline"
+      },
+      "child": { "textAlign": "left", "textDecoration": "none", "fontWeight": "light", "whiteSpace": "nowrap", "textOverflow": "ellipsis-start" }
+    },
+    {
+      "title": "interaction: cursor, pointer events, selection, scrollbar, nested states, focus dim flag",
+      "container": {
+        "width": 300, "height": 60, "padding": 6, "backgroundColor": "#1e293b", "color": "#ffffff",
+        "cursor": "pointer", "pointerEvents": "auto", "userSelect": "none", "selectionColor": "#3366ff59",
+        "scrollbarColor": "#94a3b8", "scrollbarWidth": 8, "overflowY": "scroll",
+        "keyboardFocusDim": true,
+        "hover": { "backgroundColor": "#334155", "outlineWidth": 1, "outlineColor": "#ffffff" },
+        "active": { "backgroundColor": "#475569", "opacity": 0.8 },
+        "focusVisible": { "outlineWidth": 2, "outlineColor": "#60A5FA", "outlineOffset": 2 }
+      },
+      "child": { "cursor": "nwse-resize", "userSelect": "text", "pointerEvents": "none", "flexShrink": 0 }
+    }
+  ]
+}

@@ -49,3 +49,6 @@ mod tests_nearest;
 
 #[cfg(test)]
 mod tests_image_hosts;
+
+#[cfg(test)]
+mod tests_style_pixels;

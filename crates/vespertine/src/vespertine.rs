@@ -46,6 +46,8 @@ mod interactive;
 mod key_dispatch;
 mod keymap;
 mod motion_clock;
+#[cfg(test)]
+mod outline_tests;
 mod paint_scope;
 #[cfg(test)]
 mod paint_scope_window_tests;
@@ -77,6 +79,9 @@ mod seeds;
 mod shared_uri;
 mod spring;
 mod style;
+mod style_data;
+#[cfg(test)]
+mod style_data_tests;
 mod styled;
 mod subscription;
 mod svg_renderer;
@@ -233,6 +238,7 @@ pub use scene::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
+pub use style_data::*;
 pub use styled::*;
 pub use subscription::*;
 /// Subsecond entry points for hot-patching callbacks outside VESPERTINE's render boundaries.

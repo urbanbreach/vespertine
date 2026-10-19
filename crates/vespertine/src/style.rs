@@ -319,6 +319,16 @@ pub struct Style {
     /// The grid location of this element
     pub grid_location: Option<GridLocation>,
 
+    /// A layout-neutral outline drawn around the border box, above the element's own content.
+    /// Refining this field replaces the whole outline; use a zero width to hide an inherited one.
+    pub outline: Option<Outline>,
+
+    /// The mouse hit policy of this element. `None` keeps the upstream behavior.
+    pub pointer_events: Option<PointerEvents>,
+
+    /// Whether this element dims while another control has keyboard focus. Not inherited.
+    pub keyboard_focus_dim: bool,
+
     /// Whether to draw a red debugging outline around this element
     #[cfg(debug_assertions)]
     pub debug: bool,
@@ -341,6 +351,69 @@ impl StyleRefinement {
     }
 }
 
+/// The CSS `pointer-events` policy of an element, deciding whether and how its mouse hitbox
+/// blocks hitboxes painted behind it. Elements without a policy keep the upstream behavior
+/// (only an explicit [`HitboxBehavior`] blocks).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum PointerEvents {
+    /// The element blocks all mouse hits behind it, including the wheel.
+    Auto,
+    /// The element inserts no mouse hitbox, so mouse input passes through it.
+    None,
+    /// Follow the painted surface: absolute elements always block everything, in-flow elements
+    /// with a non-transparent fill block hits but let the wheel reach ancestors, and all others
+    /// do not block.
+    Surface {
+        /// The fill could not be parsed. It is treated conservatively as a non-transparent fill.
+        unparsed_fill: bool,
+    },
+}
+
+/// How an element's mouse hitbox treats hitboxes behind it, as resolved from [`PointerEvents`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseBlocking {
+    /// The element inserts no mouse hitbox at all.
+    Ignored,
+    /// The element does not block anything behind it.
+    Passive,
+    /// The element blocks mouse hits behind it but lets the wheel reach ancestor scroll containers.
+    ExceptWheel,
+    /// The element blocks all mouse hits behind it, including the wheel.
+    All,
+}
+
+impl MouseBlocking {
+    /// Whether mouse hits (clicks, hover, moves) behind the element are blocked.
+    pub fn blocks_hits(self) -> bool {
+        matches!(self, Self::ExceptWheel | Self::All)
+    }
+
+    /// Whether the wheel is blocked from reaching elements behind the element.
+    pub fn blocks_wheel(self) -> bool {
+        matches!(self, Self::All)
+    }
+}
+
+impl PointerEvents {
+    /// Resolves this policy for an element that is absolutely positioned or not, and whose fill
+    /// is non-transparent or not.
+    pub fn resolve(self, absolute: bool, filled: bool) -> MouseBlocking {
+        match self {
+            PointerEvents::Auto => MouseBlocking::All,
+            PointerEvents::None => MouseBlocking::Ignored,
+            PointerEvents::Surface { unparsed_fill } => {
+                if absolute {
+                    MouseBlocking::All
+                } else if filled || unparsed_fill {
+                    MouseBlocking::ExceptWheel
+                } else {
+                    MouseBlocking::Passive
+                }
+            }
+        }
+    }
+}
+
 /// The value of the visibility property, similar to the CSS property `visibility`
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Visibility {
@@ -349,6 +422,84 @@ pub enum Visibility {
     Visible,
     /// The element should not be drawn, but should still take up space in the layout.
     Hidden,
+}
+
+/// A layout-neutral outline, the CSS `outline` of an element.
+///
+/// The outline is painted as a border-only quad around the element's border box, expanded by
+/// `offset + width` on every side. It takes no layout space and never affects hit testing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Outline {
+    /// Thickness of the ring in logical pixels. Zero or negative widths paint nothing.
+    pub width: Pixels,
+    /// Color of the ring. A fully transparent color paints nothing.
+    pub color: Hsla,
+    /// Signed gap between the border box and the inner edge of the ring. Negative values draw
+    /// the ring inside the border box.
+    pub offset: Pixels,
+}
+
+impl Outline {
+    /// Creates an outline from its width, color and offset.
+    pub fn new(width: Pixels, color: impl Into<Hsla>, offset: Pixels) -> Self {
+        Self {
+            width,
+            color: color.into(),
+            offset,
+        }
+    }
+
+    /// Whether this outline paints anything at all.
+    pub fn is_visible(&self) -> bool {
+        self.width > Pixels::ZERO && !self.color.is_transparent()
+    }
+
+    /// The outer corner radius of the ring for an element corner of the given effective radius:
+    /// `max(0, radius + offset + width)` for a positive radius, and zero for a square corner.
+    pub fn outer_radius(&self, radius: Pixels) -> Pixels {
+        if radius > Pixels::ZERO {
+            (radius + self.offset + self.width).max(Pixels::ZERO)
+        } else {
+            Pixels::ZERO
+        }
+    }
+
+    /// The outer bounds of the ring for an element with the given border box: the border box
+    /// expanded on every side by `offset + width`. Returns `None` when they would be empty or
+    /// inverted.
+    pub fn outer_bounds(&self, bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        let outer = bounds.dilate(self.offset + self.width);
+        (outer.size.width > Pixels::ZERO && outer.size.height > Pixels::ZERO).then_some(outer)
+    }
+
+    /// Paints the ring. `corner_radii` are the element's effective corner radii.
+    pub(crate) fn paint(
+        &self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        window: &mut Window,
+    ) {
+        if !self.is_visible() {
+            return;
+        }
+        let Some(outer_bounds) = self.outer_bounds(bounds) else {
+            return;
+        };
+        let radii = Corners {
+            top_left: self.outer_radius(corner_radii.top_left),
+            top_right: self.outer_radius(corner_radii.top_right),
+            bottom_right: self.outer_radius(corner_radii.bottom_right),
+            bottom_left: self.outer_radius(corner_radii.bottom_left),
+        };
+        window.paint_quad(quad(
+            outer_bounds,
+            radii,
+            Hsla::transparent_black(),
+            self.width,
+            self.color,
+            BorderStyle::Solid,
+        ));
+    }
 }
 
 /// The possible values of the box-shadow property
@@ -487,6 +638,14 @@ pub struct TextStyle {
 
     /// The number of lines to display before truncating the text
     pub line_clamp: Option<usize>,
+
+    /// Whether text under this style can be selected (CSS `user-select`). Inherited down the
+    /// tree: `false` opts the element and its whole subtree out of text selection and drag starts.
+    pub user_select: bool,
+
+    /// The color of the selection wash for text under this style. Inherited; `None` selects the
+    /// theme default (the accent color at 35% opacity).
+    pub selection_color: Option<Hsla>,
 }
 
 impl Default for TextStyle {
@@ -508,6 +667,8 @@ impl Default for TextStyle {
             text_overflow: None,
             text_align: TextAlign::default(),
             line_clamp: None,
+            user_select: true,
+            selection_color: None,
         }
     }
 }
@@ -629,6 +790,17 @@ impl Style {
         self.background
             .as_ref()
             .is_some_and(|fill| fill.color().is_some_and(|color| !color.is_transparent()))
+    }
+
+    /// How this element's mouse hitbox treats hitboxes behind it, per its [`PointerEvents`]
+    /// policy. `None` when no policy is set, which keeps the upstream hitbox behavior.
+    pub fn mouse_blocking(&self) -> Option<MouseBlocking> {
+        self.pointer_events.map(|policy| {
+            policy.resolve(
+                self.position == Position::Absolute,
+                self.has_opaque_background(),
+            )
+        })
     }
 
     /// Get the text style in this element style.
@@ -813,6 +985,10 @@ impl Style {
             ));
         }
 
+        if let Some(outline) = self.outline.as_ref() {
+            outline.paint(bounds, corner_radii, window);
+        }
+
         #[cfg(debug_assertions)]
         if self.debug_below {
             cx.remove_global::<DebugBelow>();
@@ -871,6 +1047,9 @@ impl Default for Style {
             grid_rows: None,
             grid_cols: None,
             grid_location: None,
+            outline: None,
+            pointer_events: None,
+            keyboard_focus_dim: true,
 
             #[cfg(debug_assertions)]
             debug: false,

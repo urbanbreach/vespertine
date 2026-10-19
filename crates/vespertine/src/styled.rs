@@ -2,8 +2,8 @@ use crate::{
     self as vespertine, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle,
     CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures,
     FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent,
-    Length, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
+    Length, Outline, PointerEvents, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
+    TextOverflow, TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use vespertine_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -512,6 +512,42 @@ pub trait Styled: Sized {
     /// Sets the border style of the element.
     fn border_dashed(mut self) -> Self {
         self.style().border_style = Some(BorderStyle::Dashed);
+        self
+    }
+
+    /// Sets a layout-neutral outline around the border box of the element.
+    ///
+    /// The outline takes no layout space and does not affect hit testing. See [`Outline`].
+    fn outline(mut self, outline: Outline) -> Self {
+        self.style().outline = Some(outline);
+        self
+    }
+
+    /// Sets the mouse hit policy of the element, the CSS `pointer-events`. See [`PointerEvents`].
+    fn pointer_events(mut self, policy: PointerEvents) -> Self {
+        self.style().pointer_events = Some(policy);
+        self
+    }
+
+    /// Sets whether the element dims while another control has keyboard focus.
+    /// Enabled by default; the flag is not inherited.
+    fn keyboard_focus_dim(mut self, enabled: bool) -> Self {
+        self.style().keyboard_focus_dim = Some(enabled);
+        self
+    }
+
+    /// Sets whether text under this element can be selected, the CSS `user-select`.
+    /// This value cascades to its child elements.
+    fn user_select(mut self, selectable: bool) -> Self {
+        self.text_style().user_select = Some(selectable);
+        self
+    }
+
+    /// Sets the color of the text selection wash under this element.
+    ///
+    /// This value cascades to its child elements.
+    fn selection_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.text_style().selection_color = Some(color.into());
         self
     }
 

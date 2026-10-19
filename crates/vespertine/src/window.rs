@@ -773,6 +773,10 @@ pub enum WindowControlArea {
     Min,
 }
 
+/// The opacity factor applied to focusable controls that are not on the focus path while a
+/// control has keyboard focus (see [`Window::keyboard_focus_dim_active`]).
+pub const KEYBOARD_FOCUS_DIM_OPACITY: f32 = 0.4;
+
 /// An identifier for a [Hitbox] which also includes [HitboxBehavior].
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct HitboxId(u64);
@@ -1265,6 +1269,7 @@ pub struct Window {
     /// input session can restart the IME connection).
     last_text_input_configuration: Option<TextInputConfiguration>,
     focused_text_input: Option<FocusId>,
+    keyboard_focus_dim_enabled: bool,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
     pub(crate) rendered_frame: Frame,
     pub(crate) next_frame: Frame,
@@ -1622,6 +1627,7 @@ impl Window {
             tabbing_identifier,
             #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
             use_display_p3,
+            keyboard_focus_dim,
         } = options;
 
         let initial_window_title = titlebar
@@ -2166,6 +2172,7 @@ impl Window {
             requested_autoscroll: None,
             last_text_input_configuration: None,
             focused_text_input: None,
+            keyboard_focus_dim_enabled: keyboard_focus_dim,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame_callbacks,
@@ -3462,6 +3469,29 @@ impl Window {
         self.last_input_modality == InputModality::Touch
     }
 
+    /// Whether the keyboard-focus dim (ELM-006 R20) is enabled for this window. On by default.
+    pub fn keyboard_focus_dim_enabled(&self) -> bool {
+        self.keyboard_focus_dim_enabled
+    }
+
+    /// Switches the keyboard-focus dim on or off for the whole window and schedules a redraw.
+    pub fn set_keyboard_focus_dim_enabled(&mut self, enabled: bool) {
+        if self.keyboard_focus_dim_enabled != enabled {
+            self.keyboard_focus_dim_enabled = enabled;
+            self.refresh();
+        }
+    }
+
+    /// Whether the keyboard-focus dim is in effect right now: the feature is enabled, a control
+    /// has focus, the most recent input was from the keyboard, and the focused control is not a
+    /// text editor (so typing never dims the rest of the window).
+    pub fn keyboard_focus_dim_active(&self) -> bool {
+        self.keyboard_focus_dim_enabled
+            && self.focus.is_some()
+            && self.last_input_was_keyboard()
+            && self.focused_text_input != self.focus
+    }
+
     /// The current state of the keyboard's capslock
     pub fn capslock(&self) -> Capslock {
         self.capslock
@@ -3488,6 +3518,7 @@ impl Window {
         if self.platform_window.prepare_frame() {
             self.refresh();
         }
+        let keyboard_focus_dim_painted = self.keyboard_focus_dim_active();
         self.invalidate_entities();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
@@ -3611,7 +3642,12 @@ impl Window {
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
         // resulting focus events.
-        if self.focus != focus_before_listeners {
+        //
+        // The dim also depends on whether the focused control accepts text input, which is only
+        // known once this frame's input handlers have been collected.
+        if self.focus != focus_before_listeners
+            || self.keyboard_focus_dim_active() != keyboard_focus_dim_painted
+        {
             self.refresh();
         }
         self.last_drawn_drawable_size = Some(self.drawable_size());

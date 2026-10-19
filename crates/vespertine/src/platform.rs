@@ -2738,6 +2738,10 @@ pub struct WindowOptions {
 
     /// Whether to render the window using the Display P3 color space on macOS.
     pub use_display_p3: bool,
+
+    /// Whether focusable elements dim while another control has keyboard focus (ELM-006 R20).
+    /// Enabled by default; individual elements opt out with the `keyboard_focus_dim` style flag.
+    pub keyboard_focus_dim: bool,
 }
 
 /// The variables that can be configured when creating a new window
@@ -2868,6 +2872,7 @@ impl Default for WindowOptions {
             window_decorations: None,
             tabbing_identifier: None,
             use_display_p3: false,
+            keyboard_focus_dim: true,
         }
     }
 }
@@ -3113,11 +3118,11 @@ pub enum CursorStyle {
     ResizeUpDown,
 
     /// A resize cursor directing up-left and down-right
-    /// corresponds to the CSS cursor value `nesw-resize`
+    /// corresponds to the CSS cursor value `nwse-resize`
     ResizeUpLeftDownRight,
 
     /// A resize cursor directing up-right and down-left
-    /// corresponds to the CSS cursor value `nwse-resize`
+    /// corresponds to the CSS cursor value `nesw-resize`
     ResizeUpRightDownLeft,
 
     /// A cursor indicating that the item/column can be resized horizontally.

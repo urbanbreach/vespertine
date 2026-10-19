@@ -2392,8 +2392,23 @@ impl Interactivity {
                     window.with_content_mask(
                         style.overflow_mask(bounds, window.rem_size()),
                         |window| {
-                            let hitbox = if self.should_insert_hitbox(&style, window, cx) {
-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+                            let mouse_blocking = style.mouse_blocking();
+                            let hitbox = if mouse_blocking != Some(crate::MouseBlocking::Ignored)
+                                && (self.should_insert_hitbox(&style, window, cx)
+                                    || mouse_blocking
+                                        .is_some_and(|blocking| blocking.blocks_hits()))
+                            {
+                                let behavior = match (mouse_blocking, self.hitbox_behavior) {
+                                    (Some(crate::MouseBlocking::All), _) => {
+                                        HitboxBehavior::BlockMouse
+                                    }
+                                    (
+                                        Some(crate::MouseBlocking::ExceptWheel),
+                                        HitboxBehavior::Normal,
+                                    ) => HitboxBehavior::BlockMouseExceptScroll,
+                                    (_, behavior) => behavior,
+                                };
+                                Some(window.insert_hitbox(bounds, behavior))
                             } else {
                                 None
                             };
@@ -2546,7 +2561,18 @@ impl Interactivity {
                     tab_group = self.tab_index;
                 }
 
-                window.with_element_opacity(style.opacity, |window| {
+                let opacity = if style.keyboard_focus_dim
+                    && window.keyboard_focus_dim_active()
+                    && self
+                        .tracked_focus_handle
+                        .as_ref()
+                        .is_some_and(|handle| !handle.contains_focused(window, cx))
+                {
+                    Some(style.opacity.unwrap_or(1.) * crate::KEYBOARD_FOCUS_DIM_OPACITY)
+                } else {
+                    style.opacity
+                };
+                window.with_element_opacity(opacity, |window| {
                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
                         // Opted-in curved padding-edge clip for the descendants only: the
                         // element's own shadow, fill and border stay outside it.
