@@ -616,6 +616,22 @@ impl TestRenderer {
         self.run(env, |host| host.set_image_bytes(id as u64, &bytes))
     }
 
+    /// Replaces an image element's image with packed pixels (`bgra` by default, or `rgba`).
+    #[napi]
+    pub fn set_image_pixels(
+        &self,
+        env: &Env,
+        id: f64,
+        width: f64,
+        height: f64,
+        bytes: Uint8Array,
+        format: Option<String>,
+    ) -> Result<()> {
+        self.run(env, |host| {
+            host.set_image_pixels(id as u64, width, height, &bytes, format.as_deref())
+        })
+    }
+
     #[napi]
     pub fn register_font(&self, env: &Env, bytes: Uint8Array) -> Result<()> {
         self.run(env, |host| host.register_font(bytes.to_vec()))

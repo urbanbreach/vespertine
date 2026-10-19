@@ -151,6 +151,23 @@ impl TestHost {
         Ok(())
     }
 
+    /// Replaces an image element's content with packed pixels (`bgra` by default, or `rgba`),
+    /// then flushes.
+    pub fn set_image_pixels(
+        &mut self,
+        id: u64,
+        width: f64,
+        height: f64,
+        bytes: &[u8],
+        format: Option<&str>,
+    ) -> HostResult<()> {
+        self.on_tree(|tree, window, cx| {
+            tree.set_image_pixels(id, width, height, bytes, format, window, cx)
+        })??;
+        self.flush();
+        Ok(())
+    }
+
     /// The native accessibility tree of the last frame as structured data: the window's
     /// accessibility tree update serialized to JSON (nodes with role, label, value, bounds and
     /// children). Connects a simulated assistive technology on first use, which makes the

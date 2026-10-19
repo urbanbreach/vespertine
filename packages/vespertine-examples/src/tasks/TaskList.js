@@ -24,6 +24,7 @@ function Row({ task, hovered, onHover, onToggle, onStar, onDelete }) {
       testId: `task-row-${task.id}`,
       ...hoverHandlers,
       style: {
+        width: "100%",
         height: ROW_HEIGHT,
         flexDirection: "row",
         alignItems: "center",
@@ -109,7 +110,7 @@ export function TaskList({ width, height, tasks: initial }) {
       },
       h(
         "div",
-        { testId: "sidebar-inner", style: { width: SIDEBAR_WIDTH, height: "100%", flexShrink: 0, paddingTop: TOP_CLEARANCE, backgroundColor: colors.sidebar, borderColor: colors.border, borderWidth: 1 } },
+        { testId: "sidebar-inner", style: { width: SIDEBAR_WIDTH, height: "100%", flexShrink: 0, flexDirection: "column", paddingTop: TOP_CLEARANCE, backgroundColor: colors.sidebar, borderColor: colors.border, borderWidth: 1 } },
         VIEWS.map((name) =>
           h(
             "div",

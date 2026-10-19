@@ -148,4 +148,19 @@ pub trait RetainedHost: 'static {
         let _ = (id, bytes, window, cx);
         unsupported("setting image content")
     }
+
+    /// Replaces an image element's content with packed pixels (`bgra` by default, or `rgba`).
+    fn set_image_pixels(
+        &mut self,
+        id: u64,
+        width: f64,
+        height: f64,
+        bytes: &[u8],
+        format: Option<&str>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> HostResult<()> {
+        let _ = (id, width, height, bytes, format, window, cx);
+        unsupported("setting image pixels")
+    }
 }
