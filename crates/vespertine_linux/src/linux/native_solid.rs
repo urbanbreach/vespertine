@@ -18,6 +18,9 @@ pub enum SolidProducer {
     /// A `wl_shm` producer on a Wayland connection.
     #[cfg(feature = "wayland")]
     Wayland(super::wayland::WaylandSolidProducer),
+    /// A producer drawing into an X11 child window through its own X connection.
+    #[cfg(feature = "x11")]
+    X11(super::x11::X11SolidProducer),
 }
 
 impl SolidProducer {
@@ -27,6 +30,10 @@ impl SolidProducer {
             #[cfg(feature = "wayland")]
             NativeLayer::Wayland { .. } => Ok(SolidProducer::Wayland(
                 super::wayland::WaylandSolidProducer::new(composition, layer)?,
+            )),
+            #[cfg(feature = "x11")]
+            NativeLayer::X11 { window } => Ok(SolidProducer::X11(
+                super::x11::X11SolidProducer::new(window)?,
             )),
             other => {
                 let _ = composition;
@@ -46,6 +53,8 @@ impl SolidProducer {
         match self {
             #[cfg(feature = "wayland")]
             SolidProducer::Wayland(producer) => producer.present(size, left, right),
+            #[cfg(feature = "x11")]
+            SolidProducer::X11(producer) => producer.present(size, left, right),
         }
     }
 
@@ -54,6 +63,8 @@ impl SolidProducer {
         match self {
             #[cfg(feature = "wayland")]
             SolidProducer::Wayland(producer) => producer.pump(),
+            #[cfg(feature = "x11")]
+            SolidProducer::X11(producer) => producer.pump(),
         }
     }
 }
