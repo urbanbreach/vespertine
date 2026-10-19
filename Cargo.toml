@@ -5,6 +5,7 @@ members = [
     "crates/vespertine_apple",
     "crates/vespertine_bench_metrics",
     "crates/vespertine_collections",
+    "crates/vespertine_components",
     "crates/vespertine_derive_refineable",
     "crates/vespertine_host_tree",
     "crates/vespertine_http_client",
@@ -549,6 +550,9 @@ path = "crates/vespertine_bench_metrics"
 [workspace.dependencies.vespertine_collections]
 path = "crates/vespertine_collections"
 version = "0.1.0"
+
+[workspace.dependencies.vespertine_components]
+path = "crates/vespertine_components"
 
 [workspace.dependencies.vespertine_derive_refineable]
 path = "crates/vespertine_derive_refineable"

@@ -7241,6 +7241,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vespertine_components"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "serde_json",
+ "tempfile",
+ "unicode-segmentation",
+ "url",
+ "vespertine",
+ "vespertine_platform",
+ "vespertine_webview",
+]
+
+[[package]]
 name = "vespertine_derive_refineable"
 version = "0.1.0"
 dependencies = [

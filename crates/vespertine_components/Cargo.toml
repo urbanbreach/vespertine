@@ -1,0 +1,32 @@
+[package]
+name = "vespertine_components"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Reusable components built from elements: the embedded browser surface (CMP-022)"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+vespertine.workspace = true
+vespertine_webview.workspace = true
+unicode-segmentation.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+parking_lot.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
+vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
+vespertine_webview.workspace = true
+
+[[example]]
+name = "browser_surface"
+path = "examples/browser_surface.rs"
