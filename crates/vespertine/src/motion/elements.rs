@@ -397,10 +397,10 @@ impl<E: IntoElement + 'static> Element for Travel<E> {
 
     fn prepaint(
         &mut self,
-        id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        element: &mut Self::RequestLayoutState,
+        child: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
@@ -409,7 +409,7 @@ impl<E: IntoElement + 'static> Element for Travel<E> {
         let (route, route_duration, reflow_duration) =
             (self.route, self.route_duration, self.reflow_duration);
         let displacement =
-            window.with_element_state(id.unwrap(), |state: Option<TravelState>, window| {
+            window.with_element_state(global_id.unwrap(), |state: Option<TravelState>, window| {
                 let mut state = state.unwrap_or(TravelState {
                     glide: TravelGlide::default(),
                     natural: None,
@@ -448,7 +448,7 @@ impl<E: IntoElement + 'static> Element for Travel<E> {
                 let [x, y] = state.glide.displacement();
                 (Point::new(px(x), px(y)), state)
             });
-        window.with_element_offset(displacement, |window| element.prepaint(window, cx));
+        window.with_element_offset(displacement, |window| child.prepaint(window, cx));
     }
 
     fn paint(

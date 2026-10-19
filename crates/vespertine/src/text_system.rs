@@ -459,11 +459,11 @@ impl TextSystem {
             // The fallback family keeps the requested features, per-glyph fallbacks, weight and
             // style wherever it can honor them; only then is its own plain descriptor tried.
             let styled = Font {
+                weight: font.weight,
+                style: font.style,
                 family: fallback.family.clone(),
                 features: font.features.clone(),
                 fallbacks: font.fallbacks.clone(),
-                weight: font.weight,
-                style: font.style,
             };
             if styled != *fallback
                 && let Ok(font_id) = self.font_id(&styled)

@@ -143,12 +143,7 @@ fn percent_decode(text: &str) -> Vec<u8> {
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+    char::from(byte).to_digit(16).map(|digit| digit as u8)
 }
 
 /// Standard-alphabet base64 with required padding.

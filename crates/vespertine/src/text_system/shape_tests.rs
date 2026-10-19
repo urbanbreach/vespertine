@@ -327,12 +327,6 @@ mod fallback {
         let seen = Arc::new(Mutex::new(Vec::<Option<FontFallbacks>>::new()));
         struct Recording(Arc<TestShaper>, Arc<Mutex<Vec<Option<FontFallbacks>>>>);
         impl PlatformTextSystem for Recording {
-            fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-                self.0.add_fonts(fonts)
-            }
-            fn all_font_names(&self) -> Vec<String> {
-                self.0.all_font_names()
-            }
             fn font_id(&self, descriptor: &Font) -> Result<FontId> {
                 self.1.lock().push(descriptor.fallbacks.clone());
                 self.0.font_id(descriptor)
@@ -340,30 +334,39 @@ mod fallback {
             fn font_metrics(&self, id: FontId) -> FontMetrics {
                 self.0.font_metrics(id)
             }
-            fn typographic_bounds(&self, a: FontId, b: GlyphId) -> Result<Bounds<f32>> {
-                self.0.typographic_bounds(a, b)
+            fn advance(&self, font: FontId, glyph: GlyphId) -> Result<Size<f32>> {
+                self.0.advance(font, glyph)
             }
-            fn advance(&self, a: FontId, b: GlyphId) -> Result<Size<f32>> {
-                self.0.advance(a, b)
+            fn typographic_bounds(&self, font: FontId, glyph: GlyphId) -> Result<Bounds<f32>> {
+                self.0.typographic_bounds(font, glyph)
             }
-            fn glyph_for_char(&self, a: FontId, c: char) -> Option<GlyphId> {
-                self.0.glyph_for_char(a, c)
+            fn glyph_for_char(&self, font: FontId, ch: char) -> Option<GlyphId> {
+                self.0.glyph_for_char(font, ch)
             }
-            fn glyph_raster_bounds(&self, p: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-                self.0.glyph_raster_bounds(p)
+            fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+                self.0.add_fonts(fonts)
+            }
+            fn all_font_names(&self) -> Vec<String> {
+                self.0.all_font_names()
+            }
+            fn glyph_raster_bounds(
+                &self,
+                params: &RenderGlyphParams,
+            ) -> Result<Bounds<DevicePixels>> {
+                self.0.glyph_raster_bounds(params)
             }
             fn rasterize_glyph(
                 &self,
-                p: &RenderGlyphParams,
-                b: Bounds<DevicePixels>,
+                params: &RenderGlyphParams,
+                bounds: Bounds<DevicePixels>,
             ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-                self.0.rasterize_glyph(p, b)
+                self.0.rasterize_glyph(params, bounds)
             }
-            fn layout_line(&self, t: &str, s: Pixels, r: &[FontRun]) -> LineLayout {
-                self.0.layout_line(t, s, r)
+            fn layout_line(&self, text: &str, size: Pixels, runs: &[FontRun]) -> LineLayout {
+                self.0.layout_line(text, size, runs)
             }
-            fn recommended_rendering_mode(&self, a: FontId, b: Pixels) -> TextRenderingMode {
-                self.0.recommended_rendering_mode(a, b)
+            fn recommended_rendering_mode(&self, font: FontId, size: Pixels) -> TextRenderingMode {
+                self.0.recommended_rendering_mode(font, size)
             }
         }
         drop(system);

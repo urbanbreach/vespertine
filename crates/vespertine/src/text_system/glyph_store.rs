@@ -1071,12 +1071,8 @@ mod window_tests {
             self.inner.layout_line(text, font_size, runs)
         }
 
-        fn recommended_rendering_mode(
-            &self,
-            font_id: FontId,
-            font_size: Pixels,
-        ) -> TextRenderingMode {
-            self.inner.recommended_rendering_mode(font_id, font_size)
+        fn recommended_rendering_mode(&self, font: FontId, size: Pixels) -> TextRenderingMode {
+            self.inner.recommended_rendering_mode(font, size)
         }
     }
 

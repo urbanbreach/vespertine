@@ -2353,70 +2353,70 @@ mod element_tests {
     }
 
     impl crate::InputHandler for BoundsHandler {
+        fn bounds_for_range(
+            &mut self,
+            _range: std::ops::Range<usize>,
+            _window: &mut Window,
+            _cx: &mut crate::App,
+        ) -> Option<crate::Bounds<crate::Pixels>> {
+            Some(self.bounds)
+        }
+
         fn selected_text_range(
             &mut self,
-            _: bool,
-            _: &mut Window,
-            _: &mut crate::App,
+            _ignore_disabled_input: bool,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) -> Option<crate::UTF16Selection> {
             None
         }
 
         fn marked_text_range(
             &mut self,
-            _: &mut Window,
-            _: &mut crate::App,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) -> Option<std::ops::Range<usize>> {
             None
         }
 
         fn text_for_range(
             &mut self,
-            _: std::ops::Range<usize>,
-            _: &mut Option<std::ops::Range<usize>>,
-            _: &mut Window,
-            _: &mut crate::App,
+            _range: std::ops::Range<usize>,
+            _adjusted_range: &mut Option<std::ops::Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) -> Option<String> {
             None
         }
 
+        fn unmark_text(&mut self, _window: &mut Window, _cx: &mut crate::App) {}
+
         fn replace_text_in_range(
             &mut self,
-            _: Option<std::ops::Range<usize>>,
-            _: &str,
-            _: &mut Window,
-            _: &mut crate::App,
+            _range: Option<std::ops::Range<usize>>,
+            _text: &str,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) {
         }
 
         fn replace_and_mark_text_in_range(
             &mut self,
-            _: Option<std::ops::Range<usize>>,
-            _: &str,
-            _: Option<std::ops::Range<usize>>,
-            _: &mut Window,
-            _: &mut crate::App,
+            _range: Option<std::ops::Range<usize>>,
+            _new_text: &str,
+            _new_selected_range: Option<std::ops::Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) {
         }
 
-        fn unmark_text(&mut self, _: &mut Window, _: &mut crate::App) {}
-
         fn character_index_for_point(
             &mut self,
-            _: crate::Point<crate::Pixels>,
-            _: &mut Window,
-            _: &mut crate::App,
+            _point: crate::Point<crate::Pixels>,
+            _window: &mut Window,
+            _cx: &mut crate::App,
         ) -> Option<usize> {
             None
-        }
-
-        fn bounds_for_range(
-            &mut self,
-            _: std::ops::Range<usize>,
-            _: &mut Window,
-            _: &mut crate::App,
-        ) -> Option<crate::Bounds<crate::Pixels>> {
-            Some(self.bounds)
         }
     }
 

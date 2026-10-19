@@ -806,27 +806,21 @@ fn paint_line_background(
     align: TextAlign,
     align_width: Option<Pixels>,
     decoration_runs: &[DecorationRun],
-    wrap_boundaries: &[WrapBoundary],
+    boundaries: &[WrapBoundary],
     window: &mut Window,
     _cx: &mut App,
 ) -> Result<()> {
-    if !decoration_runs
+    let has_background = decoration_runs
         .iter()
-        .any(|run| run.background_color.is_some())
-    {
+        .any(|run| run.background_color.is_some());
+    if !has_background {
         return Ok(());
     }
-    let line_bounds = line_paint_bounds(
-        origin,
-        layout,
-        line_height,
-        align,
-        align_width,
-        wrap_boundaries,
-    );
-    window.paint_layer(line_bounds, |window| {
+    let layer_bounds =
+        line_paint_bounds(origin, layout, line_height, align, align_width, boundaries);
+    window.paint_layer(layer_bounds, |window| {
         let mut decoration_runs = decoration_runs.iter();
-        let mut wraps = wrap_boundaries.iter().peekable();
+        let mut wraps = boundaries.iter().peekable();
         let mut run_end = 0;
         let mut current_background: Option<(Point<Pixels>, Hsla)> = None;
         let mut glyph_origin = point(
@@ -931,7 +925,7 @@ fn paint_line_background(
         }
 
         let mut last_line_end_x = origin.x + layout.width;
-        if let Some(boundary) = wrap_boundaries.last() {
+        if let Some(boundary) = boundaries.last() {
             let run = &layout.runs[boundary.run_ix];
             let glyph = &run.glyphs[boundary.glyph_ix];
             last_line_end_x -= glyph.position.x;

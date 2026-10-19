@@ -989,11 +989,11 @@ impl Element for PageCanvas {
     type RequestLayoutState = ();
     type PrepaintState = Hitbox;
 
-    fn id(&self) -> Option<ElementId> {
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+    fn id(&self) -> Option<ElementId> {
         None
     }
 
@@ -1005,8 +1005,7 @@ impl Element for PageCanvas {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = relative(1.).into();
+        style.size = size(relative(1.).into(), relative(1.).into());
         (window.request_layout(style, [], cx), ())
     }
 
@@ -1015,7 +1014,7 @@ impl Element for PageCanvas {
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         window: &mut Window,
         _cx: &mut App,
     ) -> Hitbox {
@@ -1027,7 +1026,7 @@ impl Element for PageCanvas {
         _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         hitbox: &mut Hitbox,
         window: &mut Window,
         cx: &mut App,

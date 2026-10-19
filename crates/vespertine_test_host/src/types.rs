@@ -32,11 +32,12 @@ impl Rect {
 
 impl From<Bounds<Pixels>> for Rect {
     fn from(bounds: Bounds<Pixels>) -> Self {
+        let to_f64 = |pixels: Pixels| f64::from(f32::from(pixels));
         Self {
-            x: f64::from(f32::from(bounds.origin.x)),
-            y: f64::from(f32::from(bounds.origin.y)),
-            width: f64::from(f32::from(bounds.size.width)),
-            height: f64::from(f32::from(bounds.size.height)),
+            x: to_f64(bounds.origin.x),
+            y: to_f64(bounds.origin.y),
+            width: to_f64(bounds.size.width),
+            height: to_f64(bounds.size.height),
         }
     }
 }

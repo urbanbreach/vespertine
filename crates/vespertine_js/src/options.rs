@@ -23,15 +23,15 @@ pub struct OptionsError(pub String);
 #[serde(rename_all = "camelCase", default)]
 pub struct WindowConfig {
     pub title: Option<String>,
+    pub resizable: Option<bool>,
+    pub fullscreen: Option<bool>,
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub min_width: Option<f64>,
     pub min_height: Option<f64>,
-    pub resizable: Option<bool>,
-    pub fullscreen: Option<bool>,
+    pub titlebar_transparent: Option<bool>,
     /// Plain transparency; selects the transparent background when no explicit kind is set.
     pub transparent: Option<bool>,
-    pub titlebar_transparent: Option<bool>,
     /// `opaque`, `transparent` or `blurred`; wins over `transparent`.
     pub window_background: Option<String>,
     pub focus: Option<bool>,
@@ -49,13 +49,13 @@ pub struct WindowConfig {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LayerShellConfig {
+    pub keyboard_interactivity: Option<String>,
     pub namespace: Option<String>,
     pub layer: Option<String>,
     pub anchor: Option<Vec<String>>,
-    pub exclusive_zone: Option<f64>,
-    pub exclusive_edge: Option<String>,
     pub margin: Option<Vec<f64>>,
-    pub keyboard_interactivity: Option<String>,
+    pub exclusive_edge: Option<String>,
+    pub exclusive_zone: Option<f64>,
 }
 
 /// Parses one edge name: case-insensitive after trimming; unknown names are `None`.

@@ -633,13 +633,13 @@ impl LineWrapper {
     fn is_cjk_for_wrapping(c: char) -> bool {
         matches!(
             c,
-            '\u{3000}'..='\u{30FF}'
-                | '\u{3400}'..='\u{4DBF}'
-                | '\u{4E00}'..='\u{9FFF}'
-                | '\u{AC00}'..='\u{D7AF}'
-                | '\u{F900}'..='\u{FAFF}'
+            '\u{20000}'..='\u{3FFFF}'
                 | '\u{FF00}'..='\u{FFEF}'
-                | '\u{20000}'..='\u{3FFFF}'
+                | '\u{F900}'..='\u{FAFF}'
+                | '\u{AC00}'..='\u{D7AF}'
+                | '\u{4E00}'..='\u{9FFF}'
+                | '\u{3400}'..='\u{4DBF}'
+                | '\u{3000}'..='\u{30FF}'
         )
     }
 

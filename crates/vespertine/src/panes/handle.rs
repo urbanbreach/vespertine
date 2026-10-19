@@ -183,37 +183,37 @@ impl Element for ResizeHandle {
 
     fn prepaint(
         &mut self,
-        id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
+        _layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
         let dragging =
-            window.with_element_state(id.unwrap(), |state: Option<Rc<Cell<bool>>>, _| {
+            window.with_element_state(global_id.unwrap(), |state: Option<Rc<Cell<bool>>>, _| {
                 let state = state.unwrap_or_default();
                 (state.clone(), state)
             });
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::BlockMouse);
         // An active drag follows this seam's identity (INP-001), not a frame-local hitbox id.
-        window.rebind_captured_element(id.unwrap(), hitbox.id);
+        window.rebind_captured_element(global_id.unwrap(), hitbox.id);
         ResizeHandlePrepaint { hitbox, dragging }
     }
 
     fn paint(
         &mut self,
-        id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
+        _layout: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
         window: &mut Window,
         _cx: &mut App,
     ) {
         let hitbox = prepaint.hitbox.clone();
         let dragging = prepaint.dragging.clone();
-        let element_id = id.expect("resize handles have ids").clone();
+        let element_id = global_id.expect("resize handles have ids").clone();
         let side = self.side;
         let limits = self.limits;
         let default = limits.clamp(self.default_size);

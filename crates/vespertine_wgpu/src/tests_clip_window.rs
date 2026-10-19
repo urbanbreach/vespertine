@@ -59,9 +59,9 @@ fn probes() -> vespertine::Div {
         .child(
             canvas(
                 |_, _, _| (),
-                move |bounds, _, window, _| {
+                move |area, _, window, _| {
                     window
-                        .paint_image(bounds, bounds, Corners::default(), image, 0, false)
+                        .paint_image(area, area, Corners::default(), image, 0, false)
                         .expect("paint image");
                 },
             )

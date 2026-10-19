@@ -126,10 +126,10 @@ impl Render for Scenery {
             if plan.backdrop {
                 overlay = overlay.child(
                     div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
                         .size_full()
+                        .absolute()
+                        .left_0()
+                        .top_0()
                         .bg(black().opacity(0.2)),
                 );
             }

@@ -73,20 +73,20 @@ impl Element for Svg {
     type RequestLayoutState = ();
     type PrepaintState = Option<Hitbox>;
 
-    fn id(&self) -> Option<crate::ElementId> {
-        self.interactivity.element_id.clone()
-    }
-
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        self.interactivity.source_location()
-    }
-
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.interactivity.a11y_role()
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.interactivity.write_a11y_info(node);
+    }
+
+    fn id(&self) -> Option<crate::ElementId> {
+        self.interactivity.element_id.clone()
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.interactivity.source_location()
     }
 
     fn request_layout(

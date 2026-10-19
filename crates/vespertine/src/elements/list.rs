@@ -407,21 +407,21 @@ impl ListItem {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-struct ListItemSummary {
-    count: usize,
-    measured_count: usize,
-    height: Pixels,
-    measured_height: Pixels,
-    has_focus_handles: bool,
-    has_unknown_height: bool,
-}
+#[derive(Clone, Debug, Default)]
+struct Height(Pixels);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Count(usize);
 
-#[derive(Clone, Debug, Default)]
-struct Height(Pixels);
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ListItemSummary {
+    has_unknown_height: bool,
+    has_focus_handles: bool,
+    measured_height: Pixels,
+    height: Pixels,
+    measured_count: usize,
+    count: usize,
+}
 
 /// Reservation bookkeeping for one layout pass (LAY-002 R3, R5).
 struct PassReservation {
@@ -2531,9 +2531,10 @@ impl StateInner {
                 self.layout_all_items(content_width, render_item, window, cx);
             }
 
+            let viewport_height = bounds.size.height;
             let mut layout_response = self.layout_items(
                 Some(content_width),
-                bounds.size.height,
+                viewport_height,
                 &padding,
                 render_item,
                 window,
@@ -2845,11 +2846,11 @@ impl Element for List {
         let mut style = Style::default();
         style.refine(&self.style);
 
-        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         let padding = style
             .padding
             .to_pixels(bounds.size.into(), window.rem_size());
         let content_width = (bounds.size.width - padding.left - padding.right).max(px(0.));
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
         let (layout, notification, rows) = {
             let state = &mut *self.state.edit();
@@ -3044,22 +3045,22 @@ impl vespertine_sum_tree::Item for ListItem {
                 estimate,
                 focus_handle,
             } => ListItemSummary {
-                count: 1,
-                measured_count: 0,
-                height: size_hint.map_or(*estimate, |size| size.height),
-                measured_height: px(0.),
-                has_focus_handles: focus_handle.is_some(),
                 has_unknown_height: size_hint.is_none() && *estimate == px(0.),
+                has_focus_handles: focus_handle.is_some(),
+                measured_height: px(0.),
+                height: size_hint.map_or(*estimate, |size| size.height),
+                measured_count: 0,
+                count: 1,
             },
             ListItem::Measured {
                 size, focus_handle, ..
             } => ListItemSummary {
-                count: 1,
-                measured_count: 1,
-                height: size.height,
-                measured_height: size.height,
-                has_focus_handles: focus_handle.is_some(),
                 has_unknown_height: false,
+                has_focus_handles: focus_handle.is_some(),
+                measured_height: size.height,
+                height: size.height,
+                measured_count: 1,
+                count: 1,
             },
         }
     }
@@ -3071,12 +3072,12 @@ impl vespertine_sum_tree::ContextLessSummary for ListItemSummary {
     }
 
     fn add_summary(&mut self, summary: &Self) {
-        self.count += summary.count;
-        self.measured_count += summary.measured_count;
-        self.height += summary.height;
-        self.measured_height += summary.measured_height;
-        self.has_focus_handles |= summary.has_focus_handles;
         self.has_unknown_height |= summary.has_unknown_height;
+        self.has_focus_handles |= summary.has_focus_handles;
+        self.measured_height += summary.measured_height;
+        self.height += summary.height;
+        self.measured_count += summary.measured_count;
+        self.count += summary.count;
     }
 }
 

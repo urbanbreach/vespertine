@@ -23,8 +23,8 @@ impl Render for Samples {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let typography = Typography::global(cx);
         div()
-            .flex()
             .flex_col()
+            .flex()
             .child(
                 div()
                     .font_family(typography.effective_family_name(TypographyRole::Interface))

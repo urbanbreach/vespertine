@@ -357,50 +357,44 @@ impl<E: Element> Drawable<E> {
     }
 
     fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
-        match mem::take(&mut self.phase) {
-            ElementDrawPhase::Start => {
-                let element_id = self.element.id();
-                window.layout_enter_element(element_id.as_ref());
-                let global_id = element_id.map(|element_id| prepare_element_id(element_id, window));
+        let ElementDrawPhase::Start = mem::take(&mut self.phase) else {
+            panic!("must call request_layout only once");
+        };
+        let element_id = self.element.id();
+        window.layout_enter_element(element_id.as_ref());
+        let global_id = element_id.map(|id| prepare_element_id(id, window));
+        let inspector_id = self.inspector_id_if_enabled(window);
 
-                let inspector_id;
-                #[cfg(any(feature = "inspector", debug_assertions))]
-                {
-                    inspector_id = if window.inspector_enabled() {
-                        self.element
-                            .source_location()
-                            .map(|source| prepare_inspector_id(source, window))
-                    } else {
-                        None
-                    };
-                }
-                #[cfg(not(any(feature = "inspector", debug_assertions)))]
-                {
-                    inspector_id = None;
-                }
+        let (layout_id, request_layout) =
+            self.element
+                .request_layout(global_id.as_ref(), inspector_id.as_ref(), window, cx);
 
-                let (layout_id, request_layout) = self.element.request_layout(
-                    global_id.as_ref(),
-                    inspector_id.as_ref(),
-                    window,
-                    cx,
-                );
-
-                if global_id.is_some() {
-                    window.element_id_stack.pop();
-                }
-                window.layout_exit_element();
-
-                self.phase = ElementDrawPhase::RequestLayout {
-                    layout_id,
-                    global_id,
-                    inspector_id,
-                    request_layout,
-                };
-                layout_id
-            }
-            _ => panic!("must call request_layout only once"),
+        if global_id.is_some() {
+            window.element_id_stack.pop();
         }
+        window.layout_exit_element();
+
+        self.phase = ElementDrawPhase::RequestLayout {
+            layout_id,
+            global_id,
+            inspector_id,
+            request_layout,
+        };
+        layout_id
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    fn inspector_id_if_enabled(&self, window: &mut Window) -> Option<InspectorElementId> {
+        if !window.inspector_enabled() {
+            return None;
+        }
+        let source = self.element.source_location()?;
+        Some(prepare_inspector_id(source, window))
+    }
+
+    #[cfg(not(any(feature = "inspector", debug_assertions)))]
+    fn inspector_id_if_enabled(&self, _window: &mut Window) -> Option<InspectorElementId> {
+        None
     }
 
     pub(crate) fn prepaint(&mut self, window: &mut Window, cx: &mut App) {

@@ -1026,15 +1026,16 @@ impl WaylandWindow {
         };
 
         if renderer.device_lost() {
+            let display = state
+                .surface
+                .backend()
+                .upgrade()
+                .unwrap()
+                .display_ptr()
+                .cast::<std::ffi::c_void>();
             let raw_window = RawWindow {
                 window: state.surface.id().as_ptr().cast::<std::ffi::c_void>(),
-                display: state
-                    .surface
-                    .backend()
-                    .upgrade()
-                    .unwrap()
-                    .display_ptr()
-                    .cast::<std::ffi::c_void>(),
+                display,
             };
             match renderer.recover(&raw_window) {
                 Ok(()) => {

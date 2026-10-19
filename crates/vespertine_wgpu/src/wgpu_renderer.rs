@@ -1347,19 +1347,19 @@ impl WgpuRendererCore {
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: globals_buffer,
-                        offset: globals_offset,
-                        size: NonZeroU64::new(std::mem::size_of::<GlobalParams>() as u64),
-                    }),
-                },
-                wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: globals_buffer,
                         offset: gamma_offset,
                         size: NonZeroU64::new(std::mem::size_of::<GammaParams>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: globals_buffer,
+                        offset: globals_offset,
+                        size: NonZeroU64::new(std::mem::size_of::<GlobalParams>() as u64),
                     }),
                 },
                 wgpu::BindGroupEntry {

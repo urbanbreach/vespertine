@@ -12,13 +12,13 @@ struct SurfaceParams {
     curved_clip: u32,
 }
 
-@group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
-@group(1) @binding(1) var t_surface: texture_2d<f32>;
 @group(1) @binding(2) var s_surface: sampler;
+@group(1) @binding(1) var t_surface: texture_2d<f32>;
+@group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
 
 struct SurfaceVarying {
-    @builtin(position) position: vec4<f32>,
     @location(0) texture_position: vec2<f32>,
+    @builtin(position) position: vec4<f32>,
     @location(3) clip_distances: vec4<f32>,
 }
 

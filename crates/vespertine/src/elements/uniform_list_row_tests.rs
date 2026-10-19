@@ -121,9 +121,9 @@ fn move_pointer(cx: &mut TestAppContext, window: AnyWindowHandle, x: f32, y: f32
     cx.update_window(window, |_, window, cx| {
         window.dispatch_event(
             MouseMoveEvent {
-                position: point(px(x), px(y)),
-                pressed_button: None,
                 modifiers: Modifiers::default(),
+                pressed_button: None,
+                position: point(px(x), px(y)),
             }
             .to_platform_input(),
             cx,

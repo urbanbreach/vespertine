@@ -2338,33 +2338,33 @@ pub(crate) type PaintObserver = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut
 
 impl AriaProperties {
     const EMPTY: AriaProperties = AriaProperties {
-        author_id: None,
-        label: None,
-        description: None,
-        keyshortcuts: None,
-        selected: None,
         disabled: false,
         busy: false,
+        read_only: false,
+        label_attribute_present: false,
+        suppress_node: false,
+        author_id: None,
+        label: None,
+        alt: None,
+        description: None,
+        placeholder: None,
+        value: None,
+        keyshortcuts: None,
+        selected: None,
         expanded: None,
         toggled: None,
+        orientation: None,
         numeric_value: None,
         min_numeric_value: None,
         max_numeric_value: None,
         numeric_value_step: None,
-        value: None,
-        placeholder: None,
-        orientation: None,
         level: None,
         position_in_set: None,
         size_of_set: None,
         row_index: None,
-        column_index: None,
         row_count: None,
+        column_index: None,
         column_count: None,
-        alt: None,
-        label_attribute_present: false,
-        suppress_node: false,
-        read_only: false,
     };
 }
 
@@ -2432,11 +2432,11 @@ pub struct Interactivity {
     pub(crate) tooltip_builder: Option<Box<TooltipBuilder>>,
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
-    pub(crate) hitbox_behavior: HitboxBehavior,
     pub(crate) capture_pointer: bool,
-    pub(crate) tab_index: Option<isize>,
-    pub(crate) tab_group: bool,
+    pub(crate) hitbox_behavior: HitboxBehavior,
     pub(crate) tab_stop: bool,
+    pub(crate) tab_group: bool,
+    pub(crate) tab_index: Option<isize>,
 
     pub(crate) a11y_action_listeners:
         ThinVec<(accesskit::Action, crate::window::a11y::A11yActionListener)>,
@@ -3106,13 +3106,13 @@ impl Interactivity {
         if self.capture_pointer
             && let Some(global_id) = global_id.cloned()
         {
-            let hitbox = hitbox.clone();
+            let capture_hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _cx| {
-                if phase == DispatchPhase::Bubble
+                let left_press_inside = phase == DispatchPhase::Bubble
                     && event.button == MouseButton::Left
-                    && hitbox.is_hovered(window)
-                {
-                    window.capture_pointer_for_element(&global_id, hitbox.id);
+                    && capture_hitbox.is_hovered(window);
+                if left_press_inside {
+                    window.capture_pointer_for_element(&global_id, capture_hitbox.id);
                 }
             });
         }

@@ -1,9 +1,9 @@
 use crate::{
-    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, Corners, DefiniteLength,
-    DevicePixels, Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache,
-    InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, Length,
-    ObjectFit, Pixels, RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled,
-    Task, UntrustedImageLimits, Window, decode_image_bytes, decode_sniffed, decode_static_image,
+    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, DevicePixels,
+    Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels,
+    RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task,
+    UntrustedImageLimits, Window, decode_image_bytes, decode_sniffed, decode_static_image,
     decode_untrusted_image_bytes, px, sniff_image_format, unrecognized_image_format,
 };
 use anyhow::Result;
@@ -23,22 +23,6 @@ use vespertine_scheduler::Instant;
 use vespertine_util::ResultExt;
 
 use super::{Stateful, StatefulInteractiveElement};
-
-/// Paints `data` with its fitted rectangle `fitted` cropped to `visible` (ELM-003 R2/R3)
-/// through the fitted painter of RND-004.
-fn paint_fitted_image(
-    window: &mut Window,
-    visible: Bounds<Pixels>,
-    fitted: Bounds<Pixels>,
-    corner_radii: Corners<Pixels>,
-    data: Arc<RenderImage>,
-    frame_index: usize,
-    grayscale: bool,
-) {
-    window
-        .paint_image_fitted(visible, fitted, corner_radii, data, frame_index, grayscale)
-        .log_err();
-}
 
 /// The delay before showing the loading state.
 pub const LOADING_DELAY: Duration = Duration::from_millis(200);
@@ -294,14 +278,6 @@ impl Element for Img {
     type RequestLayoutState = ImgLayoutState;
     type PrepaintState = Option<Hitbox>;
 
-    fn id(&self) -> Option<ElementId> {
-        self.interactivity.element_id.clone()
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        self.interactivity.source_location()
-    }
-
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.interactivity.a11y_role()
     }
@@ -309,6 +285,14 @@ impl Element for Img {
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.interactivity.write_a11y_info(node);
         self.interactivity.write_alt_fallback(node);
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        self.interactivity.source_location()
+    }
+
+    fn id(&self) -> Option<ElementId> {
+        self.interactivity.element_id.clone()
     }
 
     fn request_layout(
@@ -538,16 +522,16 @@ impl Element for Img {
                     if visible.size.width <= Pixels::ZERO || visible.size.height <= Pixels::ZERO {
                         return;
                     }
-                    let corner_radii = style.corner_radii.to_pixels(window.rem_size());
-                    paint_fitted_image(
-                        window,
-                        visible,
-                        fitted,
-                        corner_radii,
-                        data,
-                        layout_state.frame_index,
-                        self.style.grayscale,
-                    );
+                    window
+                        .paint_image_fitted(
+                            visible,
+                            fitted,
+                            style.corner_radii.to_pixels(window.rem_size()),
+                            data,
+                            layout_state.frame_index,
+                            self.style.grayscale,
+                        )
+                        .log_err();
                 } else if let Some(replacement) = &mut layout_state.replacement {
                     replacement.paint(window, cx);
                 }
@@ -630,12 +614,23 @@ impl ImageSource {
     /// Remove this image source from the asset system
     pub fn remove_asset(&self, cx: &mut App) {
         match self {
+            ImageSource::Custom(_) | ImageSource::Render(_) => {}
+            ImageSource::Image(data) => cx.remove_asset::<AssetLogger<ImageDecoder>>(data),
             ImageSource::Resource(resource) => {
                 cx.remove_asset::<ImgResourceLoader>(resource);
             }
-            ImageSource::Custom(_) | ImageSource::Render(_) => {}
-            ImageSource::Image(data) => cx.remove_asset::<AssetLogger<ImageDecoder>>(data),
         }
+    }
+
+    /// Reads the decoded image cached for `source` (without starting a load), then drops the
+    /// cache entry.
+    fn evict_cached<A, E>(source: &A::Source, cx: &mut App) -> Option<Arc<RenderImage>>
+    where
+        A: Asset<Output = Result<Arc<RenderImage>, E>>,
+    {
+        let cached = cx.peek_asset::<A>(source).and_then(Result::ok);
+        cx.remove_asset::<A>(source);
+        cached
     }
 
     /// Evict this image: remove its cached asset (as [`Self::remove_asset`] does) and
@@ -648,22 +643,14 @@ impl ImageSource {
     /// only release tiles; custom sources are caller-owned and are left untouched.
     pub fn evict(&self, window: Option<&mut Window>, cx: &mut App) {
         let image = match self {
-            ImageSource::Resource(resource) => {
-                let image = cx
-                    .peek_asset::<ImgResourceLoader>(resource)
-                    .and_then(Result::ok);
-                cx.remove_asset::<ImgResourceLoader>(resource);
-                image
-            }
-            ImageSource::Image(data) => {
-                let image = cx
-                    .peek_asset::<AssetLogger<ImageDecoder>>(data)
-                    .and_then(Result::ok);
-                cx.remove_asset::<AssetLogger<ImageDecoder>>(data);
-                image
-            }
-            ImageSource::Render(data) => Some(data.clone()),
             ImageSource::Custom(_) => None,
+            ImageSource::Render(data) => Some(data.clone()),
+            ImageSource::Image(data) => {
+                Self::evict_cached::<AssetLogger<ImageDecoder>, _>(data, cx)
+            }
+            ImageSource::Resource(resource) => {
+                Self::evict_cached::<ImgResourceLoader, _>(resource, cx)
+            }
         };
         if let Some(image) = image {
             cx.drop_image(image, window);
@@ -1131,7 +1118,7 @@ mod tests {
     struct PaintedSprite {
         bounds: Bounds<crate::ScaledPixels>,
         tile: crate::AtlasTile,
-        corner_radii: Corners<crate::ScaledPixels>,
+        corner_radii: crate::Corners<crate::ScaledPixels>,
         scale_factor: f32,
     }
 

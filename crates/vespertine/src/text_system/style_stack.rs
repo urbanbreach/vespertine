@@ -16,13 +16,13 @@ pub(crate) struct TextStyleStack {
 
 impl TextStyleStack {
     pub(crate) fn push(&mut self, refinement: TextStyleRefinement) {
-        self.refinements.push(refinement);
         self.resolved.get_mut().push(None);
+        self.refinements.push(refinement);
     }
 
     pub(crate) fn pop(&mut self) {
-        self.refinements.pop();
         self.resolved.get_mut().pop();
+        self.refinements.pop();
     }
 
     pub(crate) fn clear(&mut self) {
@@ -64,8 +64,8 @@ impl TextStyleStack {
     pub(crate) fn text_align(&self) -> TextAlign {
         self.refinements
             .iter()
-            .rev()
-            .find_map(|refinement| refinement.text_align)
+            .filter_map(|refinement| refinement.text_align)
+            .next_back()
             .unwrap_or_default()
     }
 }

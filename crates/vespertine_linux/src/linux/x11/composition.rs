@@ -163,16 +163,17 @@ pub(crate) fn create_native_child<C: Connection>(
     parent: xproto::Window,
 ) -> Result<xproto::Window> {
     let window = connection.generate_id()?;
+    let (x, y, width, height, border_width) = (0, 0, 1, 1, 0);
     connection
         .create_window(
             screen.root_depth,
             window,
             parent,
-            0,
-            0,
-            1,
-            1,
-            0,
+            x,
+            y,
+            width,
+            height,
+            border_width,
             xproto::WindowClass::INPUT_OUTPUT,
             screen.root_visual,
             // A depth or visual different from the parent's needs its own border pixel and
@@ -462,17 +463,16 @@ pub(crate) fn create_overlay_window<C: Connection>(
             ..WmHints::new()
         };
         hints.set(connection, window)?;
+        let pointer_events = xinput::XIEventMask::LEAVE
+            | xinput::XIEventMask::ENTER
+            | xinput::XIEventMask::BUTTON_RELEASE
+            | xinput::XIEventMask::BUTTON_PRESS
+            | xinput::XIEventMask::MOTION;
         connection.xinput_xi_select_events(
             window,
             &[xinput::EventMask {
                 deviceid: XINPUT_ALL_DEVICE_GROUPS,
-                mask: vec![
-                    xinput::XIEventMask::MOTION
-                        | xinput::XIEventMask::BUTTON_PRESS
-                        | xinput::XIEventMask::BUTTON_RELEASE
-                        | xinput::XIEventMask::ENTER
-                        | xinput::XIEventMask::LEAVE,
-                ],
+                mask: vec![pointer_events],
             }],
         )?;
         // Empty until set from content: events outside hitboxes pass through.

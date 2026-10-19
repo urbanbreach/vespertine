@@ -311,8 +311,8 @@ mod tests {
             // An ancestor with hidden overflow clips a surface that is larger than it.
             draw(window, || {
                 div()
-                    .relative()
                     .size_full()
+                    .relative()
                     .child(
                         div()
                             .absolute()

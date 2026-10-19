@@ -324,12 +324,12 @@ impl TestRenderer {
         env: &Env,
         x: f64,
         y: f64,
-        delta_x: f64,
-        delta_y: f64,
+        dx: f64,
+        dy: f64,
         modifiers: Option<String>,
     ) -> Result<()> {
         self.run(env, |host| {
-            host.scroll_wheel(x, y, delta_x, delta_y, modifiers.as_deref().unwrap_or(""))
+            host.scroll_wheel(x, y, dx, dy, modifiers.as_deref().unwrap_or(""))
         })
     }
 

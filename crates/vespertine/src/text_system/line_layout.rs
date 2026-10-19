@@ -508,16 +508,25 @@ impl LineLayoutIndex {
     /// Moves an index recorded inside a range that began at `from` to the
     /// equivalent position inside a copy of that range that began at `to`.
     pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
+        let rebase = |index: usize, from: usize, to: usize| index - from + to;
         Self {
             font_generation: to.font_generation,
-            lines_index: self.lines_index - from.lines_index + to.lines_index,
-            wrapped_lines_index: self.wrapped_lines_index - from.wrapped_lines_index
-                + to.wrapped_lines_index,
-            lines_by_hash_index: self.lines_by_hash_index - from.lines_by_hash_index
-                + to.lines_by_hash_index,
-            wrapped_lines_by_hash_index: self.wrapped_lines_by_hash_index
-                - from.wrapped_lines_by_hash_index
-                + to.wrapped_lines_by_hash_index,
+            lines_index: rebase(self.lines_index, from.lines_index, to.lines_index),
+            wrapped_lines_index: rebase(
+                self.wrapped_lines_index,
+                from.wrapped_lines_index,
+                to.wrapped_lines_index,
+            ),
+            lines_by_hash_index: rebase(
+                self.lines_by_hash_index,
+                from.lines_by_hash_index,
+                to.lines_by_hash_index,
+            ),
+            wrapped_lines_by_hash_index: rebase(
+                self.wrapped_lines_by_hash_index,
+                from.wrapped_lines_by_hash_index,
+                to.wrapped_lines_by_hash_index,
+            ),
         }
     }
 

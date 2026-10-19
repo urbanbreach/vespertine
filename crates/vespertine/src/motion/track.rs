@@ -79,18 +79,18 @@ pub struct MotionProps {
     pub width: Option<f64>,
     /// Height in pixels.
     pub height: Option<f64>,
-    /// Top inset in pixels.
-    pub top: Option<f64>,
-    /// Right inset in pixels.
-    pub right: Option<f64>,
-    /// Bottom inset in pixels.
-    pub bottom: Option<f64>,
-    /// Left inset in pixels.
-    pub left: Option<f64>,
     /// Border radius in pixels.
     pub border_radius: Option<f64>,
     /// Opacity from 0 to 1.
     pub opacity: Option<f64>,
+    /// Left inset in pixels.
+    pub left: Option<f64>,
+    /// Right inset in pixels.
+    pub right: Option<f64>,
+    /// Top inset in pixels.
+    pub top: Option<f64>,
+    /// Bottom inset in pixels.
+    pub bottom: Option<f64>,
 }
 
 impl PartialEq for MotionProps {

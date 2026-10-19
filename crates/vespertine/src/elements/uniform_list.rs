@@ -325,20 +325,20 @@ impl Element for UniformList {
     type RequestLayoutState = UniformListFrameState;
     type PrepaintState = Option<Hitbox>;
 
-    fn id(&self) -> Option<ElementId> {
-        self.interactivity.element_id.clone()
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        self.interactivity.write_a11y_info(node);
     }
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.interactivity.a11y_role()
     }
 
-    fn write_a11y_info(&self, node: &mut accesskit::Node) {
-        self.interactivity.write_a11y_info(node);
+    fn id(&self) -> Option<ElementId> {
+        self.interactivity.element_id.clone()
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
     }
 
     fn request_layout(

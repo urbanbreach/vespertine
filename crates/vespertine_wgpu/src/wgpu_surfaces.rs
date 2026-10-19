@@ -50,12 +50,36 @@ struct SurfaceParams {
 
 const PARAMS_SIZE: usize = std::mem::size_of::<SurfaceParams>();
 
+/// A bind group layout entry visible to the fragment stage only.
+pub(crate) fn fragment_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty,
+        count: None,
+    }
+}
+
+/// A filterable float 2D texture binding.
+pub(crate) fn filterable_texture_2d() -> wgpu::BindingType {
+    wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    }
+}
+
 /// The bind group layout of a surface draw: the dynamically offset parameter block, the
 /// filterable 2D texture and the sampler.
 pub(crate) fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("surfaces_layout"),
         entries: &[
+            fragment_entry(1, filterable_texture_2d()),
+            fragment_entry(
+                2,
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            ),
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -64,22 +88,6 @@ pub(crate) fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroup
                     has_dynamic_offset: true,
                     min_binding_size: NonZeroU64::new(PARAMS_SIZE as u64),
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
         ],
@@ -293,16 +301,16 @@ fn create_bind_group(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: params,
                     offset: 0,
                     size: NonZeroU64::new(PARAMS_SIZE as u64),
                 }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,

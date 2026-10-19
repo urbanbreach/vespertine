@@ -106,8 +106,8 @@ pub fn perf_rnd_002_content(frame: u32, curved: bool) -> AnyElement {
                 .child(
                     div()
                         .absolute()
-                        .left(left)
                         .top(top)
+                        .left(left)
                         .w(px(70.0))
                         .h(px(14.0))
                         .bg(rgb(0x3e8ede)),

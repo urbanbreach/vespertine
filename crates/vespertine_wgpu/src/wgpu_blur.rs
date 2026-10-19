@@ -6,6 +6,7 @@ use crate::blur::{
     SetShape, TABLE_SLOTS, new_set_shape, pass_scissors, set_is_reusable, snapshot_envelope,
     snapshot_origin,
 };
+use crate::wgpu_surfaces::{filterable_texture_2d, fragment_entry};
 use bytemuck::{Pod, Zeroable};
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -151,6 +152,11 @@ impl BlurRenderer {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blur_layout"),
             entries: &[
+                fragment_entry(1, filterable_texture_2d()),
+                fragment_entry(
+                    2,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -161,36 +167,11 @@ impl BlurRenderer {
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
             ],
         });
         let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("blur_blit_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[fragment_entry(0, filterable_texture_2d())],
         });
 
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -451,16 +432,16 @@ impl BlurRenderer {
     ) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage,
+            mip_level_count: 1,
+            sample_count: 1,
             size: wgpu::Extent3d {
                 width: width.max(1),
                 height: height.max(1),
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage,
             view_formats: &[],
         })
     }

@@ -686,10 +686,10 @@ impl Element for RollingLabel {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _state: &mut Self::RequestLayoutState,
+        _layout: &mut Self::RequestLayoutState,
         _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
@@ -697,7 +697,7 @@ impl Element for RollingLabel {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         state: &mut Self::RequestLayoutState,
@@ -706,16 +706,10 @@ impl Element for RollingLabel {
         cx: &mut App,
     ) {
         let Some((_, _, frame)) = &state.roll else {
+            let (origin, line_height) = (bounds.origin, state.line_height);
             state
                 .line
-                .paint(
-                    bounds.origin,
-                    state.line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                )
+                .paint(origin, line_height, TextAlign::Left, None, window, cx)
                 .log_err();
             return;
         };

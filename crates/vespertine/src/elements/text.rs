@@ -876,8 +876,8 @@ impl LayoutMeasure for TextMeasure {
 
     fn measure(
         &mut self,
-        known_dimensions: Size<Option<Pixels>>,
-        available_space: Size<AvailableSpace>,
+        known: Size<Option<Pixels>>,
+        available: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
@@ -886,7 +886,7 @@ impl LayoutMeasure for TextMeasure {
         let font_size = self.font_size;
         let line_height = self.line_height;
         let wrap_width = if text_style.white_space == WhiteSpace::Normal {
-            known_dimensions.width.or(match available_space.width {
+            known.width.or(match available.width {
                 crate::AvailableSpace::Definite(x) => Some(x),
                 _ => None,
             })
@@ -896,7 +896,7 @@ impl LayoutMeasure for TextMeasure {
 
         let (truncate_width, truncation_affix, truncate_from) =
             if let Some(text_overflow) = text_style.text_overflow.clone() {
-                let width = known_dimensions.width.or(match available_space.width {
+                let width = known.width.or(match available.width {
                     crate::AvailableSpace::Definite(x) => match text_style.line_clamp {
                         Some(max_lines) => Some(x * max_lines),
                         None => Some(x),
@@ -1064,8 +1064,8 @@ fn rewrite_decorations(lines: &mut [WrappedLine], runs: &[TextRun]) {
 impl TextLayout {
     fn layout(
         &self,
-        text: SharedString,
-        runs: Option<Vec<TextRun>>,
+        content: SharedString,
+        explicit_runs: Option<Vec<TextRun>>,
         window: &mut Window,
         cx: &mut App,
     ) -> LayoutId {
@@ -1076,18 +1076,15 @@ impl TextLayout {
                 .line_height
                 .to_pixels(font_size.into(), window.rem_size()),
         );
-        window.request_measured_layout_with(
-            Default::default(),
-            TextMeasure {
-                layout: self.clone(),
-                text,
-                style,
-                runs,
-                font_size,
-                line_height,
-            },
-            cx,
-        )
+        let measure = TextMeasure {
+            layout: self.clone(),
+            text: content,
+            runs: explicit_runs,
+            style,
+            font_size,
+            line_height,
+        };
+        window.request_measured_layout_with(Default::default(), measure, cx)
     }
 
     /// The measured size when the kept measurement answers a probe at `wrap_width` without

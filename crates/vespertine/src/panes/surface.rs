@@ -155,17 +155,17 @@ impl Element for MovingSurface {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
-    fn id(&self) -> Option<ElementId> {
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
         None
     }
 
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+    fn id(&self) -> Option<ElementId> {
         None
     }
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
