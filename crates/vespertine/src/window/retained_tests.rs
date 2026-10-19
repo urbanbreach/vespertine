@@ -1208,7 +1208,7 @@ fn replaying_a_view_performs_its_recorded_effects_again_in_order(cx: &mut TestAp
     // Nothing changed: every view is replayed and the effects run again.
     reset(cx, window);
     draw(cx, window);
-    assert_eq!(stats(cx, window).views_rendered, 0);
+    assert_eq!(stats(cx, window).views_built, 0);
     assert_eq!(*pre.borrow(), ["a", "b", "c"]);
     assert_eq!(*paint.borrow(), ["a", "b", "c"]);
 
@@ -1219,8 +1219,8 @@ fn replaying_a_view_performs_its_recorded_effects_again_in_order(cx: &mut TestAp
     b.update(cx, |_, cx| cx.notify());
     draw(cx, window);
     let s = stats(cx, window);
-    assert_eq!(s.splice_successes, 1, "{s:?}");
-    assert!(s.views_rendered <= 2, "{s:?}");
+    assert_eq!(s.views_spliced, 1, "{s:?}");
+    assert!(s.views_built <= 2, "{s:?}");
     assert_eq!(*pre.borrow(), ["a", "b", "c"]);
     assert_eq!(*paint.borrow(), ["a", "b", "c"]);
 }
@@ -1427,14 +1427,14 @@ fn a_whole_view_rebuild_requirement_forbids_splicing_around_nested_views(cx: &mu
                 "rebuilt with the leaf: {s:?}"
             );
             // The enclosing view is the one replayed around the rebuilt host.
-            assert_eq!(s.views_rendered, 2, "{s:?}");
+            assert_eq!(s.views_built, 2, "{s:?}");
         } else {
             assert_eq!(
                 host_renders.get(),
                 host_before,
                 "replayed around the leaf: {s:?}"
             );
-            assert_eq!(s.splice_successes, 1, "{s:?}");
+            assert_eq!(s.views_spliced, 1, "{s:?}");
         }
     }
 }

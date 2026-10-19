@@ -598,24 +598,24 @@ impl LineLayoutCache {
             ) {
                 NumericOutcome::Layout(layout) => layout,
                 NumericOutcome::Platform => match caches.append_layout(
-                self.platform_text_system.as_ref(),
-                font_generation,
-                text,
-                font_size,
-                runs,
-            ) {
-                Some(layout) => layout,
-                None => {
-                    let layout = caches.platform_shape(
-                        self.platform_text_system.as_ref(),
-                        text,
-                        font_size,
-                        runs,
-                    );
-                    caches.append_track(font_generation, text, font_size, runs, &layout);
-                    layout
-                }
-            },
+                    self.platform_text_system.as_ref(),
+                    font_generation,
+                    text,
+                    font_size,
+                    runs,
+                ) {
+                    Some(layout) => layout,
+                    None => {
+                        let layout = caches.platform_shape(
+                            self.platform_text_system.as_ref(),
+                            text,
+                            font_size,
+                            runs,
+                        );
+                        caches.append_track(font_generation, text, font_size, runs, &layout);
+                        layout
+                    }
+                },
             }
         });
         caches.recent_insert(font_generation, text, font_size, runs, &layout);

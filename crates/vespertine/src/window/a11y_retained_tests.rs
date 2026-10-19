@@ -144,14 +144,12 @@ fn draw(cx: &mut TestAppContext, window: AnyWindowHandle) {
 }
 
 fn views_rendered(cx: &mut TestAppContext, window: AnyWindowHandle) -> u64 {
-    cx.update_window(window, |_, window, _| {
-        window.retention_stats().views_rendered
-    })
-    .unwrap()
+    cx.update_window(window, |_, window, _| window.frame_stats().views_built)
+        .unwrap()
 }
 
 fn reset(cx: &mut TestAppContext, window: AnyWindowHandle) {
-    cx.update_window(window, |_, window, _| window.reset_retention_stats())
+    cx.update_window(window, |_, window, _| window.reset_frame_stats())
         .unwrap();
 }
 /// The tree update the platform received last, in comparable form: node ids are replaced by
@@ -272,9 +270,7 @@ fn retained_and_full_trees_agree_on_every_frame(cx: &mut TestAppContext) {
         draw(cx, retained);
         draw(cx, full);
         replayed += cx
-            .update_window(retained, |_, window, _| {
-                window.retention_stats().views_reused
-            })
+            .update_window(retained, |_, window, _| window.frame_stats().views_reused)
             .unwrap();
         assert_eq!(
             tree(cx, retained),

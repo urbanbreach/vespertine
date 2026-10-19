@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use support::{Build, Harness, at};
 use vespertine::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement, Render, RetentionStats,
-    SharedString, Styled, Window, div, px, rgb,
+    AppContext as _, Context, Entity, FrameStats, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, div, px, rgb,
 };
 use vespertine_richtext::registry::{PaintedHighlight, PaintedText};
 use vespertine_richtext::search::{HighlightDeclaration, HighlightSpec, default_hex_color};
@@ -174,11 +174,11 @@ impl Scenario {
         });
     }
 
-    fn stats(&mut self) -> RetentionStats {
+    fn stats(&mut self) -> FrameStats {
         self.harness
             .cx
             .update_window(self.harness.window.into(), |_, window, _| {
-                window.retention_stats()
+                window.frame_stats()
             })
             .unwrap()
     }
@@ -195,7 +195,7 @@ impl Scenario {
         self.harness
             .cx
             .update_window(self.harness.window.into(), |_, window, _| {
-                window.reset_retention_stats()
+                window.reset_frame_stats()
             })
             .unwrap();
     }
@@ -213,7 +213,7 @@ impl Scenario {
 }
 
 /// The frames of one history; returns what the service showed after each.
-fn history(retained: bool, query: Option<&'static str>) -> (Vec<Snapshot>, Vec<RetentionStats>) {
+fn history(retained: bool, query: Option<&'static str>) -> (Vec<Snapshot>, Vec<FrameStats>) {
     let mut scenario = scenario(retained, query);
     let mut snapshots = vec![scenario.snapshot()];
     let mut stats = Vec::new();
@@ -251,11 +251,11 @@ fn replayed_views_stay_registered_next_to_a_rebuilt_sibling() {
     scenario.frame();
     let stats = scenario.stats();
     assert_eq!(
-        stats.splice_successes, 1,
+        stats.views_spliced, 1,
         "the document is replayed around it: {stats:?}"
     );
     assert!(
-        stats.views_rendered <= 2,
+        stats.views_built <= 2,
         "the other lines are not built: {stats:?}"
     );
 
@@ -293,7 +293,7 @@ fn a_selection_and_a_link_survive_frames_that_replay_the_document() {
     scenario.frame();
     scenario.frame();
     assert_eq!(
-        scenario.stats().views_rendered,
+        scenario.stats().views_built,
         0,
         "idle frames replay every view"
     );
@@ -318,9 +318,9 @@ fn retained_frames_leave_the_service_as_frames_that_build_every_view_do() {
         assert_eq!(retained, built, "query {query:?}");
         // Idle frames replay every view.
         for idle in [0, 1, 4, 7, 8] {
-            assert_eq!(stats[idle].views_rendered, 0, "query {query:?}: {stats:?}");
+            assert_eq!(stats[idle].views_built, 0, "query {query:?}: {stats:?}");
         }
-        notified.push(stats[2].views_rendered);
+        notified.push(stats[2].views_built);
     }
     // A highlight host numbers washes over everything it covers, so a notified line rebuilds the
     // document and every line with it instead of being replayed around.
