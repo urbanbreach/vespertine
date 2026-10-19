@@ -23,6 +23,7 @@ members = [
     "crates/vespertine_pp_rs",
     "crates/vespertine_public_image_loader",
     "crates/vespertine_refineable",
+    "crates/vespertine_residency",
     "crates/vespertine_richtext",
     "crates/vespertine_reqwest_client",
     "crates/vespertine_scenes",
@@ -614,6 +615,9 @@ path = "crates/vespertine_refineable"
 
 [workspace.dependencies.vespertine_reqwest_client]
 path = "crates/vespertine_reqwest_client"
+
+[workspace.dependencies.vespertine_residency]
+path = "crates/vespertine_residency"
 
 [workspace.dependencies.vespertine_richtext]
 path = "crates/vespertine_richtext"

@@ -6451,6 +6451,22 @@ impl Window {
             })
     }
 
+    /// Returns how many frames of an image are present in the sprite atlas.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn image_atlas_frame_count(&self, data: &RenderImage) -> usize {
+        (0..data.frame_count())
+            .filter(|&frame_index| {
+                self.sprite_atlas.contains(
+                    &RenderImageParams {
+                        image_id: data.id,
+                        frame_index,
+                    }
+                    .into(),
+                )
+            })
+            .count()
+    }
+
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
     /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.

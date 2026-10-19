@@ -1040,10 +1040,14 @@ mod appended {
     }
 
     #[test]
-    fn lines_with_several_runs_are_shaped_in_full() {
+    fn lines_with_several_font_runs_are_shaped_in_full() {
         let f = fixture();
         let text = stream(3);
         let split = 10;
+        let bold = Font {
+            weight: FontWeight::BOLD,
+            ..f.font.clone()
+        };
         let runs = [
             TextRun {
                 len: split,
@@ -1052,8 +1056,7 @@ mod appended {
             },
             TextRun {
                 len: text.len() - split,
-                font: f.font.clone(),
-                color: crate::red(),
+                font: bold,
                 ..Default::default()
             },
         ];
@@ -1068,6 +1071,56 @@ mod appended {
         ];
         f.window.layout_line(&longer, px(16.), &longer_runs, None);
         assert_eq!(f.system.shape_stats().appended_lines, 0);
+    }
+
+    /// PRF-017 R3: runs that differ only in paint-only attributes share one font run, so
+    /// recoloring neither reshapes nor changes the shaped layout, and such lines are assembled
+    /// like plain text.
+    #[test]
+    fn paint_only_runs_do_not_split_the_font_run() {
+        let f = fixture();
+        let text = stream(3);
+        let split = 10;
+        let colored = |len: usize| {
+            [
+                TextRun {
+                    len: split,
+                    font: f.font.clone(),
+                    ..Default::default()
+                },
+                TextRun {
+                    len: len - split,
+                    font: f.font.clone(),
+                    color: crate::red(),
+                    ..Default::default()
+                },
+            ]
+        };
+        f.window
+            .layout_line(&text, px(16.), &colored(text.len()), None);
+        let shapes = f.system.shape_stats().platform_line_shapes;
+        // Different colors, the same font run: served from the cache without any shaping.
+        f.window.layout_line(
+            &text,
+            px(16.),
+            &[TextRun {
+                len: text.len(),
+                font: f.font.clone(),
+                color: crate::blue(),
+                ..Default::default()
+            }],
+            None,
+        );
+        assert_eq!(f.system.shape_stats().platform_line_shapes, shapes);
+
+        let longer = format!("{text} and more");
+        let layout = f
+            .window
+            .layout_line(&longer, px(16.), &colored(longer.len()), None);
+        assert_eq!(f.system.shape_stats().appended_lines, 1);
+        let platform = f.platform(&longer);
+        let tolerance = 0.001f32.max(platform.width.0 * 8.0 * f32::EPSILON);
+        assert!(layouts_agree_within(&layout, &platform, tolerance));
     }
 
     #[test]
