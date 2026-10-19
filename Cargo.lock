@@ -7410,6 +7410,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vespertine_richtext"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "parking_lot",
+ "unicode-segmentation",
+ "vespertine",
+ "vespertine_platform",
+ "vespertine_wgpu",
+]
+
+[[package]]
 name = "vespertine_scenes"
 version = "0.1.0"
 dependencies = [

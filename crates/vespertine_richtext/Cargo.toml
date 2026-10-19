@@ -1,0 +1,25 @@
+[package]
+name = "vespertine_richtext"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "Apache-2.0"
+description = "Shaped rich text with source-aware geometry, syntax coloration, document selection and search washes"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/vespertine_richtext.rs"
+doctest = false
+
+[dependencies]
+vespertine.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+vespertine = { workspace = true, features = ["test-support"] }
+vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
+vespertine_wgpu = { workspace = true, features = ["test-support"] }
