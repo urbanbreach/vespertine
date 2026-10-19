@@ -39,3 +39,5 @@ vespertine_wgpu = { workspace = true, features = ["test-support"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+# The frame-overlay tests need the profiler build of the host under plain `cargo test`.
+vespertine_test_host = { path = ".", features = ["profiler"] }

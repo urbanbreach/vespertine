@@ -1,7 +1,7 @@
 //! Frame-overlay controls (profiler builds only).
 
 use crate::TestHost;
-use vespertine::DebugFrameOverlayMode;
+use vespertine::{DebugFrameOverlayMode, DebugFrameOverlayStats};
 
 impl TestHost {
     /// The current frame-overlay mode.
@@ -9,6 +9,16 @@ impl TestHost {
         self.cx
             .update_window(self.window, |_, window, _| {
                 window.debug_frame_overlay_mode()
+            })
+            .expect("the host window is open for the host's lifetime")
+    }
+
+    /// The overlay's frame-time statistics: the same single history the on-screen overlay
+    /// shows (DEV-004). Reading does not record a frame or change any state.
+    pub fn frame_overlay_stats(&mut self) -> DebugFrameOverlayStats {
+        self.cx
+            .update_window(self.window, |_, window, _| {
+                window.debug_frame_overlay_stats()
             })
             .expect("the host window is open for the host's lifetime")
     }
@@ -33,7 +43,9 @@ impl TestHost {
         self.invalidate();
     }
 
-    /// Resets the overlay: the mode returns to hidden and the collected statistics are cleared.
+    /// Resets the overlay: the mode returns to hidden and the collected statistics are cleared
+    /// (the total frame count is kept). The window repaints without the overlay, and that one
+    /// repaint is the first sample of the cleared history.
     pub fn reset_frame_overlay(&mut self) {
         self.cx
             .update_window(self.window, |_, window, _| {

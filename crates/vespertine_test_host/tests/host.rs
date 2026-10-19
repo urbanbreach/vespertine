@@ -1078,3 +1078,46 @@ fn dev_006_painted_washes_are_a_per_frame_log_cleared_once_per_frame() {
     assert_eq!(host.painted_washes().len(), 1);
     assert_eq!(host.painted_text(), ["generated chrome"]);
 }
+
+#[test]
+fn dev_006_frame_overlay_mode_and_statistics_are_readable_and_resettable() {
+    require_backend!();
+    use vespertine::DebugFrameOverlayMode;
+    let (mut host, _) = fixture_host();
+    host.flush();
+    assert_eq!(host.frame_overlay_mode(), DebugFrameOverlayMode::Hidden);
+    host.set_frame_overlay_mode(DebugFrameOverlayMode::Minimal);
+    assert_eq!(host.frame_overlay_mode(), DebugFrameOverlayMode::Minimal);
+    for _ in 0..3 {
+        host.invalidate();
+        host.flush();
+    }
+    let stats = host.frame_overlay_stats();
+    assert!(stats.frames >= 1 && stats.samples >= 1, "{stats:?}");
+    assert!(stats.current_ms.is_some() && stats.max_ms >= stats.p99_ms);
+    assert_eq!(
+        host.frame_overlay_stats(),
+        stats,
+        "polling the statistics changes nothing"
+    );
+
+    host.cycle_frame_overlay_mode();
+    assert_eq!(host.frame_overlay_mode(), DebugFrameOverlayMode::Full);
+    host.cycle_frame_overlay_mode();
+    assert_eq!(host.frame_overlay_mode(), DebugFrameOverlayMode::Hidden);
+
+    host.set_frame_overlay_mode(DebugFrameOverlayMode::Full);
+    host.flush();
+    let before_reset = host.frame_overlay_stats();
+    host.reset_frame_overlay();
+    assert_eq!(host.frame_overlay_mode(), DebugFrameOverlayMode::Hidden);
+    let after = host.frame_overlay_stats();
+    assert!(
+        after.samples <= 2 && after.samples < before_reset.samples,
+        "a reset clears the history; only the repaints after it are sampled: {after:?} {before_reset:?}"
+    );
+    assert!(
+        after.frames >= before_reset.frames,
+        "a reset keeps the total frame count"
+    );
+}
