@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Tests scripts/land's merge train in a scratch repository with a fast fake gate (no cargo):
+#   1. three compatible branches land in one train (one gate run);
+#   2. a conflicting branch is skipped and reserved; a later branch waits for the reservation and the
+#      reserved branch goes first when it is re-landed;
+#   3. a branch that fails the gates is isolated by bisection while the others land.
+# Usage: scripts/test-land      (scratch files live under target/land-test-<pid>, removed afterwards)
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+LAND="$ROOT/scripts/land"
+T="$ROOT/target/land-test-$$"
+S="$T/main"
+trap 'rm -rf "$T"' EXIT
+mkdir -p "$T"
+
+export VSP_LAND_MAIN="$S" VSP_LAND_WORKTREE="$T/_land" VSP_LAND_POLL=1
+export VSP_LAND_GATES='sleep 1; ! grep -rq PLANTED_FAILURE --exclude-dir=.git .'
+export RUSTC_WRAPPER= GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+check() { # description, command...
+    local what=$1
+    shift
+    "$@" || fail "$what"
+    echo "ok: $what"
+}
+
+git init -q -b main "$S"
+git -C "$S" config user.name t
+git -C "$S" config user.email t@t
+printf 'line one\nline two\n' >"$S/shared.txt"
+git -C "$S" add -A
+git -C "$S" commit -qm base
+
+branch() { # name, file, content: creates worktree + branch work/<name> with one commit
+    git -C "$S" worktree add -q -b "work/$1" "$T/wt/$1" main
+    printf '%s\n' "$3" >"$T/wt/$1/$2"
+    git -C "$T/wt/$1" add -A
+    git -C "$T/wt/$1" commit -qm "add $1"
+}
+
+start() { # name: runs land in the background, logging to $T/<name>.log; pid in PID_<name>
+    (cd "$T/wt/$1" && "$LAND" >"$T/$1.log" 2>&1) &
+    eval "PID_$1=$!"
+}
+finish() { # name: waits for it; the exit status is left in RC (not usable in $(...): wait needs the shell)
+    local pid
+    eval "pid=\$PID_$1"
+    RC=0
+    wait "$pid" || RC=$?
+}
+hold_lock() { # seconds: holds the landing lock so that entries pile up in the queue
+    flock -x "$S/.git/vespertine-land.lock" sleep "$1" &
+    sleep 0.3
+}
+gate_runs() { find "$S/.git/land-logs" -name '*-[0-9]*.log' ! -name '*-ff.log' | wc -l; }
+subjects() { git -C "$S" log --format=%s main | head -n "$1" | tac | tr '\n' ' '; }
+
+echo "== 1. three compatible branches in one train"
+branch a1 a1.txt a1
+branch b1 b1.txt b1
+branch c1 c1.txt c1
+hold_lock 3
+start a1; sleep 0.3; start b1; sleep 0.3; start c1
+finish a1; check "a1 exits 0" test "$RC" = 0
+finish b1; check "b1 exits 0" test "$RC" = 0
+finish c1; check "c1 exits 0" test "$RC" = 0
+check "main has the three commits in queue order" test "$(subjects 3)" = "add a1 add b1 add c1 "
+check "one gate run for all three" test "$(gate_runs)" = 1
+check "the branches are identical to main after landing" test "$(git -C "$T/wt/c1" rev-parse HEAD)" = "$(git -C "$S" rev-parse main)"
+check "the queue is empty" test -z "$(find "$S/.git/land-queue" -type f 2>/dev/null)"
+
+echo "== 2. conflict skipped, reservation honoured"
+rm -rf "$S/.git/land-logs"
+branch x1 shared.txt 'x line'
+branch y1 shared.txt 'y line'
+branch a2 a2.txt a2
+hold_lock 3
+start x1; sleep 0.3; start a2; sleep 0.3; start y1
+finish x1; check "x1 exits 0" test "$RC" = 0
+finish a2; check "a2 exits 0" test "$RC" = 0
+finish y1; check "y1 conflicts (exit 1)" test "$RC" = 1
+check "y1 log says conflict and reservation" grep -q "holds a 20-minute reservation" "$T/y1.log"
+check "y1 is reserved" grep -q '^work/y1 ' "$S/.git/vespertine-land.reserved"
+check "one gate run for x1 and a2" test "$(gate_runs)" = 1
+branch z1 z1.txt z1
+start z1
+sleep 4
+check "z1 waits for the reservation" grep -q "waiting for the reservation of work/y1" "$T/z1.log"
+check "z1 is not landed yet" test "$(git -C "$S" log --format=%s main | grep -c 'add z1')" = 0
+git -C "$T/wt/y1" reset -q --hard main
+printf 'y line\n' >"$T/wt/y1/y1.txt"
+git -C "$T/wt/y1" add -A
+git -C "$T/wt/y1" commit -qm "add y1 again"
+start y1
+finish y1; check "y1 exits 0 after resolving" test "$RC" = 0
+finish z1; check "z1 exits 0" test "$RC" = 0
+check "the reserved branch landed before z1" test "$(subjects 2)" = "add y1 again add z1 "
+check "the reservation is cleared" test ! -s "$S/.git/vespertine-land.reserved"
+
+echo "== 3. a failing branch is isolated by bisection"
+rm -rf "$S/.git/land-logs"
+branch p1 p1.txt p1
+branch p2 p2.txt p2
+branch f1 f1.txt PLANTED_FAILURE
+branch p3 p3.txt p3
+hold_lock 3
+start p1; sleep 0.3; start p2; sleep 0.3; start f1; sleep 0.3; start p3
+finish p1; check "p1 exits 0" test "$RC" = 0
+finish p2; check "p2 exits 0" test "$RC" = 0
+finish f1; check "f1 fails (exit 1)" test "$RC" = 1
+finish p3; check "p3 exits 0" test "$RC" = 0
+check "f1 never landed" test ! -e "$S/f1.txt"
+check "main has p1 p2 p3" test "$(subjects 3)" = "add p1 add p2 add p3 "
+check "f1's log path is reported" grep -q "failed the landing gates; log: " "$T/f1.log"
+check "bisection used four gate runs" test "$(gate_runs)" = 4
+check "main passes the gate" bash -c "cd '$S' && ! grep -rq PLANTED_FAILURE --exclude-dir=.git ."
+echo "all land train tests passed"
