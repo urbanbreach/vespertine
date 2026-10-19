@@ -3996,15 +3996,18 @@ pub(crate) fn clear_active_tooltip(
     }
 }
 
-pub(crate) fn clear_active_tooltip_if_not_hoverable(
+/// Hides a shown tooltip because of a press or wheel scroll that is not over the tooltip itself.
+/// Callers check that the pointer is not over the tooltip; a hoverable tooltip is hidden like any
+/// other (CMP-004 R4: only a press on hoverable content keeps it).
+pub(crate) fn clear_active_tooltip_away_from_tooltip(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     window: &mut Window,
 ) {
     let should_clear = match active_tooltip.borrow().as_ref() {
         None => false,
         Some(ActiveTooltip::WaitingForShow { .. }) => false,
-        Some(ActiveTooltip::Visible { is_hoverable, .. }) => !is_hoverable,
-        Some(ActiveTooltip::WaitingForHide { .. }) => false,
+        Some(ActiveTooltip::Visible { .. }) => true,
+        Some(ActiveTooltip::WaitingForHide { .. }) => true,
     };
     if should_clear {
         active_tooltip.borrow_mut().take();
@@ -4063,7 +4066,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
         let active_tooltip = active_tooltip.clone();
         move |_: &MouseDownEvent, _phase, window: &mut Window, _cx| {
             if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
-                clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                clear_active_tooltip_away_from_tooltip(&active_tooltip, window);
             }
         }
     });
@@ -4110,7 +4113,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
         let active_tooltip = active_tooltip.clone();
         move |_: &ScrollWheelEvent, _phase, window: &mut Window, _cx| {
             if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
-                clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                clear_active_tooltip_away_from_tooltip(&active_tooltip, window);
             }
         }
     });
