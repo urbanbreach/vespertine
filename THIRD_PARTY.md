@@ -8,10 +8,10 @@ Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Cl
 
 ## Summary
 
-- Rust crates compiled by some build, test or example: **729**
+- Rust crates compiled by some build, test or example: **730**
 - Rust crates present only in `Cargo.lock` (never compiled): **114**
 - npm packages (third-party): **65**; first-party npm packages: 6
-- Rust crates by license used: MIT 662, Apache-2.0 23, Unicode-3.0 22, BSD-3-Clause 9, ISC 4, Zlib 3, BSD-2-Clause 1, ISC AND Apache-2.0 1, ISC AND Apache-2.0 AND Apache-2.0 AND MIT AND BSD-3-Clause AND MIT AND Apache-2.0 1, MIT AND BSD-3-Clause 1, Apache-2.0 AND ISC 1, MIT AND Unicode-3.0 1
+- Rust crates by license used: MIT 663, Apache-2.0 23, Unicode-3.0 22, BSD-3-Clause 9, ISC 4, Zlib 3, BSD-2-Clause 1, ISC AND Apache-2.0 1, ISC AND Apache-2.0 AND Apache-2.0 AND MIT AND BSD-3-Clause AND MIT AND Apache-2.0 1, MIT AND BSD-3-Clause 1, Apache-2.0 AND ISC 1, MIT AND Unicode-3.0 1
 
 ## Vendored crates (`third_party/`)
 
@@ -678,6 +678,7 @@ First-party npm packages (all Apache-2.0): `@vespertine/dev`, `@vespertine/examp
 | taffy | 0.13.0 | MIT | MIT | vendored |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 | MIT | crates.io |
 | tendril | 0.5.1 | MIT OR Apache-2.0 | MIT | crates.io |
+| termcolor | 1.4.1 | Unlicense OR MIT | MIT | crates.io |
 | thin-vec | 0.2.21 | MIT OR Apache-2.0 | MIT | crates.io |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 | MIT | crates.io |
 | thiserror | 2.0.17 | MIT OR Apache-2.0 | MIT | crates.io |
