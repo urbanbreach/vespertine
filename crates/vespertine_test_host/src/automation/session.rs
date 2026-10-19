@@ -254,6 +254,11 @@ impl Session {
     /// Launches a process with piped standard input, output and error, merging `env` over the
     /// current environment, running in `cwd` if given. Its output feeds the session; the process
     /// is terminated when the session is closed. No `initialize` is performed.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "launching is a blocking client operation by design: it runs on the caller's \
+                  thread and returns once the process is spawned"
+    )]
     pub fn launch(launch: &LaunchOptions, options: SessionOptions) -> io::Result<Session> {
         let mut command = Command::new(&launch.command);
         command

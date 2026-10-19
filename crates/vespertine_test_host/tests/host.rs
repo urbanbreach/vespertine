@@ -542,7 +542,7 @@ impl RetainedHost for SelectableRun {
                             Some(f32::from(event.position.x - selection.bounds.origin.x));
                         window.refresh();
                     });
-                    let st = state.clone();
+                    let st = state;
                     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
                         if !phase.bubble() {
                             return;
@@ -619,9 +619,7 @@ fn dev_006_a8_drag_selection_returns_the_run_and_needs_a_painted_frame_between_e
     }));
     let mut host = TestHost::with_tree(
         HostOptions::with_size(400.0, 100.0),
-        SelectableRun {
-            state: state.clone(),
-        },
+        SelectableRun { state },
     )
     .unwrap();
     host.flush();

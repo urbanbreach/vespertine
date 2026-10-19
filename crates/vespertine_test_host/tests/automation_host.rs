@@ -101,7 +101,7 @@ fn scenario(app: &Automation) -> Vec<Value> {
 fn dev_007_a1_one_scenario_runs_in_process_and_over_stdio_with_equal_results() {
     require_backend!();
     let host = fixture_host(None);
-    let in_process = Automation::connect_in_process(host.clone()).unwrap();
+    let in_process = Automation::connect_in_process(host).unwrap();
     let local = scenario(&in_process);
 
     let launched = launch(&[], None);
@@ -132,7 +132,7 @@ fn dev_007_a1_one_scenario_runs_in_process_and_over_stdio_with_equal_results() {
 fn dev_007_a3_fill_with_the_empty_string_selects_all_and_backspaces_the_input_clear() {
     require_backend!();
     let host = fixture_host(None);
-    let app = Automation::connect_in_process(host.clone()).unwrap();
+    let app = Automation::connect_in_process(host).unwrap();
     let name = app.get_by_test_id("name");
     let value = |app: &Automation| {
         app.get_by_test_id("name").element().unwrap().custom_props["value"].clone()

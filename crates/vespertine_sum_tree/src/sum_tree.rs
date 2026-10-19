@@ -1398,6 +1398,58 @@ mod tests {
         let _ = env_logger::try_init();
     }
 
+    /// The resolved dependency closure of this crate (normal, build and dev dependencies of every
+    /// target, as locked) contains no tracing-annotation or application logging helper crate.
+    #[test]
+    fn dev_001_a1_dependency_closure_has_no_tracing_helper_crates() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let lock =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+                .expect("the workspace lock file is readable");
+        // name -> dependency names, from the `[[package]]` tables of the lock file.
+        let mut packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for table in lock.split("[[package]]").skip(1) {
+            let name = table
+                .lines()
+                .find_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"'))
+                .expect("every locked package has a name")
+                .to_owned();
+            let mut dependencies = Vec::new();
+            if let Some(list) = table.split("dependencies = [").nth(1) {
+                let list = list.split(']').next().unwrap_or_default();
+                for entry in list.lines() {
+                    let entry = entry.trim().trim_matches(|c| c == ',' || c == '"');
+                    if let Some(dependency) = entry.split_whitespace().next() {
+                        dependencies.push(dependency.to_owned());
+                    }
+                }
+            }
+            packages.entry(name).or_default().extend(dependencies);
+        }
+        let mut closure = BTreeSet::new();
+        let mut pending = vec!["vespertine_sum_tree".to_owned()];
+        while let Some(name) = pending.pop() {
+            if closure.insert(name.clone()) {
+                pending.extend(packages.get(&name).cloned().unwrap_or_default());
+            }
+        }
+        assert!(closure.len() > 3, "the closure was resolved: {closure:?}");
+        let forbidden: Vec<_> = closure
+            .iter()
+            .filter(|name| {
+                name.starts_with("tracing")
+                    || name.contains("ztracing")
+                    || name.contains("zlog")
+                    || name.as_str() == "vespertine_ztracing_macro"
+            })
+            .collect();
+        assert!(
+            forbidden.is_empty(),
+            "tracing helper crates in the closure: {forbidden:?}"
+        );
+    }
+
     #[test]
     fn dev_001_a2_logger_initialization_is_repeatable() {
         assert!(env_logger::try_init().is_err() || log::max_level() != log::LevelFilter::Off);

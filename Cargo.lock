@@ -7162,6 +7162,7 @@ dependencies = [
  "url",
  "usvg",
  "uuid",
+ "vespertine",
  "vespertine_bench_metrics",
  "vespertine_collections",
  "vespertine_http_client",

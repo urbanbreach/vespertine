@@ -305,7 +305,7 @@ impl FixtureTree {
         Self::default()
     }
 
-    fn build(&self, id: u64, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    fn build(&self, id: u64, cx: &mut App) -> Option<AnyElement> {
         let (node, children) = {
             let state = self.state.borrow();
             let node = state.nodes.get(&id)?;
@@ -516,7 +516,7 @@ impl FixtureTree {
             element = element.child(text);
         }
         for child in children {
-            if let Some(child) = self.build(child, window, cx) {
+            if let Some(child) = self.build(child, cx) {
                 element = element.child(child);
             }
         }
@@ -541,9 +541,9 @@ impl RetainedHost for FixtureTree {
         Ok(destroyed)
     }
 
-    fn render(&mut self, window: &mut Window, cx: &mut App) -> AnyElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
         let root = self.state.borrow().root;
-        root.and_then(|root| self.build(root, window, cx))
+        root.and_then(|root| self.build(root, cx))
             .unwrap_or_else(|| div().into_any_element())
     }
 
