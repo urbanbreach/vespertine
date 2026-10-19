@@ -27,6 +27,7 @@ mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
 #[cfg(test)]
 mod backdrop_blur_tests;
+mod file_icons;
 mod geometry;
 mod gestures;
 mod global;
@@ -35,7 +36,9 @@ mod gpu_context;
 #[cfg(vespertine_hot_reload)]
 mod hot_reload;
 mod image_fit;
+mod image_host;
 mod image_mask;
+mod image_source;
 mod image_treatment;
 mod input;
 mod inspector;
@@ -208,8 +211,11 @@ macro_rules! bench_main {
         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
     };
 }
+pub use file_icons::*;
 pub use image_fit::{anchor_zoom, cover_fit, pan_focal};
+pub use image_host::*;
 pub use image_mask::*;
+pub use image_source::*;
 pub use image_treatment::*;
 pub use input::*;
 pub use inspector::*;

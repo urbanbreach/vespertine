@@ -120,6 +120,23 @@ impl ReqwestClient {
     }
 }
 
+/// The general-purpose HTTP client a desktop embedding installs at startup for image fetching
+/// (`Application::with_http_client`); the framework default fails every request.
+///
+/// Returns `None` after logging an error when the client cannot be created, in which case
+/// network image sources show their load-failed placeholder.
+pub fn desktop_http_client(
+    user_agent: &str,
+) -> Option<std::sync::Arc<dyn vespertine_http_client::HttpClient>> {
+    match ReqwestClient::user_agent(user_agent) {
+        Ok(client) => Some(std::sync::Arc::new(client)),
+        Err(error) => {
+            log::error!("failed to create the HTTP client for image loading: {error:#}");
+            None
+        }
+    }
+}
+
 pub fn runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -500,5 +517,12 @@ mod tests {
             client.proxy.is_none(),
             "An invalid proxy URL should add no proxy to the client!"
         )
+    }
+
+    #[test]
+    fn desktop_http_client_installs_or_reports_failure() {
+        assert!(super::desktop_http_client("vespertine-test").is_some());
+        // An invalid user agent cannot create a client: an error is logged, nothing panics.
+        assert!(super::desktop_http_client("bad\nagent").is_none());
     }
 }

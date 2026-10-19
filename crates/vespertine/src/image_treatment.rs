@@ -20,10 +20,9 @@
 //! Treated pixels are stored in blue, green, red, alpha order, so painting them
 //! at 1:1 with nearest-neighbor sampling reproduces them exactly.
 
-use crate::{App, Image, ImageFormat, RenderImage, SvgRenderer};
+use crate::{App, RenderImage, SvgRenderer};
 use anyhow::{Context as _, Result, anyhow};
-use image::{Frame, ImageBuffer, imageops};
-use smallvec::SmallVec;
+use image::{ImageBuffer, imageops};
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -437,49 +436,10 @@ fn fit_within(width: u32, height: u32, bound: u32) -> (u32, u32) {
     (scaled(width), scaled(height))
 }
 
-/// Wraps BGRA pixels (blue, green, red, alpha) as a single-frame render image.
-///
-/// This is the seam for the raw BGRA constructor of RND-007: the frame buffer
-/// of a [`RenderImage`] already stores blue, green, red, alpha bytes.
+/// Wraps BGRA pixels (blue, green, red, alpha) as a single-frame render image through the raw
+/// constructor of RND-007.
 fn bgra_render_image(width: u32, height: u32, bgra: Vec<u8>) -> Option<Arc<RenderImage>> {
-    let buffer = ImageBuffer::from_raw(width, height, bgra)?;
-    Some(Arc::new(RenderImage::new(SmallVec::from_elem(
-        Frame::new(buffer),
-        1,
-    ))))
-}
-
-/// Detects an image format from its leading bytes (never from a file
-/// extension): PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, PNM, then SVG, in that order.
-fn sniff_image_format(bytes: &[u8]) -> Option<ImageFormat> {
-    if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        Some(ImageFormat::Png)
-    } else if bytes.starts_with(&[0xFF, 0xD8]) {
-        Some(ImageFormat::Jpeg)
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some(ImageFormat::Gif)
-    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some(ImageFormat::Webp)
-    } else if bytes.starts_with(b"BM") {
-        Some(ImageFormat::Bmp)
-    } else if bytes.starts_with(&[0x49, 0x49, 0x2A, 0x00])
-        || bytes.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
-    {
-        Some(ImageFormat::Tiff)
-    } else if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
-        Some(ImageFormat::Ico)
-    } else if bytes.len() >= 2 && bytes[0] == b'P' && (b'1'..=b'6').contains(&bytes[1]) {
-        Some(ImageFormat::Pnm)
-    } else {
-        let text = bytes.trim_ascii_start();
-        (text.starts_with(b"<svg") || text.starts_with(b"<?xml")).then_some(ImageFormat::Svg)
-    }
-}
-
-/// Decodes image bytes of any supported format after sniffing the actual bytes.
-fn decode_image_bytes(bytes: &[u8], svg_renderer: &SvgRenderer) -> Result<Arc<RenderImage>> {
-    let format = sniff_image_format(bytes).ok_or_else(|| anyhow!("unrecognized image format"))?;
-    Image::from_bytes(format, bytes.to_vec()).to_image_data(svg_renderer.clone())
+    RenderImage::from_bgra(width, height, bgra).map(Arc::new)
 }
 
 /// The result of preloading one effect of a source: the reduced proxy and the
@@ -784,7 +744,7 @@ impl TreatmentCache {
 
 fn decode_file(path: &Path, renderer: &SvgRenderer) -> Result<Arc<RenderImage>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    decode_image_bytes(&bytes, renderer)
+    Ok(crate::decode_image_bytes(&bytes, renderer)?)
 }
 
 fn run_job(
@@ -952,7 +912,7 @@ impl<F: Clone, S: Clone + PartialEq> CrossfadeTracker<F, S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TestAppContext;
+    use crate::{ImageFormat, TestAppContext, sniff_image_format};
     use std::cell::RefCell;
 
     /// Builds a proxy from a closure returning `[r, g, b, a]` per pixel.

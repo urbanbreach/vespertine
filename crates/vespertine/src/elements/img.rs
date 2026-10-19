@@ -1,21 +1,17 @@
 use crate::{
-    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, DefiniteLength, Element, ElementId,
-    Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
-    Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
-    SharedString, SharedUri, StyleRefinement, Styled, Task, Window, decode_static_image,
-    decode_static_image_from_decoder, px,
+    AnyElement, AnyImageCache, App, Asset, AssetLogger, Bounds, Corners, DefiniteLength,
+    DevicePixels, Element, ElementId, Entity, GlobalElementId, Hitbox, Image, ImageCache,
+    InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, Length,
+    ObjectFit, Pixels, RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled,
+    Task, UntrustedImageLimits, Window, decode_image_bytes, decode_sniffed, decode_static_image,
+    decode_untrusted_image_bytes, px, sniff_image_format, unrecognized_image_format,
 };
 use anyhow::Result;
 
 use futures::Future;
-use image::{
-    AnimationDecoder, ImageError, ImageFormat, Rgba,
-    codecs::{gif::GifDecoder, webp::WebPDecoder},
-};
-use smallvec::SmallVec;
+use image::ImageError;
 use std::{
-    fs,
-    io::{self, Cursor},
+    fs, io,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     str::FromStr,
@@ -27,6 +23,22 @@ use vespertine_scheduler::Instant;
 use vespertine_util::ResultExt;
 
 use super::{Stateful, StatefulInteractiveElement};
+
+/// Paints `data` with its fitted rectangle `fitted` cropped to `visible` (ELM-003 R2/R3)
+/// through the fitted painter of RND-004.
+fn paint_fitted_image(
+    window: &mut Window,
+    visible: Bounds<Pixels>,
+    fitted: Bounds<Pixels>,
+    corner_radii: Corners<Pixels>,
+    data: Arc<RenderImage>,
+    frame_index: usize,
+    grayscale: bool,
+) {
+    window
+        .paint_image_fitted(visible, fitted, corner_radii, data, frame_index, grayscale)
+        .log_err();
+}
 
 /// The delay before showing the loading state.
 pub const LOADING_DELAY: Duration = Duration::from_millis(200);
@@ -266,8 +278,8 @@ impl DerefMut for Stateful<Img> {
 }
 
 /// The image state between frames
-struct ImgState {
-    frame_index: usize,
+pub(crate) struct ImgState {
+    pub(crate) frame_index: usize,
     last_frame_time: Option<Instant>,
     started_loading: Option<(Instant, Task<()>)>,
 }
@@ -372,7 +384,12 @@ impl Element for Img {
 
                             let image_size = data.render_size(frame_index);
 
-                            if style.aspect_ratio.is_none() {
+                            // R1: the intrinsic ratio only applies when a dimension is auto
+                            // and the style carries no explicit aspect ratio.
+                            if style.aspect_ratio.is_none()
+                                && (matches!(style.size.width, Length::Auto)
+                                    || matches!(style.size.height, Length::Auto))
+                            {
                                 style.aspect_ratio = Some(image_size.width / image_size.height);
                             }
 
@@ -512,21 +529,25 @@ impl Element for Img {
                     if data.frame_count() == 0 {
                         return;
                     }
-                    let new_bounds = self
-                        .style
-                        .object_fit
-                        .get_bounds(bounds, data.size(layout_state.frame_index));
+                    let fitted = self.style.object_fit.get_bounds(
+                        bounds,
+                        data.render_size(layout_state.frame_index)
+                            .map(|dimension| DevicePixels(dimension.0.round() as i32)),
+                    );
+                    let visible = bounds.intersect(&fitted);
+                    if visible.size.width <= Pixels::ZERO || visible.size.height <= Pixels::ZERO {
+                        return;
+                    }
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
-                    window
-                        .paint_image(
-                            bounds,
-                            new_bounds,
-                            corner_radii,
-                            data,
-                            layout_state.frame_index,
-                            self.style.grayscale,
-                        )
-                        .log_err();
+                    paint_fitted_image(
+                        window,
+                        visible,
+                        fitted,
+                        corner_radii,
+                        data,
+                        layout_state.frame_index,
+                        self.style.grayscale,
+                    );
                 } else if let Some(replacement) = &mut layout_state.replacement {
                     replacement.paint(window, cx);
                 }
@@ -598,6 +619,14 @@ impl ImageSource {
         }
     }
 
+    /// A source for an image from an untrusted origin: bytes are bounded and decoded with the
+    /// [`UntrustedImageLimits`] defaults and SVG is rebuilt before rendering (ELM-004 R28).
+    pub fn untrusted(resource: Resource) -> Self {
+        ImageSource::Custom(Arc::new(move |window, cx| {
+            window.use_asset::<AssetLogger<UntrustedImageAssetLoader>>(&resource, cx)
+        }))
+    }
+
     /// Remove this image source from the asset system
     pub fn remove_asset(&self, cx: &mut App) {
         match self {
@@ -665,8 +694,53 @@ impl Asset for ImageDecoder {
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let renderer = cx.svg_renderer();
-        async move { source.to_image_data(renderer).map_err(Into::into) }
+        // The bytes decide the format, not the declared one (ELM-004 R3).
+        async move { decode_image_bytes(&source.bytes, &renderer) }
     }
+}
+
+/// Reads the bytes behind a resource (disk, network through the application's HTTP client,
+/// or an embedded asset).
+async fn read_resource_bytes(
+    source: Resource,
+    client: Arc<dyn vespertine_http_client::HttpClient>,
+    asset_source: Arc<dyn crate::AssetSource>,
+) -> Result<Vec<u8>, ImageCacheError> {
+    Ok(match source {
+        Resource::Path(uri) => fs::read(uri.as_ref())?,
+        Resource::Uri(uri) => {
+            use anyhow::Context as _;
+            use futures::AsyncReadExt as _;
+
+            let mut response = client
+                .get(uri.as_ref(), ().into(), true)
+                .await
+                .with_context(|| format!("loading image asset from {uri:?}"))?;
+            let mut body = Vec::new();
+            response.body_mut().read_to_end(&mut body).await?;
+            if !response.status().is_success() {
+                let mut body = String::from_utf8_lossy(&body).into_owned();
+                let first_line = body.lines().next().unwrap_or("").trim_end();
+                body.truncate(first_line.len());
+                return Err(ImageCacheError::BadStatus {
+                    uri,
+                    status: response.status(),
+                    body,
+                });
+            }
+            body
+        }
+        Resource::Embedded(path) => {
+            let data = asset_source.load(&path).ok().flatten();
+            if let Some(data) = data {
+                data.to_vec()
+            } else {
+                return Err(ImageCacheError::Asset(
+                    format!("Embedded resource not found: {}", path).into(),
+                ));
+            }
+        }
+    })
 }
 
 /// An image loader for the VESPERTINE asset system
@@ -682,122 +756,46 @@ impl Asset for ImageAssetLoader {
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let client = cx.http_client();
-        // TODO: Can we make SVGs always rescale?
-        // let scale_factor = cx.scale_factor();
+        // SVGs render at twice their declared size (ELM-004 R17).
         let svg_renderer = cx.svg_renderer();
         let asset_source = cx.asset_source().clone();
         async move {
-            let bytes = match source.clone() {
-                Resource::Path(uri) => fs::read(uri.as_ref())?,
-                Resource::Uri(uri) => {
-                    use anyhow::Context as _;
-                    use futures::AsyncReadExt as _;
-
-                    let mut response = client
-                        .get(uri.as_ref(), ().into(), true)
-                        .await
-                        .with_context(|| format!("loading image asset from {uri:?}"))?;
-                    let mut body = Vec::new();
-                    response.body_mut().read_to_end(&mut body).await?;
-                    if !response.status().is_success() {
-                        let mut body = String::from_utf8_lossy(&body).into_owned();
-                        let first_line = body.lines().next().unwrap_or("").trim_end();
-                        body.truncate(first_line.len());
-                        return Err(ImageCacheError::BadStatus {
-                            uri,
-                            status: response.status(),
-                            body,
-                        });
-                    }
-                    body
-                }
-                Resource::Embedded(path) => {
-                    let data = asset_source.load(&path).ok().flatten();
-                    if let Some(data) = data {
-                        data.to_vec()
-                    } else {
-                        return Err(ImageCacheError::Asset(
-                            format!("Embedded resource not found: {}", path).into(),
-                        ));
-                    }
-                }
-            };
-
-            if let Ok(format) = image::guess_format(&bytes) {
-                let data = match format {
-                    ImageFormat::Gif => {
-                        let decoder = GifDecoder::new(Cursor::new(&bytes))?;
-                        let mut frames = SmallVec::new();
-
-                        for frame in decoder.into_frames() {
-                            match frame {
-                                Ok(mut frame) => {
-                                    // Convert from RGBA to BGRA.
-                                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                        pixel.swap(0, 2);
-                                    }
-                                    frames.push(frame);
-                                }
-                                Err(err) => {
-                                    log::debug!(
-                                        "Skipping GIF frame in {source:?} due to decode error: {err}"
-                                    );
-                                }
-                            }
-                        }
-
-                        if frames.is_empty() {
-                            return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
-                                "GIF could not be decoded: all frames failed ({source:?})"
-                            ))));
-                        }
-
-                        frames
-                    }
-                    ImageFormat::WebP => {
-                        let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
-
-                        if decoder.has_animation() {
-                            let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
-                            let mut frames = SmallVec::new();
-
-                            for frame in decoder.into_frames() {
-                                match frame {
-                                    Ok(mut frame) => {
-                                        // Convert from RGBA to BGRA.
-                                        for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                            pixel.swap(0, 2);
-                                        }
-                                        frames.push(frame);
-                                    }
-                                    Err(err) => {
-                                        log::debug!(
-                                            "Skipping WebP frame in {source:?} due to decode error: {err}"
-                                        );
-                                    }
-                                }
-                            }
-
-                            if frames.is_empty() {
-                                return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
-                                    "WebP could not be decoded: all frames failed ({source:?})"
-                                ))));
-                            }
-
-                            frames
-                        } else {
-                            decode_static_image_from_decoder(decoder)?
-                        }
-                    }
-                    _ => decode_static_image(&bytes, format)?,
-                };
-
-                Ok(Arc::new(RenderImage::new(data)))
-            } else {
-                svg_renderer
-                    .render_single_frame(&bytes, 1.0)
-                    .map_err(Into::into)
+            let bytes = read_resource_bytes(source, client, asset_source).await?;
+            match sniff_image_format(&bytes) {
+                Some(format) => decode_sniffed(&bytes, format, &svg_renderer),
+                // Formats outside the sniffing table that the decoder crate still knows.
+                None => match image::guess_format(&bytes) {
+                    Ok(format) => Ok(Arc::new(RenderImage::new(decode_static_image(
+                        &bytes, format,
+                    )?))),
+                    Err(_) => Err(unrecognized_image_format()),
+                },
             }
+        }
+    }
+}
+
+/// The resource loader for images from untrusted sources: the input length is bounded before
+/// decoding, rasters are decoded with the [`UntrustedImageLimits`] and keep one static
+/// frame, and SVG is rebuilt so no script, HTML or external reference reaches the renderer
+/// (ELM-004 R28). Use it through [`ImageSource::untrusted`].
+#[derive(Clone)]
+pub enum UntrustedImageAssetLoader {}
+
+impl Asset for UntrustedImageAssetLoader {
+    type Source = Resource;
+    type Output = Result<Arc<RenderImage>, ImageCacheError>;
+
+    fn load(
+        source: Self::Source,
+        cx: &mut App,
+    ) -> impl Future<Output = Self::Output> + Send + 'static {
+        let client = cx.http_client();
+        let svg_renderer = cx.svg_renderer();
+        let asset_source = cx.asset_source().clone();
+        async move {
+            let bytes = read_resource_bytes(source, client, asset_source).await?;
+            decode_untrusted_image_bytes(&bytes, &svg_renderer, &UntrustedImageLimits::default())
         }
     }
 }
@@ -861,6 +859,7 @@ mod tests {
     use super::*;
     use crate::{ParentElement as _, TestAppContext, canvas, div, point, px, size};
     use image::{Frame, ImageBuffer, Rgba};
+    use smallvec::SmallVec;
 
     const TEST_IMG_ID: &str = "test-img";
 
@@ -1037,6 +1036,255 @@ mod tests {
                 .into_any_element()
         });
     }
+
+    // --- ELM-003: layout rule R1 and element-space rounded corners ---------------------
+
+    fn element_bounds(
+        cx: &mut TestAppContext,
+        build: impl FnOnce() -> AnyElement,
+    ) -> Bounds<Pixels> {
+        let window = cx.add_empty_window();
+        window.draw(point(px(0.), px(0.)), size(px(500.), px(500.)), |_, _| {
+            build()
+        });
+        window
+            .debug_bounds("subject")
+            .expect("the subject image should have recorded bounds")
+    }
+
+    fn subject(width: u32, height: u32) -> Img {
+        img(ImageSource::Render(test_image_with_size(width, height)))
+            .debug_selector(|| "subject".into())
+            .flex_none()
+    }
+
+    #[vespertine::test]
+    fn explicit_size_is_not_overridden_by_intrinsic_ratio(cx: &mut TestAppContext) {
+        // 2:1 image, every kind of explicit length: the element stays square.
+        let absolute = element_bounds(cx, || {
+            subject(200, 100).w(px(100.)).h(px(100.)).into_any_element()
+        });
+        assert_eq!(absolute.size, size(px(100.), px(100.)));
+
+        let rem = element_bounds(cx, || {
+            subject(200, 100)
+                .w(crate::rems(6.25))
+                .h(crate::rems(6.25))
+                .into_any_element()
+        });
+        assert_eq!(rem.size, size(px(100.), px(100.)));
+
+        let relative = element_bounds(cx, || {
+            div()
+                .w(px(100.))
+                .h(px(100.))
+                .child(
+                    subject(200, 100)
+                        .w(crate::relative(1.))
+                        .h(crate::relative(1.)),
+                )
+                .into_any_element()
+        });
+        assert_eq!(relative.size, size(px(100.), px(100.)));
+    }
+
+    #[vespertine::test]
+    fn explicit_aspect_ratio_wins_over_intrinsic_ratio_in_layout(cx: &mut TestAppContext) {
+        // Width is explicit and the height is auto: the explicit 1:1 ratio is kept even
+        // though the image is 2:1.
+        let bounds = element_bounds(cx, || {
+            subject(200, 100)
+                .w(px(100.))
+                .aspect_square()
+                .into_any_element()
+        });
+        assert_eq!(bounds.size, size(px(100.), px(100.)));
+    }
+
+    #[vespertine::test]
+    fn auto_dimensions_follow_the_intrinsic_size(cx: &mut TestAppContext) {
+        // Width auto with an absolute height: width follows the intrinsic ratio.
+        let width_auto = element_bounds(cx, || subject(200, 100).h(px(50.)).into_any_element());
+        assert_eq!(width_auto.size, size(px(100.), px(50.)));
+
+        // Height auto with an absolute width.
+        let height_auto = element_bounds(cx, || subject(200, 100).w(px(50.)).into_any_element());
+        assert_eq!(height_auto.size, size(px(50.), px(25.)));
+
+        // Both auto: the intrinsic size.
+        let both_auto = element_bounds(cx, || subject(200, 100).into_any_element());
+        assert_eq!(both_auto.size, size(px(200.), px(100.)));
+
+        // Both explicit.
+        let both_explicit = element_bounds(cx, || {
+            subject(200, 100).w(px(30.)).h(px(70.)).into_any_element()
+        });
+        assert_eq!(both_explicit.size, size(px(30.), px(70.)));
+
+        // Rem-based lengths convert with the rem size (16 px by default).
+        let rem_height = element_bounds(cx, || {
+            subject(200, 100).h(crate::rems(2.)).into_any_element()
+        });
+        assert_eq!(rem_height.size, size(px(64.), px(32.)));
+    }
+
+    struct PaintedSprite {
+        bounds: Bounds<crate::ScaledPixels>,
+        tile: crate::AtlasTile,
+        corner_radii: Corners<crate::ScaledPixels>,
+        scale_factor: f32,
+    }
+
+    fn painted_sprites(
+        cx: &mut TestAppContext,
+        build: impl FnOnce() -> AnyElement,
+    ) -> Vec<PaintedSprite> {
+        let window = cx.add_empty_window();
+        window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            build()
+        });
+        window.update(|window, _| {
+            let scale_factor = window.scale_factor();
+            window
+                .rendered_frame
+                .scene
+                .polychrome_sprites
+                .iter()
+                .map(|sprite| PaintedSprite {
+                    bounds: sprite.bounds,
+                    tile: sprite.tile,
+                    corner_radii: sprite.corner_radii,
+                    scale_factor,
+                })
+                .collect()
+        })
+    }
+
+    fn logical(bounds: Bounds<crate::ScaledPixels>, scale_factor: f32) -> Bounds<Pixels> {
+        Bounds {
+            origin: point(
+                px(bounds.origin.x.0 / scale_factor),
+                px(bounds.origin.y.0 / scale_factor),
+            ),
+            size: size(
+                px(bounds.size.width.0 / scale_factor),
+                px(bounds.size.height.0 / scale_factor),
+            ),
+        }
+    }
+
+    #[vespertine::test]
+    fn cover_rounds_the_visible_rectangle_and_clamps_radius(cx: &mut TestAppContext) {
+        // 200x100 image, 100x100 element, cover fit, radius 100.
+        let sprites = painted_sprites(cx, || {
+            subject(200, 100)
+                .size(px(100.))
+                .rounded(px(100.))
+                .object_fit(ObjectFit::Cover)
+                .into_any_element()
+        });
+        let sprite = sprites.last().expect("cover image paints one sprite");
+        // The sprite is exactly the element bounds, not the oversized fitted rectangle.
+        assert_eq!(
+            logical(sprite.bounds, sprite.scale_factor),
+            Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(100.), px(100.)),
+            }
+        );
+        // The corner radius is clamped to half the visible rectangle: 50 logical pixels.
+        let expected = px(50.).scale(sprite.scale_factor);
+        assert_eq!(sprite.corner_radii.top_left, expected);
+        assert_eq!(sprite.corner_radii.top_right, expected);
+        assert_eq!(sprite.corner_radii.bottom_left, expected);
+        assert_eq!(sprite.corner_radii.bottom_right, expected);
+        // The crop keeps the middle half of the source columns (25%..75%).
+        assert_eq!(sprite.tile.bounds.size.width.0, 100);
+        assert_eq!(sprite.tile.bounds.size.height.0, 100);
+    }
+
+    #[vespertine::test]
+    fn contain_rounds_the_letterboxed_rectangle(cx: &mut TestAppContext) {
+        // A 2:1 image in a 100x100 element is a 100x50 rectangle at y = 25 with its own
+        // rounded corners: the radius is clamped to half of the shorter side, 25.
+        let sprites = painted_sprites(cx, || {
+            subject(200, 100)
+                .size(px(100.))
+                .rounded(px(100.))
+                .object_fit(ObjectFit::Contain)
+                .into_any_element()
+        });
+        let sprite = sprites.last().expect("contained image paints one sprite");
+        assert_eq!(
+            logical(sprite.bounds, sprite.scale_factor),
+            Bounds {
+                origin: point(px(0.), px(25.)),
+                size: size(px(100.), px(50.)),
+            }
+        );
+        assert_eq!(
+            sprite.corner_radii.top_left,
+            px(25.).scale(sprite.scale_factor)
+        );
+        // Uncropped: the whole tile is used.
+        assert_eq!(sprite.tile.bounds.size.width.0, 200);
+        assert_eq!(sprite.tile.bounds.size.height.0, 100);
+    }
+
+    #[vespertine::test]
+    fn portrait_in_square_aspect_contains_horizontally(cx: &mut TestAppContext) {
+        let sprites = painted_sprites(cx, || {
+            div()
+                .size(px(100.))
+                .child(
+                    subject(100, 200)
+                        .size_full()
+                        .aspect_square()
+                        .object_fit(ObjectFit::Contain),
+                )
+                .into_any_element()
+        });
+        let sprite = sprites.last().expect("contained image paints one sprite");
+        assert_eq!(
+            logical(sprite.bounds, sprite.scale_factor),
+            Bounds {
+                origin: point(px(25.), px(0.)),
+                size: size(px(50.), px(100.)),
+            }
+        );
+    }
+
+    #[vespertine::test]
+    fn zero_frame_paints_nothing_and_uncropped_uses_the_whole_tile(cx: &mut TestAppContext) {
+        let none = painted_sprites(cx, || {
+            img(ImageSource::Render(test_image(0)))
+                .size(px(100.))
+                .into_any_element()
+        });
+        assert!(none.is_empty());
+
+        let uncropped = painted_sprites(cx, || {
+            subject(200, 100)
+                .size(px(100.))
+                .object_fit(ObjectFit::Fill)
+                .into_any_element()
+        });
+        let sprite = uncropped.last().expect("fill image paints one sprite");
+        assert_eq!(
+            logical(sprite.bounds, sprite.scale_factor),
+            Bounds {
+                origin: point(px(0.), px(0.)),
+                size: size(px(100.), px(100.)),
+            }
+        );
+        assert_eq!(
+            (
+                sprite.tile.bounds.size.width.0,
+                sprite.tile.bounds.size.height.0
+            ),
+            (200, 100)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1046,7 +1294,8 @@ mod eviction_tests {
         AnyView, AppContext as _, Context, Empty, Render, TestAppContext, VisualTestContext, point,
         size,
     };
-    use image::{Frame, ImageBuffer};
+    use image::{Frame, ImageBuffer, Rgba};
+    use smallvec::SmallVec;
     use std::cell::Cell;
     use std::rc::Rc;
 

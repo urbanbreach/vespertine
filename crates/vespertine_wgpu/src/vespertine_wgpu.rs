@@ -46,3 +46,6 @@ mod tests_image_mask;
 
 #[cfg(test)]
 mod tests_nearest;
+
+#[cfg(test)]
+mod tests_image_hosts;

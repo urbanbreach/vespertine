@@ -7156,6 +7156,7 @@ dependencies = [
  "strum",
  "subsecond",
  "taffy",
+ "tempfile",
  "thiserror 2.0.17",
  "ttf-parser",
  "unicode-segmentation",
@@ -7460,6 +7461,22 @@ dependencies = [
  "vespertine_macos",
  "vespertine_wgpu",
  "vespertine_windows",
+]
+
+[[package]]
+name = "vespertine_public_image_loader"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "http",
+ "log",
+ "thiserror 2.0.17",
+ "tokio",
+ "vespertine_http_client",
+ "vespertine_http_client_tls",
+ "vespertine_reqwest_client",
+ "zed-reqwest",
 ]
 
 [[package]]

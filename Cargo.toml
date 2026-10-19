@@ -18,6 +18,7 @@ members = [
     "crates/vespertine_path",
     "crates/vespertine_perf",
     "crates/vespertine_platform",
+    "crates/vespertine_public_image_loader",
     "crates/vespertine_refineable",
     "crates/vespertine_richtext",
     "crates/vespertine_reqwest_client",
@@ -591,6 +592,9 @@ default-features = false
 [workspace.dependencies.vespertine_platform]
 path = "crates/vespertine_platform"
 default-features = false
+
+[workspace.dependencies.vespertine_public_image_loader]
+path = "crates/vespertine_public_image_loader"
 
 [workspace.dependencies.vespertine_refineable]
 path = "crates/vespertine_refineable"
