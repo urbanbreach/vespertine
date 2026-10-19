@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Check FEATURES.md: every row's verifiers exist and pass.
+
+Usage: scripts/check-features [--spec ID ...] [--file FILE] [--example-seconds N]
+
+Rows (under a `## <AREA>` section, header `| Spec | Acceptance | Verified by |`):
+
+    | RND-001 | A1, A2 | test:<crate>:<test name> ; example:<crate>:<example name> |
+
+* `test:<crate>:<name>` must be listed by `cargo test -p <crate> -- --list` and pass under
+  `cargo test -p <crate> -- --exact <names...>`.
+* `example:<crate>:<name>` is built in release mode and run for 10 s in the current graphical
+  session; it passes if it exits 0 or is still running at the timeout.
+
+Exits 0 iff every selected row passes (empty tables pass).
+"""
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HEADER = ["spec", "acceptance", "verified by"]
+SPEC_RE = re.compile(r"^([A-Z0-9]+)-\d{3}$")
+AREAS = ["RND", "TXT", "LAY", "ELM", "CMP", "INP", "PLT", "ANM", "THM", "PRF", "APP", "A11Y", "DEV"]
+
+
+class Row:
+    def __init__(self, line_no, spec, acceptance, verifiers):
+        self.line_no = line_no
+        self.spec = spec
+        self.acceptance = acceptance
+        self.verifiers = verifiers  # list of (kind, crate, name)
+        self.errors = []
+
+
+def fail_usage(message):
+    print(f"check-features: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_features(path):
+    rows, problems = [], []
+    area = None
+    in_table = False
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    for number, line in enumerate(lines, 1):
+        stripped = line.strip()
+        heading = re.match(r"^##\s+(\S+)\s*$", stripped)
+        if heading:
+            area = heading.group(1)
+            in_table = False
+            continue
+        if not stripped.startswith("|"):
+            in_table = False
+            continue
+        if area is None:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not in_table:
+            if [cell.lower() for cell in cells] != HEADER:
+                problems.append(f"FEATURES.md:{number}: expected header `| Spec | Acceptance | Verified by |`")
+            in_table = True
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        if len(cells) != 3:
+            problems.append(f"FEATURES.md:{number}: row needs exactly 3 cells")
+            continue
+        spec, acceptance, verified = cells
+        match = SPEC_RE.match(spec)
+        if not match:
+            problems.append(f"FEATURES.md:{number}: `{spec}` is not a spec ID")
+            continue
+        if area in AREAS and match.group(1) != area:
+            problems.append(f"FEATURES.md:{number}: {spec} is listed under section {area}")
+            continue
+        if not acceptance:
+            problems.append(f"FEATURES.md:{number}: {spec} lists no acceptance items")
+            continue
+        verifiers = []
+        for part in verified.split(";"):
+            part = part.strip()
+            fields = part.split(":", 2)
+            if len(fields) != 3 or fields[0] not in ("test", "example") or not all(f.strip() for f in fields):
+                problems.append(f"FEATURES.md:{number}: bad verifier `{part}` (want test:<crate>:<name> or example:<crate>:<name>)")
+                verifiers = None
+                break
+            verifiers.append(tuple(f.strip() for f in fields))
+        if verifiers is not None:
+            if not verifiers:
+                problems.append(f"FEATURES.md:{number}: {spec} has no verifier")
+            else:
+                rows.append(Row(number, spec, acceptance, verifiers))
+    return rows, problems
+
+
+def run(cmd, **kwargs):
+    return subprocess.run(cmd, cwd=ROOT, **kwargs)
+
+
+def cargo_metadata():
+    result = run(["cargo", "metadata", "--format-version", "1", "--no-deps"], capture_output=True, text=True)
+    if result.returncode != 0:
+        fail_usage("cargo metadata failed:\n" + result.stderr)
+    return json.loads(result.stdout)
+
+
+def check_tests(rows, packages):
+    """Runs every `test:` verifier, one cargo invocation per crate; records errors on rows."""
+    by_crate = {}
+    for row in rows:
+        for kind, crate, name in row.verifiers:
+            if kind == "test":
+                by_crate.setdefault(crate, {}).setdefault(name, []).append(row)
+    for crate, names in sorted(by_crate.items()):
+        if crate not in packages:
+            for rows_of_name in names.values():
+                for row in rows_of_name:
+                    row.errors.append(f"unknown crate `{crate}`")
+            continue
+        print(f"== listing tests of {crate}", flush=True)
+        listing = run(["cargo", "test", "-p", crate, "--", "--list"], capture_output=True, text=True)
+        if listing.returncode != 0:
+            print(listing.stdout + listing.stderr, file=sys.stderr)
+            for rows_of_name in names.values():
+                for row in rows_of_name:
+                    row.errors.append(f"`cargo test -p {crate} -- --list` failed")
+            continue
+        listed = {line[: -len(": test")] for line in listing.stdout.splitlines() if line.endswith(": test")}
+        present = []
+        for name, rows_of_name in names.items():
+            if name in listed:
+                present.append(name)
+            else:
+                for row in rows_of_name:
+                    row.errors.append(f"test `{crate}:{name}` does not exist")
+        if not present:
+            continue
+        print(f"== running {len(present)} test(s) of {crate}", flush=True)
+        outcome = run(["cargo", "test", "-p", crate, "--", "--exact", *present], capture_output=True, text=True)
+        sys.stdout.write(outcome.stdout)
+        sys.stderr.write(outcome.stderr)
+        results = {}
+        for line in outcome.stdout.splitlines():
+            match = re.match(r"^test (.+) \.\.\. (\w+)", line)
+            if match:
+                results.setdefault(match.group(1), []).append(match.group(2))
+        for name in present:
+            states = results.get(name, [])
+            if states and all(state == "ok" for state in states):
+                continue
+            reason = "did not run" if not states else "/".join(sorted(set(states)))
+            for row in names[name]:
+                row.errors.append(f"test `{crate}:{name}` {reason}")
+
+
+def check_examples(rows, packages, target_directory, seconds):
+    seen = {}
+    for row in rows:
+        for kind, crate, name in row.verifiers:
+            if kind != "example":
+                continue
+            key = (crate, name)
+            if key not in seen:
+                seen[key] = run_example(crate, name, packages, target_directory, seconds)
+            if seen[key]:
+                row.errors.append(f"example `{crate}:{name}` {seen[key]}")
+
+
+def run_example(crate, name, packages, target_directory, seconds):
+    """Returns None on success or a failure description."""
+    package = packages.get(crate)
+    if package is None:
+        return "belongs to an unknown crate"
+    target = next((t for t in package["targets"] if "example" in t["kind"] and t["name"] == name), None)
+    if target is None:
+        return "does not exist"
+    build = ["cargo", "build", "--release", "-p", crate, "--example", name]
+    if target.get("required-features"):
+        build += ["--features", ",".join(target["required-features"])]
+    print(f"== building example {crate}:{name}", flush=True)
+    if run(build).returncode != 0:
+        return "failed to build"
+    binary = os.path.join(target_directory, "release", "examples", name)
+    print(f"== running example {crate}:{name} for {seconds} s", flush=True)
+    process = subprocess.Popen([binary], cwd=ROOT, start_new_session=True)
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        code = process.poll()
+        if code is not None:
+            return None if code == 0 else f"exited with status {code}"
+        time.sleep(0.1)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            break
+        try:
+            process.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Check FEATURES.md rows (see the module docstring).")
+    parser.add_argument("--spec", action="append", default=[], metavar="ID", help="only check rows of this spec (repeatable)")
+    parser.add_argument("--file", default=os.path.join(ROOT, "FEATURES.md"), help="table file (default: FEATURES.md)")
+    parser.add_argument("--example-seconds", type=float, default=10.0, help="run time of each example (default 10)")
+    args = parser.parse_args()
+
+    sccache = os.path.expanduser("~/Projects/vespertine-cleanroom/tools/bin/sccache")
+    if os.path.exists(sccache):
+        os.environ.setdefault("RUSTC_WRAPPER", sccache)
+        os.environ.setdefault("SCCACHE_DIR", os.path.expanduser("~/Projects/vespertine-cleanroom/tools/sccache-cache"))
+        os.environ.setdefault("SCCACHE_CACHE_SIZE", "80G")
+
+    rows, problems = parse_features(args.file)
+    if args.spec:
+        known = {row.spec for row in rows}
+        for spec in args.spec:
+            if spec not in known:
+                problems.append(f"--spec {spec}: no row in FEATURES.md")
+        rows = [row for row in rows if row.spec in args.spec]
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+
+    if rows:
+        metadata = cargo_metadata()
+        packages = {package["name"]: package for package in metadata["packages"]}
+        check_tests(rows, packages)
+        check_examples(rows, packages, metadata["target_directory"], args.example_seconds)
+
+    failed = bool(problems)
+    print("\n== FEATURES.md")
+    for row in rows:
+        status = "FAIL" if row.errors else "PASS"
+        failed |= bool(row.errors)
+        print(f"{status}  {row.spec}  ({row.acceptance})")
+        for error in row.errors:
+            print(f"      {error}")
+    print(f"{len(rows)} row(s), {'FAILED' if failed else 'ok'}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

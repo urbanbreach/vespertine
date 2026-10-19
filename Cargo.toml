@@ -16,6 +16,7 @@ members = [
     "crates/vespertine_platform",
     "crates/vespertine_refineable",
     "crates/vespertine_reqwest_client",
+    "crates/vespertine_scenes",
     "crates/vespertine_scheduler",
     "crates/vespertine_shared_string",
     "crates/vespertine_sum_tree",
@@ -577,6 +578,9 @@ path = "crates/vespertine_refineable"
 
 [workspace.dependencies.vespertine_reqwest_client]
 path = "crates/vespertine_reqwest_client"
+
+[workspace.dependencies.vespertine_scenes]
+path = "crates/vespertine_scenes"
 
 [workspace.dependencies.vespertine_scheduler]
 path = "crates/vespertine_scheduler"

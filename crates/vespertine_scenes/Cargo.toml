@@ -1,0 +1,23 @@
+[package]
+name = "vespertine_scenes"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "vsp-scene-runner"
+path = "src/bin/vsp-scene-runner.rs"
+
+[dependencies]
+vespertine = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
+inventory.workspace = true
+libc.workspace = true

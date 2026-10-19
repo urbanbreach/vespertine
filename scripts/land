@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Land the current worktree branch (work/<owner>) onto main.
+#
+# Takes the exclusive landing lock shared by all worktrees, rebases the branch onto main, runs the
+# landing gates, fast-forwards main in the main checkout and prints the landed commit.
+set -euo pipefail
+
+MAIN_CHECKOUT="$HOME/Projects/vespertine"
+LOCK_FILE="$MAIN_CHECKOUT/.git/vespertine-land.lock"
+
+export RUSTC_WRAPPER="$HOME/Projects/vespertine-cleanroom/tools/bin/sccache"
+export SCCACHE_DIR="$HOME/Projects/vespertine-cleanroom/tools/sccache-cache"
+export SCCACHE_CACHE_SIZE=80G
+
+die() { echo "land: $*" >&2; exit 1; }
+
+worktree=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git worktree"
+[ "$worktree" != "$MAIN_CHECKOUT" ] || die "run inside your worktree (.worktrees/<owner>), not the main checkout"
+branch=$(git -C "$worktree" symbolic-ref --short HEAD 2>/dev/null) || die "detached HEAD; check out work/<owner>"
+case "$branch" in
+    work/?*) ;;
+    *) die "branch is '$branch'; landing requires a work/<owner> branch" ;;
+esac
+[ -z "$(git -C "$worktree" status --porcelain)" ] || die "uncommitted changes; commit them first"
+
+cd "$worktree"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "land: waiting for the landing lock (another worktree is landing)..." >&2
+    flock 9
+fi
+
+echo "land: rebasing $branch onto main"
+if ! git rebase main; then
+    echo "land: rebase onto main has conflicts. Resolve them, 'git rebase --continue', then run ./scripts/land again." >&2
+    echo "land: to give up instead: git rebase --abort" >&2
+    exit 1
+fi
+
+if [ "$(git rev-parse main)" = "$(git rev-parse HEAD)" ]; then
+    die "nothing to land: $branch is identical to main"
+fi
+
+echo "land: gate: cargo fmt --all --check"
+cargo fmt --all --check
+echo "land: gate: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
+echo "land: gate: cargo test --workspace"
+cargo test --workspace
+echo "land: gate: ./scripts/check-features"
+./scripts/check-features
+
+# main moved while the gates ran only if someone bypassed the lock; refuse rather than land untested code.
+git merge-base --is-ancestor main HEAD || die "main moved during the gates; run ./scripts/land again"
+
+echo "land: fast-forwarding main"
+git -C "$MAIN_CHECKOUT" merge --ff-only "$branch"
+echo "land: landed $(git -C "$MAIN_CHECKOUT" log -1 --format='%h %s' main)"

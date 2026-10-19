@@ -7267,6 +7267,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vespertine_scenes"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "libc",
+ "vespertine",
+ "vespertine_platform",
+]
+
+[[package]]
 name = "vespertine_scheduler"
 version = "0.1.0"
 dependencies = [
