@@ -79,8 +79,8 @@ pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames
 mod glyph_blur_tests;
 #[cfg(test)]
 mod key_tests;
-mod pointer;
 mod lifecycle;
+mod pointer;
 mod present;
 mod prompts;
 mod text_input_intent;
