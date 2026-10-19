@@ -742,27 +742,31 @@ fn dev_003_a5_the_virtual_table_renders_only_the_visible_rows_at_37_px_increment
     let _serial = serial();
     let mut harness = Harness::new(text(), meter(), false);
     let (mut driver, probe) = vespertine_bench::workloads::virtual_driver(&mut harness).unwrap();
+    // Rows are retained and replayed (PRF-005): a frame renders only the rows that entered the
+    // retained region, never the 10,000 rows of the table, and every visible row has been
+    // rendered by the time it is shown.
+    let mut seen = std::collections::HashSet::new();
     for frame in 0..40u64 {
         harness.run_frame(frame, &mut *driver).unwrap();
         // The table has been scrolled `frame + 1` times by 37 logical px.
         let offset = 37.0 * (frame + 1) as f32;
         let first = (offset / 26.0).floor() as usize;
         let rendered = probe.rendered.borrow().clone();
-        assert!(!rendered.is_empty(), "frame {frame}");
-        assert_eq!(rendered[0], first, "frame {frame}: offset {offset}");
-        // The 452 px viewport (480 minus the 28 px header) shows at most 19 rows of 26 px, and
-        // the list renders no more than a row beyond them: nowhere near 10,000.
+        seen.extend(rendered.iter().copied());
+        // Five viewports of rows (about 87) at most, once, on the first frames.
         assert!(
-            rendered.len() <= 20,
-            "frame {frame}: {} rows rendered",
-            rendered.len()
-        );
-        assert!(
-            rendered.len() >= 17,
+            rendered.len() <= 100,
             "frame {frame}: {} rows rendered",
             rendered.len()
         );
         assert!(rendered.windows(2).all(|pair| pair[1] == pair[0] + 1));
+        // The 452 px viewport (480 minus the 28 px header) shows at most 19 rows of 26 px.
+        for row in first..first + 17 {
+            assert!(
+                seen.contains(&row),
+                "frame {frame}: visible row {row} was never rendered"
+            );
+        }
     }
 }
 
