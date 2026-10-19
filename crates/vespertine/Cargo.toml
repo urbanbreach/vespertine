@@ -206,6 +206,14 @@ path = "examples/inert_elements.rs"
 required-features = ["test-support"]
 
 [[example]]
+name = "motion_retarget"
+path = "examples/motion_retarget.rs"
+
+[[example]]
+name = "presence_list"
+path = "examples/presence_list.rs"
+
+[[example]]
 name = "move_entity_between_windows"
 path = "examples/move_entity_between_windows.rs"
 
@@ -362,3 +370,7 @@ path = "examples/responsive_layout.rs"
 [[example]]
 name = "image_treatments"
 path = "examples/image_treatments.rs"
+
+[[example]]
+name = "animation_clock"
+path = "examples/animation_clock.rs"

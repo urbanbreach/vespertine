@@ -437,6 +437,15 @@ pub trait Platform: 'static {
         None
     }
 
+    /// Reads the system's reduced-motion preference. The returned task performs any
+    /// blocking or IPC work off the foreground and resolves to `true` when the system asks
+    /// for reduced motion. Platforms without such a setting, or whose setting is missing or
+    /// unreadable, resolve to `false` (no preference). On Linux this is the desktop settings
+    /// portal's `reduced-motion` key; macOS and Windows report no preference.
+    fn system_reduced_motion(&self) -> Task<bool> {
+        Task::ready(false)
+    }
+
     fn open_url(&self, url: &str);
     fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>)>);
     fn register_url_scheme(&self, url: &str) -> Task<Result<()>>;

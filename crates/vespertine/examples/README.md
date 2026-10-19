@@ -32,6 +32,8 @@ cargo run -p vespertine --example hello_world
 - `data_table` combines virtualized list rendering with table-style rows and a
   custom scrollbar.
 - `drag_drop` shows draggable elements and drop targets.
+- `drag_reorder` reorders a scrolled, padded list with a gap preview, edge
+  autoscroll and cleanup when the drag is released outside the list.
 - `focus_visible` demonstrates keyboard-visible focus styling.
 - `mouse_pressure` demonstrates pressure-sensitive pointer input where supported.
 - `pane_group` composes collapsible, resizable side and bottom panes around a
@@ -50,6 +52,10 @@ cargo run -p vespertine --example hello_world
 - `image` shows local and remote image loading, image sizing, and asset setup.
 - `image_gallery` demonstrates image caching and loading remote images.
 - `image_loading` shows image loading states and asset loading.
+- `motion_retarget` reverses an input mid-flight (route glide) while typing and
+  resizing an unrelated pane (reflow glide, declarative width track).
+- `presence_list` removes rows of a virtualized list with exit animations and shows that
+  offscreen exiting rows still finish (prints PASS and exits on its own).
 - `painting` demonstrates custom drawing with paths and canvas.
 - `svg` shows SVG rendering.
 

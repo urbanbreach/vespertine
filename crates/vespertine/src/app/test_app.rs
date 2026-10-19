@@ -499,11 +499,13 @@ impl<V: 'static + Render> TestAppWindow<V> {
         self.background_executor.run_until_parked();
     }
 
-    /// Force a redraw of the window.
+    /// Force a redraw of the window: every view is constructed and painted again instead of
+    /// replaying the retained output of the previous frame (PRF-001).
     pub fn draw(&mut self) {
         let mut app = self.app.borrow_mut();
         let any_handle: AnyWindowHandle = self.handle.into();
         app.update_window(any_handle, |_, window, cx| {
+            window.refresh();
             window.draw(cx).clear(cx);
         })
         .unwrap();

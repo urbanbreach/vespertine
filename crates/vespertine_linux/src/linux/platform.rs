@@ -1104,6 +1104,19 @@ impl Platform for LinuxPlatform {
         Some(self.with_common(|common| common.button_layout))
     }
 
+    fn system_reduced_motion(&self) -> Task<bool> {
+        #[cfg(any(feature = "wayland", feature = "x11"))]
+        {
+            self.background_executor()
+                .spawn(crate::linux::xdg_desktop_portal::read_reduced_motion())
+        }
+        // Headless builds have no desktop session and therefore no portal.
+        #[cfg(not(any(feature = "wayland", feature = "x11")))]
+        {
+            Task::ready(false)
+        }
+    }
+
     fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
         Task::ready(Err(anyhow!("register_url_scheme unimplemented")))
     }

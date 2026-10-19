@@ -59,6 +59,7 @@ pub(crate) struct TestPlatform {
     quit_requests: Cell<usize>,
     pub(crate) app_lifecycle_callback: RefCell<Option<Box<dyn FnMut(AppLifecyclePhase)>>>,
     pub(crate) memory_warning_callback: RefCell<Option<Box<dyn FnMut()>>>,
+    pub(crate) system_reduced_motion: Cell<bool>,
 }
 
 #[derive(Clone)]
@@ -237,6 +238,7 @@ impl TestPlatform {
             quit_requests: Cell::new(0),
             app_lifecycle_callback: Default::default(),
             memory_warning_callback: Default::default(),
+            system_reduced_motion: Cell::new(false),
         })
     }
 
@@ -382,6 +384,11 @@ impl TestPlatform {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn did_prompt_for_new_path(&self) -> bool {
         !self.prompts.borrow().new_path.is_empty()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn active_cursor_style(&self) -> crate::CursorStyle {
+        *self.active_cursor.lock()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -594,6 +601,10 @@ impl Platform for TestPlatform {
 
     fn window_appearance(&self) -> WindowAppearance {
         WindowAppearance::Light
+    }
+
+    fn system_reduced_motion(&self) -> Task<bool> {
+        Task::ready(self.system_reduced_motion.get())
     }
 
     fn open_url(&self, url: &str) {

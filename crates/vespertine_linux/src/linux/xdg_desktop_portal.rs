@@ -183,6 +183,19 @@ impl EventSource for XDPEventSource {
     }
 }
 
+/// Reads `org.freedesktop.appearance` / `reduced-motion` from the settings portal. The key is
+/// `1` when the user prefers reduced motion; a missing portal, key or unreadable value reads as
+/// no preference.
+pub async fn read_reduced_motion() -> bool {
+    let Ok(settings) = Settings::new().await else {
+        return false;
+    };
+    settings
+        .read::<u32>("org.freedesktop.appearance", "reduced-motion")
+        .await
+        .is_ok_and(|value| value == 1)
+}
+
 fn window_appearance_from_color_scheme(cs: ColorScheme) -> WindowAppearance {
     match cs {
         ColorScheme::PreferDark => WindowAppearance::Dark,

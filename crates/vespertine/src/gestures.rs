@@ -1057,12 +1057,14 @@ impl VelocityTracker {
 
     /// The velocity at the newest sample, in pixels per second.
     ///
-    /// Fits a second-degree polynomial by least squares over the trailing
-    /// [`VELOCITY_WINDOW`] and takes its derivative at the newest sample,
-    /// like Flutter's `VelocityTracker` and Android's `lsq2` strategy. An
-    /// endpoint difference over the same window would report the window's
-    /// *average* speed, which for a flick — still accelerating at lift-off —
-    /// is roughly half the speed the finger actually had at release.
+    /// Over the trailing [`VELOCITY_WINDOW`] two estimates are formed per
+    /// axis: the endpoint average (oldest to newest sample) and the
+    /// derivative at the newest sample of a least-squares second-degree
+    /// polynomial, like Flutter's `VelocityTracker` and Android's `lsq2`
+    /// strategy. [`select_release_velocity`] then combines them: the endpoint
+    /// average is stable but reports the window's *average* speed (roughly
+    /// half the lift-off speed of an accelerating flick), while the fit tracks
+    /// lift-off speed but a noisy, easing-off tail can cancel or reverse it.
     fn velocity(&self) -> Point<f32> {
         let Some((newest_time, _)) = self.samples.back() else {
             return Point::default();
@@ -1092,18 +1094,50 @@ impl VelocityTracker {
             ((values.first().copied().unwrap_or(0.) - values.last().copied().unwrap_or(0.))
                 / elapsed) as f32
         };
-        if times_seconds.len() < 3 {
-            return point(endpoint_estimate(&horizontal), endpoint_estimate(&vertical));
-        }
-        point(
-            quadratic_velocity_at_newest(&times_seconds, &horizontal).map_or_else(
-                || endpoint_estimate(&horizontal),
-                |velocity| velocity as f32,
-            ),
-            quadratic_velocity_at_newest(&times_seconds, &vertical)
-                .map_or_else(|| endpoint_estimate(&vertical), |velocity| velocity as f32),
+        let fit_estimate = |values: &[f64]| -> Option<f32> {
+            if times_seconds.len() < 3 {
+                return None;
+            }
+            quadratic_velocity_at_newest(&times_seconds, values).map(|velocity| velocity as f32)
+        };
+        select_release_velocity_2d(
+            point(endpoint_estimate(&horizontal), endpoint_estimate(&vertical)),
+            point(fit_estimate(&horizontal), fit_estimate(&vertical)),
         )
     }
+}
+
+/// Chooses one axis's release velocity from the endpoint-average estimate and
+/// the quadratic-fit estimate of the same sample window.
+///
+/// Without a usable fit the endpoint estimate is used. When the estimates
+/// have strictly opposite signs the endpoint estimate wins, since the fit has
+/// been dominated by a noisy tail; otherwise (same sign, or either zero) the
+/// estimate with the greater magnitude wins and keeps its sign, so a zero
+/// endpoint preserves the fit and a zero fit preserves the endpoint.
+pub(crate) fn select_release_velocity(endpoint: f32, fit: Option<f32>) -> f32 {
+    let Some(fit) = fit else {
+        return endpoint;
+    };
+    if (endpoint > 0. && fit < 0.) || (endpoint < 0. && fit > 0.) {
+        endpoint
+    } else if fit.abs() > endpoint.abs() {
+        fit
+    } else {
+        endpoint
+    }
+}
+
+/// Applies [`select_release_velocity`] independently to the horizontal and
+/// vertical estimates, before any axis locking.
+pub(crate) fn select_release_velocity_2d(
+    endpoint: Point<f32>,
+    fit: Point<Option<f32>>,
+) -> Point<f32> {
+    point(
+        select_release_velocity(endpoint.x, fit.x),
+        select_release_velocity(endpoint.y, fit.y),
+    )
 }
 
 /// Least-squares fit of `value = a0 + a1·t + a2·t²` returning `a1`: the
@@ -2059,6 +2093,197 @@ mod tests {
             "pre-pause motion leaked into the estimate: {} px/s",
             velocity.y
         );
+    }
+
+    #[test]
+    fn release_velocity_selection_rule() {
+        // No usable fit: the endpoint estimate.
+        assert_eq!(select_release_velocity(500., None), 500.);
+        assert_eq!(select_release_velocity(-300., None), -300.);
+        assert_eq!(select_release_velocity(0., None), 0.);
+        // Endpoint zero preserves the fit.
+        assert_eq!(select_release_velocity(0., Some(120.)), 120.);
+        // Strictly opposite signs: the endpoint wins whatever the magnitude.
+        assert_eq!(select_release_velocity(500., Some(-200.)), 500.);
+        assert_eq!(select_release_velocity(-400., Some(300.)), -400.);
+        assert_eq!(select_release_velocity(100., Some(-900.)), 100.);
+        // Same sign: the faster estimate, keeping its sign.
+        assert_eq!(select_release_velocity(500., Some(800.)), 800.);
+        assert_eq!(select_release_velocity(500., Some(300.)), 500.);
+        assert_eq!(select_release_velocity(-400., Some(-700.)), -700.);
+        assert_eq!(select_release_velocity(-400., Some(-100.)), -400.);
+        // Fit zero preserves the endpoint.
+        assert_eq!(select_release_velocity(500., Some(0.)), 500.);
+        assert_eq!(select_release_velocity(-500., Some(0.)), -500.);
+        assert_eq!(select_release_velocity(0., Some(0.)), 0.);
+    }
+
+    #[test]
+    fn release_velocity_without_a_fit_uses_the_endpoint() {
+        // Two samples: no fit exists, so the endpoint average is reported.
+        let mut tracker = VelocityTracker::default();
+        let start = Instant::now();
+        tracker.push(start, point(px(0.), px(100.)));
+        tracker.push(start + Duration::from_millis(20), point(px(0.), px(80.)));
+        let velocity = tracker.velocity();
+        assert!((velocity.y + 1000.).abs() < 0.5, "got {velocity:?}");
+
+        // Three samples at the same instant: the normal equations are
+        // singular and the (zero) endpoint estimate stands.
+        let mut tracker = VelocityTracker::default();
+        for y in [100., 90., 80.] {
+            tracker.push(start, point(px(0.), px(y)));
+        }
+        assert_eq!(tracker.velocity(), Point::default());
+    }
+
+    #[test]
+    fn release_velocity_axes_are_selected_independently() {
+        let selected =
+            select_release_velocity_2d(point(500., -300.), point(Some(-200.), Some(-600.)));
+        assert_eq!(selected, point(500., -600.));
+    }
+
+    /// Samples of an upward flick that eases off and wobbles back at the
+    /// end. The quadratic fit alone has a positive (downward) derivative at
+    /// the newest sample, while the finger travelled 147 px upward.
+    const EASING_OFF_FLICK: [(u64, f32); 7] = [
+        (0, 300.),
+        (16, 260.),
+        (32, 220.),
+        (48, 180.),
+        (64, 150.),
+        (80, 152.),
+        (96, 153.),
+    ];
+
+    fn feed_flick(
+        recognizer: &mut TouchGestureRecognizer,
+        origin: Instant,
+        samples: &[(u64, f32)],
+    ) -> Vec<RecognizedTouchGesture> {
+        let touch = TouchId(1);
+        let mut recognized = Vec::new();
+        for (index, &(millis, y)) in samples.iter().enumerate() {
+            let phase = if index == 0 {
+                TouchPhase::Started
+            } else {
+                TouchPhase::Moved
+            };
+            recognized.extend(recognizer.handle_event_at(
+                &touch_event(touch, phase, 100., y),
+                origin + Duration::from_millis(millis),
+            ));
+        }
+        recognized
+    }
+
+    #[test]
+    fn easing_off_flick_whose_fit_reverses_still_flings_in_travel_direction() {
+        let origin = Instant::now();
+        let mut reference = VelocityTracker::default();
+        for &(millis, y) in &EASING_OFF_FLICK {
+            reference.push(
+                origin + Duration::from_millis(millis),
+                point(px(100.), px(y)),
+            );
+        }
+        // The fit alone points against the travel; the endpoint does not.
+        let (times, ys): (Vec<f64>, Vec<f64>) = EASING_OFF_FLICK
+            .iter()
+            .map(|&(millis, y)| ((millis as f64 - 96.) / 1000., f64::from(y)))
+            .unzip();
+        let fit = quadratic_velocity_at_newest(&times, &ys).expect("fit exists");
+        assert!(fit > 0., "the scenario must have a reversed fit, got {fit}");
+        let endpoint_speed = (300. - 153.) / 0.096;
+
+        let mut recognizer = TouchGestureRecognizer::new(GestureTuning::default());
+        feed_flick(&mut recognizer, origin, &EASING_OFF_FLICK);
+        recognizer.handle_event_at(
+            &touch_event(TouchId(1), TouchPhase::Ended, 100., 153.),
+            origin + Duration::from_millis(96),
+        );
+        assert!(recognizer.has_momentum());
+        let momentum = recognizer.momentum.as_ref().expect("momentum");
+        assert!(
+            momentum.speed >= endpoint_speed - 0.5,
+            "speed {} below endpoint speed {endpoint_speed}",
+            momentum.speed
+        );
+        assert!(momentum.direction.y < 0. && momentum.direction.x.abs() < 1e-3);
+        assert!((reference.velocity().y + momentum.speed).abs() < 0.5);
+
+        let mut time = origin + Duration::from_millis(96);
+        let mut emitted = 0;
+        while recognizer.has_momentum() {
+            time += Duration::from_millis(16);
+            if let Some(RecognizedTouchGesture::Scroll(scroll)) = recognizer.tick_momentum_at(time)
+                && scroll.touch_phase == TouchPhase::Moved
+            {
+                emitted += 1;
+                assert!(
+                    scroll.delta.pixel_delta(px(16.)).y <= px(0.),
+                    "momentum scrolled against the finger's travel"
+                );
+            }
+        }
+        assert!(emitted > 0, "no momentum scroll events were emitted");
+    }
+
+    #[test]
+    fn slow_drag_below_the_minimum_velocity_ends_without_momentum() {
+        let mut recognizer = TouchGestureRecognizer::new(GestureTuning::default());
+        let origin = Instant::now();
+        // 15 px to pass the slop, then 0.3 px every 30 ms (10 px/s).
+        let mut samples = vec![(0, 300.), (30, 285.)];
+        for step in 1..=6u64 {
+            samples.push((30 + step * 30, 285. - step as f32 * 0.3));
+        }
+        let last = samples.last().copied().expect("samples");
+        feed_flick(&mut recognizer, origin, &samples);
+        recognizer.handle_event_at(
+            &touch_event(TouchId(1), TouchPhase::Ended, 100., last.1),
+            origin + Duration::from_millis(last.0),
+        );
+        assert!(!recognizer.has_momentum());
+    }
+
+    #[test]
+    fn release_repeating_the_last_location_does_not_dilute_the_velocity() {
+        let origin = Instant::now();
+        let mut speeds = Vec::new();
+        for release_after in [0, 30] {
+            let mut recognizer = TouchGestureRecognizer::new(GestureTuning::default());
+            let samples = [(0, 300.), (16, 260.), (32, 220.), (48, 180.), (64, 140.)];
+            feed_flick(&mut recognizer, origin, &samples);
+            recognizer.handle_event_at(
+                &touch_event(TouchId(1), TouchPhase::Ended, 100., 140.),
+                origin + Duration::from_millis(64 + release_after),
+            );
+            speeds.push(recognizer.momentum.as_ref().expect("momentum").speed);
+        }
+        assert!((speeds[0] - speeds[1]).abs() < 0.01, "diluted: {speeds:?}");
+        // 160 px in 64 ms.
+        assert!((speeds[0] - 2500.).abs() < 1., "got {speeds:?}");
+    }
+
+    #[test]
+    fn release_after_the_stopped_finger_gap_yields_no_fling() {
+        let origin = Instant::now();
+        let samples = [(0, 300.), (16, 260.), (32, 220.), (48, 180.), (64, 140.)];
+        for (release_after, flings) in [(40, true), (41, false)] {
+            let mut recognizer = TouchGestureRecognizer::new(GestureTuning::default());
+            feed_flick(&mut recognizer, origin, &samples);
+            recognizer.handle_event_at(
+                &touch_event(TouchId(1), TouchPhase::Ended, 100., 140.),
+                origin + Duration::from_millis(64 + release_after),
+            );
+            assert_eq!(
+                recognizer.has_momentum(),
+                flings,
+                "after {release_after} ms"
+            );
+        }
     }
 
     #[test]

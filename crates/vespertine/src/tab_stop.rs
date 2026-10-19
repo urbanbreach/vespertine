@@ -75,7 +75,13 @@ impl Default for TabStopMap {
 }
 
 impl TabStopMap {
+    /// Registers a tab stop. A focus handle yields exactly one tab stop per frame: the first
+    /// insertion of a given focus id decides its position and later insertions of the same id
+    /// are ignored entirely (they add no node and are not recorded in the insertion history).
     pub fn insert(&mut self, focus_handle: &FocusHandle) {
+        if self.by_id.contains_key(&focus_handle.id) {
+            return;
+        }
         self.insertion_history
             .push(TabStopOperation::Insert(focus_handle.clone()));
         let mut path = self.current_path.clone();
@@ -87,6 +93,83 @@ impl TabStopMap {
         };
         self.by_id.insert(focus_handle.id, order.clone());
         self.order.insert_or_replace(order, ());
+    }
+
+    /// Discards every operation recorded after `paint_index` (a value previously returned by
+    /// [`Self::paint_index`]), restoring the order tree, the identity index and the group
+    /// path to exactly the state they had at that point.
+    pub fn truncate(&mut self, paint_index: usize) {
+        if paint_index >= self.insertion_history.len() {
+            return;
+        }
+        let mut retained = std::mem::take(&mut self.insertion_history);
+        retained.truncate(paint_index);
+        self.clear();
+        self.replay(&retained);
+    }
+
+    /// Traversal restricted to the tab stops accepted by `accept`; see
+    /// [`Window::focus_next_among`](crate::Window::focus_next_among).
+    pub fn next_among(
+        &self,
+        focused_id: Option<&FocusId>,
+        accept: &mut dyn FnMut(FocusId) -> bool,
+    ) -> Option<FocusHandle> {
+        self.step_among(focused_id, accept, true)
+    }
+
+    /// Backward counterpart of [`Self::next_among`].
+    pub fn prev_among(
+        &self,
+        focused_id: Option<&FocusId>,
+        accept: &mut dyn FnMut(FocusId) -> bool,
+    ) -> Option<FocusHandle> {
+        self.step_among(focused_id, accept, false)
+    }
+
+    fn step_among(
+        &self,
+        focused_id: Option<&FocusId>,
+        accept: &mut dyn FnMut(FocusId) -> bool,
+        forward: bool,
+    ) -> Option<FocusHandle> {
+        // Every node is visited at most once per call, so the search terminates after one
+        // cycle even when every candidate is rejected.
+        let nodes: Vec<&TabStopNode> = self.order.iter().collect();
+        let count = nodes.len();
+        if count == 0 {
+            return None;
+        }
+        let current = focused_id.and_then(|id| {
+            let node = self.by_id.get(id)?;
+            let position = nodes.iter().position(|candidate| {
+                candidate.node_insertion_index == node.node_insertion_index
+            })?;
+            accept(*id).then_some(position)
+        });
+
+        // Offsets 1..=count from the starting position; with an accepted current focus the
+        // walk begins after it and finishes on it, otherwise it covers the whole order from
+        // the first (or last) stop inclusive.
+        for step in 0..count {
+            let position = match (current, forward) {
+                (Some(current), true) => (current + 1 + step) % count,
+                (Some(current), false) => (current + count - 1 - step) % count,
+                (None, true) => step,
+                (None, false) => count - 1 - step,
+            };
+            let node = nodes[position];
+            if !node.tab_stop {
+                continue;
+            }
+            let Some(handle) = self.focus_handle_for_order(node) else {
+                continue;
+            };
+            if accept(handle.id) {
+                return Some(handle);
+            }
+        }
+        None
     }
 
     pub fn begin_group(&mut self, tab_index: isize) {
@@ -320,6 +403,7 @@ mod tests {
     use itertools::Itertools as _;
     use parking_lot::RwLock;
 
+    use super::TabStopOperation;
     use crate::{FocusHandle, FocusId, FocusMap, TabStopMap};
     use std::sync::Arc;
 
@@ -615,5 +699,198 @@ mod tests {
             .tab_stop(3, 0)
             .tab_stop(4, 1)
             .assert();
+    }
+
+    fn stops(count: usize) -> (Arc<RwLock<FocusMap>>, Vec<FocusHandle>) {
+        let focus_map = Arc::new(RwLock::new(FocusMap::default()));
+        let handles = (0..count)
+            .map(|_| FocusHandle::new(&focus_map).tab_stop(true))
+            .collect();
+        (focus_map, handles)
+    }
+
+    fn map_of(handles: &[FocusHandle]) -> TabStopMap {
+        let mut map = TabStopMap::default();
+        for handle in handles {
+            map.insert(handle);
+        }
+        map
+    }
+
+    fn next_among(
+        map: &TabStopMap,
+        current: Option<&FocusHandle>,
+        allowed: &[&FocusHandle],
+    ) -> Option<FocusId> {
+        let ids: Vec<FocusId> = allowed.iter().map(|handle| handle.id).collect();
+        map.next_among(current.map(|handle| &handle.id), &mut |id| {
+            ids.contains(&id)
+        })
+        .map(|handle| handle.id)
+    }
+
+    fn prev_among(
+        map: &TabStopMap,
+        current: Option<&FocusHandle>,
+        allowed: &[&FocusHandle],
+    ) -> Option<FocusId> {
+        let ids: Vec<FocusId> = allowed.iter().map(|handle| handle.id).collect();
+        map.prev_among(current.map(|handle| &handle.id), &mut |id| {
+            ids.contains(&id)
+        })
+        .map(|handle| handle.id)
+    }
+
+    #[test]
+    fn subset_traversal_wraps_inside_the_accepted_stops() {
+        let (_map, handles) = stops(5);
+        let map = map_of(&handles);
+        let allowed = [&handles[1], &handles[3]];
+
+        let forward_1 = next_among(&map, Some(&handles[1]), &allowed);
+        assert_eq!(forward_1, Some(handles[3].id));
+        let forward_2 = next_among(&map, Some(&handles[3]), &allowed);
+        assert_eq!(forward_2, Some(handles[1].id));
+        let backward_1 = prev_among(&map, Some(&handles[1]), &allowed);
+        assert_eq!(backward_1, Some(handles[3].id));
+        let backward_2 = prev_among(&map, Some(&handles[3]), &allowed);
+        assert_eq!(backward_2, Some(handles[1].id));
+    }
+
+    #[test]
+    fn subset_traversal_start_rules_and_degenerate_sets() {
+        let (_map, handles) = stops(5);
+        let map = map_of(&handles);
+        let allowed = [&handles[1], &handles[3]];
+
+        // No current focus: forward selects the first accepted, backward the last accepted.
+        assert_eq!(next_among(&map, None, &allowed), Some(handles[1].id));
+        assert_eq!(prev_among(&map, None, &allowed), Some(handles[3].id));
+
+        // Rejected current focus behaves the same way.
+        assert_eq!(
+            next_among(&map, Some(&handles[2]), &allowed),
+            Some(handles[1].id)
+        );
+        assert_eq!(
+            prev_among(&map, Some(&handles[2]), &allowed),
+            Some(handles[3].id)
+        );
+
+        // Nothing accepted: no change and no loop.
+        assert_eq!(next_among(&map, Some(&handles[2]), &[]), None);
+        assert_eq!(prev_among(&map, None, &[]), None);
+
+        // A single accepted stop equal to the current focus selects itself; a different one
+        // selects that stop.
+        assert_eq!(
+            next_among(&map, Some(&handles[3]), &[&handles[3]]),
+            Some(handles[3].id)
+        );
+        assert_eq!(
+            prev_among(&map, Some(&handles[3]), &[&handles[3]]),
+            Some(handles[3].id)
+        );
+        assert_eq!(
+            next_among(&map, Some(&handles[3]), &[&handles[0]]),
+            Some(handles[0].id)
+        );
+
+        // Hidden handles are absent because they were never inserted into the rendered map.
+        let (_map2, all) = stops(3);
+        let hidden_map = map_of(&all[..2]);
+        assert_eq!(
+            next_among(&hidden_map, None, &[&all[2]]),
+            None,
+            "an unpainted handle is never selected"
+        );
+    }
+
+    #[test]
+    fn subset_traversal_follows_tab_indices_and_groups() {
+        let focus_map = Arc::new(RwLock::new(FocusMap::default()));
+        let a = FocusHandle::new(&focus_map).tab_stop(true).tab_index(2);
+        let b = FocusHandle::new(&focus_map).tab_stop(true).tab_index(0);
+        let c = FocusHandle::new(&focus_map).tab_stop(true).tab_index(1);
+        let in_group = FocusHandle::new(&focus_map).tab_stop(true).tab_index(0);
+        let mut map = TabStopMap::default();
+        map.insert(&a);
+        map.insert(&b);
+        map.insert(&c);
+        map.begin_group(1);
+        map.insert(&in_group);
+        map.end_group();
+        // Order: b (0), then c (1) and the group (1, 0) after it, then a (2).
+        let all = [&a, &b, &c, &in_group];
+        assert_eq!(next_among(&map, Some(&b), &all), Some(c.id));
+        assert_eq!(next_among(&map, Some(&c), &all), Some(in_group.id));
+        assert_eq!(next_among(&map, Some(&in_group), &all), Some(a.id));
+        assert_eq!(next_among(&map, Some(&a), &all), Some(b.id));
+        assert_eq!(
+            prev_among(&map, Some(&a), &[&a, &b, &in_group]),
+            Some(in_group.id)
+        );
+    }
+
+    #[test]
+    fn one_focus_handle_is_one_tab_stop() {
+        let (_map, handles) = stops(3);
+        let mut map = TabStopMap::default();
+        map.insert(&handles[0]);
+        map.insert(&handles[1]);
+        // The same handle tracked by a wrapper and by its child.
+        map.insert(&handles[1]);
+        map.insert(&handles[2]);
+
+        assert_eq!(map.tab_stop_count(), 3);
+        assert_eq!(map.insertion_history.len(), 3);
+        assert_eq!(
+            map.prev(Some(&handles[2].id)).map(|h| h.id),
+            Some(handles[1].id)
+        );
+        assert_eq!(
+            map.prev(Some(&handles[1].id)).map(|h| h.id),
+            Some(handles[0].id)
+        );
+        assert_eq!(
+            map.next(Some(&handles[0].id)).map(|h| h.id),
+            Some(handles[1].id)
+        );
+    }
+
+    #[test]
+    fn duplicate_handles_survive_replay_and_rollback() {
+        let (_map, handles) = stops(3);
+        let mut map = TabStopMap::default();
+        map.insert(&handles[0]);
+        let checkpoint = map.paint_index();
+        map.insert(&handles[1]);
+        map.insert(&handles[1]);
+        map.insert(&handles[2]);
+        let recorded: Vec<TabStopOperation> = map.insertion_history[checkpoint..].to_vec();
+
+        // Replaying the recorded operations into a fresh frame keeps one stop per handle.
+        let mut replayed = TabStopMap::default();
+        replayed.insert(&handles[0]);
+        replayed.replay(&recorded);
+        replayed.replay(&recorded);
+        assert_eq!(replayed.tab_stop_count(), 3);
+        assert_eq!(replayed.insertion_history.len(), 3);
+
+        // Rolling back a speculative paint restores the exact earlier state.
+        map.truncate(checkpoint);
+        assert_eq!(map.tab_stop_count(), 1);
+        assert_eq!(map.insertion_history.len(), 1);
+        assert_eq!(
+            map.next(Some(&handles[0].id)).map(|h| h.id),
+            Some(handles[0].id)
+        );
+        map.insert(&handles[1]);
+        map.insert(&handles[1]);
+        assert_eq!(map.tab_stop_count(), 2);
+        assert_eq!(
+            map.next(Some(&handles[0].id)).map(|h| h.id),
+            Some(handles[1].id)
+        );
     }
 }

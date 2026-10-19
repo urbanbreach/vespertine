@@ -25,6 +25,8 @@ pub struct Animation {
     /// The maximum number of times per second this animation re-renders.
     /// When `None`, the animation re-renders on every frame.
     pub max_fps: Option<f32>,
+    /// The delay applied once before the first cycle. Progress is 0 until it has elapsed.
+    pub delay: Duration,
 }
 
 impl Animation {
@@ -37,6 +39,7 @@ impl Animation {
             synced: false,
             easing: Rc::new(linear),
             max_fps: None,
+            delay: Duration::ZERO,
         }
     }
 
@@ -47,6 +50,11 @@ impl Animation {
     }
 
     /// Set the animation to loop when it finishes, phase-locked to a clock shared by the whole [`App`].
+    ///
+    /// The phase is measured from the same epoch as [`Window::animation_phase`] and
+    /// [`App::animation_phase`], so synced animations line up with the shared animation clock's
+    /// subscribers. Unlike those, a synced animation requests a display frame on every frame
+    /// rather than renewing a lease on the shared clock.
     pub fn repeat_synced(mut self) -> Self {
         self.oneshot = false;
         self.synced = true;
@@ -70,6 +78,63 @@ impl Animation {
         self.max_fps = Some(max_fps);
         self
     }
+
+    /// Sets a delay that applies once before the first cycle. While the delay runs the
+    /// animation renders its start state and keeps requesting frames.
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
+    /// Sets the easing from a named or cubic-bezier [`crate::motion::Easing`].
+    pub fn with_easing_curve(self, easing: impl Into<crate::motion::Easing>) -> Self {
+        let easing = easing.into();
+        self.with_easing(move |t| easing.apply(t))
+    }
+
+    /// Sets a cubic-bezier easing through (0,0) and (1,1) with the given control points.
+    pub fn with_cubic_bezier(self, x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        self.with_easing_curve(crate::motion::CubicBezier::new(x1, y1, x2, y2))
+    }
+
+    /// Samples the animation `elapsed` after it started, without any clock: the deterministic
+    /// sampling used by tests and frozen scenes.
+    ///
+    /// Raw progress is 0 while `elapsed` is at most the delay and `(elapsed - delay) / duration`
+    /// afterwards (with zero duration: 0 before the delay, 1 at or after it). A one-shot
+    /// animation then holds raw progress 1; a repeating one wraps. `value` is the easing applied
+    /// to the raw progress.
+    pub fn sample(&self, elapsed: Duration) -> AnimationSample {
+        let mut raw = crate::motion::raw_progress(elapsed, self.delay, self.duration) as f32;
+        let mut finished = false;
+        if raw > 1.0 {
+            if self.oneshot {
+                finished = true;
+                raw = 1.0;
+            } else {
+                raw %= 1.0;
+            }
+        } else if raw >= 1.0 && self.oneshot {
+            finished = true;
+        }
+        AnimationSample {
+            raw_progress: raw,
+            value: (self.easing)(raw),
+            finished,
+        }
+    }
+}
+
+/// The result of [`Animation::sample`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimationSample {
+    /// Raw progress after the delay: 0 before it, then `(elapsed - delay) / duration`, held at 1
+    /// by one-shot animations and wrapped by repeating ones.
+    pub raw_progress: f32,
+    /// The animation's easing applied to the raw progress.
+    pub value: f32,
+    /// Whether a one-shot animation has reached its end.
+    pub finished: bool,
 }
 
 /// An extension trait for adding the animation wrapper to both Elements and Components
@@ -399,8 +464,9 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         window.with_element_state(global_id.unwrap(), |state, window| {
+            let now = cx.background_executor().now();
             let mut state = state.unwrap_or_else(|| AnimationState {
-                start: Instant::now(),
+                start: now,
                 animation_ix: 0,
                 delayed_frame_pending: Rc::new(Cell::new(false)),
             });
@@ -414,32 +480,34 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
                 (animation_ix, delta, true)
             } else {
                 let animation_ix = state.animation_ix;
-                let duration = self.animations[animation_ix].duration;
+                let animation = &self.animations[animation_ix];
+                let since_start = now.saturating_duration_since(state.start);
 
-                let elapsed = if self.animations[animation_ix].synced && !duration.is_zero() {
-                    let elapsed = cx.background_executor().now() - cx.synced_animation_epoch;
+                let elapsed = if animation.synced
+                    && !animation.duration.is_zero()
+                    && since_start >= animation.delay
+                {
+                    let elapsed = now.saturating_duration_since(cx.synced_animation_epoch);
                     // Reduce modulo the duration before f32 conversion, which loses sub-second precision at scale.
-                    Duration::from_nanos((elapsed.as_nanos() % duration.as_nanos()) as u64)
+                    animation.delay
+                        + Duration::from_nanos(
+                            (elapsed.as_nanos() % animation.duration.as_nanos()) as u64,
+                        )
                 } else {
-                    state.start.elapsed()
+                    since_start
                 };
-                let mut delta = elapsed.as_secs_f32() / duration.as_secs_f32();
+                let sample = animation.sample(elapsed);
 
                 let mut done = false;
-                if delta > 1.0 {
-                    if self.animations[animation_ix].oneshot {
-                        if animation_ix >= self.animations.len() - 1 {
-                            done = true;
-                        } else {
-                            state.start = Instant::now();
-                            state.animation_ix += 1;
-                        }
-                        delta = 1.0;
+                if sample.finished {
+                    if animation_ix >= self.animations.len() - 1 {
+                        done = true;
                     } else {
-                        delta %= 1.0;
+                        state.start = now;
+                        state.animation_ix += 1;
                     }
                 }
-                (animation_ix, delta, done)
+                (animation_ix, sample.raw_progress, done)
             };
             let delta = (self.animations[animation_ix].easing)(delta);
 

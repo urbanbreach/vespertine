@@ -77,12 +77,17 @@ mod retained_tests;
 pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames_disabled};
 #[cfg(test)]
 mod glyph_blur_tests;
+#[cfg(test)]
+mod key_tests;
+mod pointer;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
 
 use self::a11y::A11y;
 use self::a11y::ROOT_NODE_ID;
+pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
+use self::pointer::{PointerState, pointer_within_keyboard_slop};
 use crate::text_system::glyph_store::{
     GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
     quantize_emoji_origin, quantize_glyph_origin,
@@ -592,6 +597,13 @@ impl FocusHandle {
         }
     }
 
+    /// The identity of the element associated with this handle. Several handles cloned from
+    /// one another share the same identity, and a handle yields one tab stop however many
+    /// elements track it.
+    pub fn id(&self) -> FocusId {
+        self.id
+    }
+
     pub(crate) fn for_id(id: FocusId, handles: &Arc<RwLock<FocusMap>>) -> Option<Self> {
         let lock = handles.read();
         let focus = lock.handles.get(id)?;
@@ -815,24 +827,26 @@ impl HitboxId {
     ///
     /// See [`Hitbox::is_hovered`] for details.
     pub fn is_hovered(self, window: &Window) -> bool {
-        // If this hitbox has captured the pointer, it's always considered hovered
-        if window.captured_hitbox == Some(self) {
-            return true;
+        // While the pointer is captured only the captured hitbox reports hovered and every
+        // other hitbox reports not hovered, wherever the pointer physically is.
+        if let Some(captured) = window.captured_hitbox {
+            return captured == self;
         }
-        if window.last_input_was_keyboard() {
+        if window.last_input_was_keyboard() || window.pointer.paint_hover_suppressed {
             return false;
         }
         self.hit_test(window)
     }
 
     /// Checks if the hitbox with this ID is currently hovered, regardless of the last
-    /// input modality used.
+    /// input modality used. This is the query that drives cursor selection, so it is not
+    /// affected by wheel-scroll hover suppression; an active pointer capture still makes only
+    /// the captured hitbox hovered.
     ///
     /// See [`HitboxId::is_hovered`] for more details.
     pub(crate) fn is_hovered_ignoring_last_input(self, window: &Window) -> bool {
-        // If this hitbox has captured the pointer, it's always considered hovered
-        if window.captured_hitbox == Some(self) {
-            return true;
+        if let Some(captured) = window.captured_hitbox {
+            return captured == self;
         }
         self.hit_test(window)
     }
@@ -1099,6 +1113,7 @@ pub(crate) struct PrepaintStateIndex {
     deferred_draws_index: usize,
     dispatch_tree_index: usize,
     accessed_element_states_index: usize,
+    tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
 }
 
@@ -1143,6 +1158,7 @@ impl PrepaintStateIndex {
             accessed_element_states_index: self.accessed_element_states_index
                 - from.accessed_element_states_index
                 + to.accessed_element_states_index,
+            tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
@@ -1339,6 +1355,8 @@ pub struct Window {
     pub(crate) paint_scope: ScopeParams,
     /// The active edge fade, for the conservative fade of paths, shadows and decorations.
     pub(crate) edge_fade: Option<EdgeFade>,
+    /// Nesting depth of inert subtrees (see [`Window::with_inert`]).
+    pub(crate) inert_depth: u32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
@@ -1401,6 +1419,7 @@ pub struct Window {
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
     captured_hitbox: Option<HitboxId>,
+    pointer: PointerState,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
     #[cfg(feature = "profiler")]
@@ -2238,6 +2257,7 @@ impl Window {
             element_opacity: 1.0,
             paint_scope: ScopeParams::default(),
             edge_fade: None,
+            inert_depth: 0,
             requested_autoscroll: None,
             last_text_input_configuration: None,
             focused_text_input: None,
@@ -2292,6 +2312,7 @@ impl Window {
             client_inset: None,
             image_cache_stack: Vec::new(),
             captured_hitbox: None,
+            pointer: PointerState::default(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
             #[cfg(feature = "profiler")]
@@ -2560,6 +2581,52 @@ impl Window {
         }
 
         if let Some(handle) = self.rendered_frame.tab_stops.prev(self.focus.as_ref()) {
+            self.focus(&handle, cx)
+        }
+    }
+
+    /// Move focus to the next tab stop accepted by `accept`, wrapping inside the accepted
+    /// subset. The search walks the rendered tab order (tab indices, tab groups and insertion
+    /// order) restricted to tab stops, visiting each stop at most once. When nothing is focused,
+    /// or the focused element is rejected by `accept`, the search starts from the first tab stop
+    /// (inclusive). Focus does not change when no stop is accepted or focus is disabled.
+    pub fn focus_next_among(
+        &mut self,
+        cx: &mut App,
+        mut accept: impl FnMut(FocusId, &App) -> bool,
+    ) {
+        if !self.focus_enabled {
+            return;
+        }
+        let handle = {
+            let app: &App = cx;
+            self.rendered_frame
+                .tab_stops
+                .next_among(self.focus.as_ref(), &mut |id| accept(id, app))
+        };
+        if let Some(handle) = handle {
+            self.focus(&handle, cx)
+        }
+    }
+
+    /// Move focus to the previous tab stop accepted by `accept`; the backward counterpart of
+    /// [`Self::focus_next_among`], starting from the last tab stop (inclusive) when nothing
+    /// accepted is focused.
+    pub fn focus_prev_among(
+        &mut self,
+        cx: &mut App,
+        mut accept: impl FnMut(FocusId, &App) -> bool,
+    ) {
+        if !self.focus_enabled {
+            return;
+        }
+        let handle = {
+            let app: &App = cx;
+            self.rendered_frame
+                .tab_stops
+                .prev_among(self.focus.as_ref(), &mut |id| accept(id, app))
+        };
+        if let Some(handle) = handle {
             self.focus(&handle, cx)
         }
     }
@@ -3521,11 +3588,13 @@ impl Window {
     /// The capture is automatically released on mouse up.
     pub fn capture_pointer(&mut self, hitbox_id: HitboxId) {
         self.captured_hitbox = Some(hitbox_id);
+        // A capture by hitbox id replaces any declarative capture bound to an element identity.
+        self.pointer.captured_element = None;
     }
 
-    /// Releases any active pointer capture.
+    /// Releases any active pointer capture, declarative or by hitbox.
     pub fn release_pointer(&mut self) {
-        self.captured_hitbox = None;
+        self.clear_pointer_capture();
     }
 
     /// Returns the hitbox that has captured the pointer, if any.
@@ -3615,6 +3684,7 @@ impl Window {
             self.refresh();
         }
         let keyboard_focus_dim_painted = self.keyboard_focus_dim_active();
+        self.begin_pointer_frame(cx);
         self.invalidate_entities();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
@@ -3738,6 +3808,7 @@ impl Window {
 
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.record_entities_accessed(cx);
+        self.end_pointer_frame();
         self.reset_cursor_style(cx);
         self.refreshing = false;
         self.invalidator.set_phase(DrawPhase::None);
@@ -4019,7 +4090,11 @@ impl Window {
             tooltip_element = self.prepaint_tooltip(cx);
         }
 
-        self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
+        self.mouse_hit_test = if self.pointer.absent {
+            HitTest::default()
+        } else {
+            self.next_frame.hit_test(self.mouse_position)
+        };
 
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
@@ -4271,6 +4346,7 @@ impl Window {
             deferred_draws_index: self.next_frame.deferred_draws.len(),
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
+            tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
         }
     }
@@ -4646,6 +4722,19 @@ impl Window {
         })
     }
 
+    /// Runs `f` with the subtree marked inert when `inert` is set: elements prepainted and
+    /// painted inside still paint, but register no hitboxes, focus handles, key contexts,
+    /// input handlers, mouse, key or action listeners and no accessibility actions.
+    pub(crate) fn with_inert<R>(&mut self, inert: bool, f: impl FnOnce(&mut Self) -> R) -> R {
+        if !inert {
+            return f(self);
+        }
+        self.inert_depth += 1;
+        let result = f(self);
+        self.inert_depth -= 1;
+        result
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -4669,6 +4758,7 @@ impl Window {
             self.next_frame
                 .accessed_element_states
                 .truncate(index.accessed_element_states_index);
+            self.next_frame.tab_stops.truncate(index.tab_handle_index);
             self.text_system.truncate_layouts(index.line_layout_index);
         }
         result
@@ -6345,7 +6435,9 @@ impl Window {
             content_mask,
             behavior,
         };
-        self.next_frame.hitboxes.push(hitbox.clone());
+        if self.inert_depth == 0 {
+            self.next_frame.hitboxes.push(hitbox.clone());
+        }
         hitbox
     }
 
@@ -6363,6 +6455,9 @@ impl Window {
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn set_key_context(&mut self, context: KeyContext) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
         self.next_frame.dispatch_tree.set_key_context(context);
     }
 
@@ -6372,6 +6467,9 @@ impl Window {
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle, _: &App) {
         self.invalidator.debug_assert_prepaint();
+        if self.inert_depth > 0 {
+            return;
+        }
         if focus_handle.is_focused(self) {
             self.next_frame.focus = Some(focus_handle.id);
         }
@@ -6436,6 +6534,9 @@ impl Window {
         cx: &App,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         if focus_handle.is_focused(self) {
             let cx = self.to_async(cx);
@@ -6497,6 +6598,9 @@ impl Window {
         mut listener: impl FnMut(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         self.next_frame.mouse_listeners.push(Some(Box::new(
             move |event: &dyn Any, phase: DispatchPhase, window: &mut Window, cx: &mut App| {
@@ -6520,8 +6624,42 @@ impl Window {
         listener: impl Fn(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         self.next_frame.dispatch_tree.on_key_event(Rc::new(
+            move |event: &dyn Any, phase, window: &mut Window, cx: &mut App| {
+                if let Some(event) = event.downcast_ref::<Event>() {
+                    listener(event, phase, window, cx)
+                }
+            },
+        ));
+    }
+
+    /// Register a typed key listener at the window's dispatch root for the next frame,
+    /// independent of which element (if any) holds focus.
+    ///
+    /// Key bindings and actions are processed first and may consume the event, in which case
+    /// no root listener runs. For an unconsumed event the listeners are visited in this order:
+    /// root listeners in registration order with [`DispatchPhase::Capture`]; the focused dispatch
+    /// path's listeners in the capture phase (root to focus); the focused path's listeners in
+    /// the bubble phase (focus to root); root listeners in registration order with
+    /// [`DispatchPhase::Bubble`]. Each root listener therefore runs twice per event. Stopping
+    /// propagation prevents every later callback of the dispatch.
+    ///
+    /// Registration is frame-scoped: it is replaced on every repaint, and reused together with
+    /// a cached view whose painted output is replayed. The listener only receives events of
+    /// type `Event` (key-down or key-up).
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn on_root_key_event<Event: KeyEvent>(
+        &mut self,
+        listener: impl Fn(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        self.next_frame.dispatch_tree.on_root_key_event(Rc::new(
             move |event: &dyn Any, phase, window: &mut Window, cx: &mut App| {
                 if let Some(event) = event.downcast_ref::<Event>() {
                     listener(event, phase, window, cx)
@@ -6541,6 +6679,9 @@ impl Window {
         listener: impl Fn(&ModifiersChangedEvent, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         self.next_frame.dispatch_tree.on_modifiers_changed(Rc::new(
             move |event: &ModifiersChangedEvent, window: &mut Window, cx: &mut App| {
@@ -6669,8 +6810,35 @@ impl Window {
         // doesn't show hover highlights on the item under the mouse cursor.
         let old_modality = self.last_input_modality;
         self.last_input_modality = match &event {
-            PlatformInput::KeyDown(_) => InputModality::Keyboard,
-            PlatformInput::MouseMove(_) | PlatformInput::MouseDown(_) => InputModality::Mouse,
+            PlatformInput::KeyDown(_) => {
+                if old_modality != InputModality::Keyboard {
+                    // Remember where the pointer was when typing started; small idle pointer
+                    // jitter is measured from here and must not leave keyboard modality.
+                    self.pointer.modality_origin = self.mouse_position;
+                }
+                InputModality::Keyboard
+            }
+            PlatformInput::MouseMove(mouse_move) => {
+                if old_modality == InputModality::Keyboard
+                    && mouse_move.pressed_button.is_none()
+                    && pointer_within_keyboard_slop(
+                        mouse_move.position,
+                        self.pointer.modality_origin,
+                    )
+                {
+                    InputModality::Keyboard
+                } else {
+                    InputModality::Mouse
+                }
+            }
+            PlatformInput::MouseDown(_) => InputModality::Mouse,
+            // An external drag is driven by the pointer: hover and drop targets must resolve even
+            // when the last local input was a keystroke.
+            PlatformInput::FileDrop(
+                FileDropEvent::Entered { .. }
+                | FileDropEvent::Pending { .. }
+                | FileDropEvent::Submit { .. },
+            ) => InputModality::Mouse,
             PlatformInput::Touch(_) => InputModality::Touch,
             _ => self.last_input_modality,
         };
@@ -6999,7 +7167,12 @@ impl Window {
     }
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
-        let hit_test = self.rendered_frame.hit_test(self.mouse_position());
+        self.note_pointer_event(event, cx);
+        let hit_test = if self.pointer.absent {
+            HitTest::default()
+        } else {
+            self.rendered_frame.hit_test(self.mouse_position())
+        };
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
@@ -7051,8 +7224,8 @@ impl Window {
         }
 
         // Auto-release pointer capture on mouse up
-        if event.is::<MouseUpEvent>() && self.captured_hitbox.is_some() {
-            self.captured_hitbox = None;
+        if event.is::<MouseUpEvent>() {
+            self.clear_pointer_capture();
         }
     }
 
@@ -7334,7 +7507,19 @@ impl Window {
         dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
         cx: &mut App,
     ) {
-        // Capture phase
+        // The root listener set is snapshotted so that callbacks changing the frame (refresh,
+        // focus changes, notifications) never invalidate the iteration in progress.
+        let root_listeners = self.rendered_frame.dispatch_tree.root_key_listeners();
+
+        // Root listeners, capture phase, in registration order.
+        for key_listener in &root_listeners {
+            key_listener(event, DispatchPhase::Capture, self, cx);
+            if !cx.propagate_event {
+                return;
+            }
+        }
+
+        // Capture phase along the focused dispatch path (root to focus)
         for node_id in dispatch_path {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
 
@@ -7346,7 +7531,7 @@ impl Window {
             }
         }
 
-        // Bubble phase
+        // Bubble phase along the focused dispatch path (focus to root)
         for node_id in dispatch_path.iter().rev() {
             // Handle low level key events
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
@@ -7355,6 +7540,14 @@ impl Window {
                 if !cx.propagate_event {
                     return;
                 }
+            }
+        }
+
+        // Root listeners, bubble phase, in registration order.
+        for key_listener in &root_listeners {
+            key_listener(event, DispatchPhase::Bubble, self, cx);
+            if !cx.propagate_event {
+                return;
             }
         }
     }
@@ -7963,6 +8156,9 @@ impl Window {
         listener: impl Fn(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         self.next_frame
             .dispatch_tree
@@ -7984,6 +8180,9 @@ impl Window {
         listener: impl Fn(&dyn Any, DispatchPhase, &mut Window, &mut App) + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+        if self.inert_depth > 0 {
+            return;
+        }
 
         if condition {
             self.next_frame
@@ -8119,8 +8318,20 @@ impl Window {
 
     fn handle_active_status_change(&mut self, active: bool, cx: &mut App) {
         self.active.set(active);
+        cx.observe_active_window(self.handle.id, active);
         self.modifiers = self.platform_window.modifiers();
         self.capslock = self.platform_window.capslock();
+        // A deactivated window must not keep an internal drag (and its preview and cursor)
+        // alive. Drags owned by another application's drag session are left to the file-drop
+        // exit/end events.
+        if !active
+            && cx
+                .active_drag
+                .as_ref()
+                .is_some_and(|drag| drag.value.downcast_ref::<crate::ExternalPaths>().is_none())
+        {
+            cx.stop_active_drag(self);
+        }
         self.activation_observers
             .clone()
             .retain(&(), |callback| callback(self, cx));
@@ -8147,6 +8358,9 @@ impl Window {
         action: accesskit::Action,
         listener: impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static,
     ) {
+        if self.inert_depth > 0 {
+            return;
+        }
         self.a11y
             .action_listeners
             .entry(node_id)

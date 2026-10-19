@@ -7,6 +7,7 @@
 extern crate self as vespertine;
 #[macro_use]
 mod action;
+mod animation_clock;
 mod app;
 
 mod arena;
@@ -23,9 +24,11 @@ pub mod colors;
 mod counting_allocator;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
+pub mod drag_drop;
 mod element;
 mod elements;
 mod executor;
+pub mod focus_restore;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
 #[cfg(test)]
@@ -34,8 +37,11 @@ mod file_icons;
 mod geometry;
 mod gestures;
 mod global;
+pub mod global_shortcuts;
 mod glyph_blur;
 mod gpu_context;
+pub mod hold_gesture;
+pub mod host_events;
 #[cfg(vespertine_hot_reload)]
 mod hot_reload;
 mod image_fit;
@@ -44,11 +50,17 @@ mod image_mask;
 mod image_source;
 mod image_treatment;
 mod input;
+#[cfg(test)]
+mod input_scope_tests;
 mod inspector;
 mod interactive;
 mod key_dispatch;
+pub mod keyboard_activation;
+pub mod keyboard_menu;
 mod keymap;
+pub mod motion;
 mod motion_clock;
+mod motion_policy;
 #[cfg(test)]
 mod outline_tests;
 mod paint_scope;
@@ -82,6 +94,7 @@ mod scene_sort;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
 mod shared_uri;
+pub mod shortcuts;
 mod spring;
 mod style;
 mod style_data;
@@ -134,6 +147,7 @@ pub use accesskit;
 pub use accesskit::Action as AccessibleAction;
 pub use accesskit::{Orientation, Role, Toggled};
 pub use action::*;
+pub use animation_clock::*;
 pub use anyhow::Result;
 pub use app::*;
 pub(crate) use arena::*;
@@ -235,6 +249,7 @@ pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
 pub use motion_clock::MotionClock;
+pub use motion_policy::*;
 pub use paint_scope::*;
 pub use path_builder::*;
 pub use platform::*;

@@ -94,6 +94,10 @@ pub(crate) struct DispatchTree {
 #[derive(Default)]
 pub(crate) struct DispatchNode {
     pub key_listeners: ThinVec<KeyListener>,
+    /// Window-root key listeners registered while painting the node's element. They are stored
+    /// on the node (rather than in a separate frame list) so that reusing a cached subtree
+    /// carries them along with it.
+    pub root_key_listeners: ThinVec<KeyListener>,
     pub action_listeners: ThinVec<DispatchActionListener>,
     pub modifiers_changed_listeners: ThinVec<ModifiersChangedListener>,
     pub context: Option<KeyContext>,
@@ -330,6 +334,7 @@ impl DispatchTree {
 
             self.nodes.push(DispatchNode {
                 key_listeners: mem::take(&mut source_node.key_listeners),
+                root_key_listeners: mem::take(&mut source_node.root_key_listeners),
                 action_listeners: mem::take(&mut source_node.action_listeners),
                 modifiers_changed_listeners: mem::take(
                     &mut source_node.modifiers_changed_listeners,
@@ -365,6 +370,18 @@ impl DispatchTree {
 
     pub fn on_key_event(&mut self, listener: KeyListener) {
         self.active_node().key_listeners.push(listener);
+    }
+
+    pub fn on_root_key_event(&mut self, listener: KeyListener) {
+        self.active_node().root_key_listeners.push(listener);
+    }
+
+    /// Snapshot of every window-root key listener of the frame in registration (paint) order.
+    pub fn root_key_listeners(&self) -> SmallVec<[KeyListener; 4]> {
+        self.nodes
+            .iter()
+            .flat_map(|node| node.root_key_listeners.iter().cloned())
+            .collect()
     }
 
     pub fn on_modifiers_changed(&mut self, listener: ModifiersChangedListener) {
@@ -2410,6 +2427,7 @@ mod tests {
                 }
                 let target = destination.active_node();
                 target.key_listeners = std::mem::take(&mut source_node.key_listeners);
+                target.root_key_listeners = std::mem::take(&mut source_node.root_key_listeners);
                 target.action_listeners = std::mem::take(&mut source_node.action_listeners);
                 target.modifiers_changed_listeners =
                     std::mem::take(&mut source_node.modifiers_changed_listeners);

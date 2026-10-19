@@ -259,6 +259,7 @@ impl Application {
             cx.displays_changed();
             #[cfg(vespertine_hot_reload)]
             crate::hot_reload::init(cx);
+            cx.install_motion_policy();
             on_finish_launching(cx);
         }));
     }
@@ -284,6 +285,7 @@ impl Application {
             cx.displays_changed();
             #[cfg(vespertine_hot_reload)]
             crate::hot_reload::init(cx);
+            cx.install_motion_policy();
             on_finish_launching(cx);
         }));
         ApplicationHandle { app: self.0 }
@@ -1329,6 +1331,9 @@ impl App {
     pub fn set_reduce_motion(&mut self, reduce_motion: bool) {
         if self.reduce_motion != reduce_motion {
             self.reduce_motion = reduce_motion;
+            // Views renew the leases that still apply while they repaint, so a switch settles
+            // in-flight animations without one last clock-driven frame.
+            self.clear_animation_leases();
             self.refresh_windows();
         }
     }

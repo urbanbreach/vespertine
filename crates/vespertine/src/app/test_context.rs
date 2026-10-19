@@ -213,6 +213,11 @@ impl TestAppContext {
         self.test_platform.did_prompt_for_new_path()
     }
 
+    /// The cursor style most recently requested from the platform.
+    pub fn active_cursor_style(&self) -> crate::CursorStyle {
+        self.test_platform.active_cursor_style()
+    }
+
     /// Returns the number of active idle sleep prevention tokens.
     pub fn active_idle_sleep_preventions(&self) -> usize {
         self.test_platform.active_idle_sleep_preventions()
@@ -1011,6 +1016,14 @@ impl VisualTestContext {
     /// Simulates a change in whether the platform is presenting this window.
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
         self.simulate_window_visibility_change(self.window, visibility);
+    }
+
+    /// Simulates the pointer entering or leaving this window, which decides
+    /// whether the window owns the platform cursor.
+    pub fn simulate_hover_status_change(&mut self, hovered: bool) {
+        self.test_window(self.window)
+            .simulate_hover_status_change(hovered);
+        self.background_executor.run_until_parked();
     }
 
     /// Simulates the window moving to a display with a different scale factor.

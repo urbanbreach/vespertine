@@ -823,6 +823,17 @@ impl Interactivity {
         self.hitbox_behavior = HitboxBehavior::BlockMouse;
     }
 
+    /// Opt this element into declarative pointer capture. A left-button press that reaches the
+    /// element in the bubbling phase while its hitbox is hovered makes the window capture the
+    /// pointer for this element: until the button is released only this element's hitbox reports
+    /// hovered, wherever the pointer moves. The capture follows the element's identity across
+    /// frames (an element id is required), and is released after the mouse-up event has been
+    /// dispatched, on [`Window::release_pointer`], or at the end of a frame in which the element
+    /// was not painted.
+    pub fn capture_pointer(&mut self) {
+        self.capture_pointer = true;
+    }
+
     /// Set the bounds of this element as a window control area for the platform window.
     /// The imperative API equivalent to [`InteractiveElement::window_control_area`]
     pub fn window_control_area(&mut self, area: WindowControlArea) {
@@ -1347,6 +1358,13 @@ pub trait InteractiveElement: Sized {
     /// The fluent API equivalent to [`Interactivity::occlude_mouse`].
     fn occlude(mut self) -> Self {
         self.interactivity().occlude_mouse();
+        self
+    }
+
+    /// Opt this element into declarative pointer capture.
+    /// The fluent API equivalent to [`Interactivity::capture_pointer`].
+    fn capture_pointer(mut self) -> Self {
+        self.interactivity().capture_pointer();
         self
     }
 
@@ -2329,6 +2347,7 @@ pub struct Interactivity {
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
     pub(crate) hitbox_behavior: HitboxBehavior,
+    pub(crate) capture_pointer: bool,
     pub(crate) tab_index: Option<isize>,
     pub(crate) tab_group: bool,
     pub(crate) tab_stop: bool,
@@ -2554,7 +2573,11 @@ impl Interactivity {
                                         ) => HitboxBehavior::BlockMouseExceptScroll,
                                         (_, behavior) => behavior,
                                     };
-                                    Some(window.insert_hitbox(bounds, behavior))
+                                    Some(window.insert_hitbox(bounds, behavior)).inspect(|hitbox| {
+                                        if let Some(global_id) = global_id {
+                                            window.rebind_captured_element(global_id, hitbox.id);
+                                        }
+                                    })
                                 } else {
                                     None
                                 };
@@ -2574,6 +2597,9 @@ impl Interactivity {
     fn should_insert_hitbox(&self, style: &Style, window: &Window, cx: &App) -> bool {
         self.hitbox_behavior != HitboxBehavior::Normal
             || self.window_control.is_some()
+            || self.capture_pointer
+            || self.active_style.is_some()
+            || self.group_active_style.is_some()
             || style.mouse_cursor.is_some()
             || self.group.is_some()
             || self.scroll_offset.is_some()
@@ -2778,6 +2804,7 @@ impl Interactivity {
 
                                             self.register_a11y_click(global_id, hitbox, window);
                                             self.paint_mouse_listeners(
+                                                global_id,
                                                 hitbox,
                                                 element_state.as_mut(),
                                                 window,
@@ -2957,6 +2984,7 @@ impl Interactivity {
 
     fn paint_mouse_listeners(
         &mut self,
+        global_id: Option<&GlobalElementId>,
         hitbox: &Hitbox,
         element_state: Option<&mut InteractiveElementState>,
         window: &mut Window,
@@ -2982,6 +3010,22 @@ impl Interactivity {
                     // If there is a parent that is also focusable, prevent it
                     // from transferring focus because we already did so.
                     window.prevent_default();
+                }
+            });
+        }
+
+        // Declarative pointer capture: a left press that bubbles to this element while its
+        // hitbox is hovered starts capturing the element by its stable identity.
+        if self.capture_pointer
+            && let Some(global_id) = global_id.cloned()
+        {
+            let hitbox = hitbox.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _cx| {
+                if phase == DispatchPhase::Bubble
+                    && event.button == MouseButton::Left
+                    && hitbox.is_hovered(window)
+                {
+                    window.capture_pointer_for_element(&global_id, hitbox.id);
                 }
             });
         }
@@ -3109,23 +3153,32 @@ impl Interactivity {
                         && hitbox.is_hovered(window)
                     {
                         let drag_state_type = drag.value.as_ref().type_id();
-                        for (drop_state_type, listener) in &drop_listeners {
-                            if *drop_state_type == drag_state_type {
-                                let drag = cx
-                                    .active_drag
-                                    .take()
-                                    .expect("checked for type drag state type above");
+                        if drop_listeners
+                            .iter()
+                            .any(|(drop_state_type, _)| *drop_state_type == drag_state_type)
+                        {
+                            let drag = cx
+                                .active_drag
+                                .take()
+                                .expect("checked for active drag above");
 
-                                let mut can_drop = true;
-                                if let Some(predicate) = &can_drop_predicate {
-                                    can_drop = predicate(drag.value.as_ref(), window, cx);
-                                }
+                            let mut can_drop = true;
+                            if let Some(predicate) = &can_drop_predicate {
+                                can_drop = predicate(drag.value.as_ref(), window, cx);
+                            }
 
-                                if can_drop {
-                                    listener(drag.value.as_ref(), window, cx);
-                                    window.refresh();
-                                    cx.stop_propagation();
+                            if can_drop {
+                                for (drop_state_type, listener) in &drop_listeners {
+                                    if *drop_state_type == drag_state_type {
+                                        listener(drag.value.as_ref(), window, cx);
+                                    }
                                 }
+                                window.refresh();
+                                cx.stop_propagation();
+                            } else {
+                                // A target whose predicate rejects the payload does not accept the
+                                // drop; an ancestor under the pointer still may.
+                                cx.active_drag = Some(drag);
                             }
                         }
                     }
@@ -3453,8 +3506,11 @@ impl Interactivity {
                     .as_ref()
                     .and_then(|group_active| GroupHitboxes::get(&group_active.group, cx));
                 let hitbox = hitbox.clone();
-                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, _cx| {
-                    if phase == DispatchPhase::Bubble && !window.default_prevented() {
+                window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _cx| {
+                    if phase == DispatchPhase::Bubble
+                        && event.button == MouseButton::Left
+                        && !window.default_prevented()
+                    {
                         let group_hovered = active_group_hitbox
                             .is_some_and(|group_hitbox_id| group_hitbox_id.is_hovered(window));
                         let element_hovered = hitbox.is_hovered(window);
