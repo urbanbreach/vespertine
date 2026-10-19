@@ -162,3 +162,11 @@ path = "examples/tab_strip.rs"
 [[example]]
 name = "toasts"
 path = "examples/toasts.rs"
+
+[[example]]
+name = "dialog_modal_editor"
+path = "examples/dialog_modal_editor.rs"
+
+[[example]]
+name = "picker_palette"
+path = "examples/picker_palette.rs"

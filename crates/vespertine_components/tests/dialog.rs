@@ -6,15 +6,16 @@ mod controls_support;
 use controls_support::{center, next_frame, node, nodes, tab};
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 use vespertine::{
-    AppContext as _, Context, Entity, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Window, actions, div, px, rgb,
-    size,
+    AppContext as _, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable as _,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Role,
+    StatefulInteractiveElement, Styled, Window, actions, div, px, rgb, size,
 };
 use vespertine_components::dialog::{
     ActionKind, Dialog, DialogAction, DialogModel, DialogPart, DismissalPolicy, limits_following,
 };
 use vespertine_components::floating::{FocusTarget, MenuPart, TriggerBounds, layers};
 use vespertine_components::select::{Select, SelectOption};
+use vespertine_components::text::TextField;
 use vespertine_test_host::{HostOptions, PaintLog, TestHost, require_backend};
 
 actions!(dialog_test, [Tab, TabPrev, PageShortcut]);
@@ -48,6 +49,7 @@ struct Shared {
     page_keys: Rc<Cell<u32>>,
     page_shortcuts: Rc<Cell<u32>>,
     doc_present: Rc<Cell<bool>>,
+    field: Rc<RefCell<Option<Entity<TextField>>>>,
 }
 
 struct Root {
@@ -123,6 +125,7 @@ struct Spec {
     policy: DismissalPolicy,
     actions: Vec<DialogAction>,
     with_select: bool,
+    with_field: bool,
     with_trigger: bool,
     initial: Focus,
     last: Focus,
@@ -165,6 +168,7 @@ impl Spec {
                 DialogAction::new("save", "Save", ActionKind::Primary),
             ],
             with_select: false,
+            with_field: false,
             with_trigger: true,
             initial: Focus::Default,
             last: Focus::Default,
@@ -202,10 +206,14 @@ fn fixture(spec: Spec) -> Fixture {
     > = Rc::default();
     let out = slot.clone();
     let build_shared = shared.clone();
-    let mut host = TestHost::with_view(HostOptions::with_size(480., 360.), move |_, cx| {
+    let mut host = TestHost::with_view(HostOptions::with_size(480., 360.), move |window, cx| {
         let doc = cx.focus_handle().tab_stop(true);
         let trigger = cx.focus_handle().tab_stop(true);
         let tracker = TriggerBounds::new();
+        let field = spec
+            .with_field
+            .then(|| cx.new(|cx| TextField::new(window, cx).value("draft")));
+        *build_shared.field.borrow_mut() = field.clone();
         let select = spec.with_select.then(|| {
             let tracker = tracker.clone();
             cx.new(|cx| {
@@ -248,6 +256,11 @@ fn fixture(spec: Spec) -> Fixture {
             }
             if let Some(select) = &select {
                 dialog = dialog.child(select.clone());
+            }
+            if let Some(field) = &field {
+                dialog = dialog
+                    .child(field.clone())
+                    .default_action_field(field, window, cx);
             }
             dialog
         });
@@ -778,6 +791,21 @@ fn focus_returns_to_the_trigger_then_the_prior_owner_then_the_window_default() {
         "the prior owner"
     );
 
+    // A backdrop press that closes the dialog restores focus as Escape does.
+    let mut f = fixture(Spec {
+        with_trigger: false,
+        ..Spec::new()
+    });
+    f.focus(&f.doc.clone());
+    f.open();
+    f.click(470., 350.);
+    assert!(!f.is_open());
+    assert_eq!(
+        f.focused_label().as_deref(),
+        Some("Document"),
+        "a backdrop press restores the prior owner"
+    );
+
     // The captured owner was removed while the dialog was open: the trigger if mounted...
     let mut f = fixture(Spec::new());
     f.focus(&f.doc.clone());
@@ -891,4 +919,97 @@ fn the_dialog_exposes_its_role_heading_and_modal_key_scope() {
     assert_eq!(heading.number("level"), Some(2.0), "title level 2");
     // The key-context identifier the popup carries is the core modal scope identifier.
     assert_eq!(vespertine::MODAL_SCOPE_CONTEXT, "ModalScope");
+}
+
+impl Fixture {
+    fn field(&self) -> Entity<TextField> {
+        self.shared.field.borrow().clone().expect("a field")
+    }
+}
+
+#[test]
+fn enter_in_a_field_runs_the_primary_action_unless_it_is_disabled() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        with_field: true,
+        ..Spec::new()
+    });
+    f.open();
+    f.take_log();
+    // Focus the field and press Enter: the primary action runs and the dialog closes.
+    let field = f.field();
+    let handle = f.host.app().update(|cx| field.read(cx).focus_handle(cx));
+    f.focus(&handle);
+    f.key("enter");
+    assert_eq!(f.take_log(), vec!["confirm", "action:save", "open=false"]);
+
+    // A disabled primary action: Enter does nothing.
+    let mut f = fixture(Spec {
+        with_field: true,
+        actions: vec![
+            DialogAction::new("cancel", "Cancel", ActionKind::Secondary),
+            DialogAction::new("save", "Save", ActionKind::Primary).disabled(true),
+        ],
+        ..Spec::new()
+    });
+    f.open();
+    f.take_log();
+    let field = f.field();
+    let handle = f.host.app().update(|cx| field.read(cx).focus_handle(cx));
+    f.focus(&handle);
+    f.key("enter");
+    assert!(f.is_open());
+    assert!(f.log().is_empty(), "{:?}", f.log());
+}
+
+#[test]
+fn form_children_keep_their_text_cursor_and_selection_across_rerenders() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        with_field: true,
+        ..Spec::new()
+    });
+    f.open();
+    let field = f.field();
+    let handle = f.host.app().update(|cx| field.read(cx).focus_handle(cx));
+    f.focus(&handle);
+    let window = f.host.window();
+    f.host
+        .app()
+        .update_window(window, |_, window, cx| {
+            field.update(cx, |field, cx| {
+                field.replace_text_in_range(None, "!", window, cx);
+                field.set_selected_range(1..3, false, window, cx);
+            })
+        })
+        .unwrap();
+    f.settle();
+    let state = |f: &mut Fixture| {
+        let field = f.field();
+        f.host.app().update(|cx| {
+            let field = field.read(cx);
+            (
+                field.value_text().to_owned(),
+                field.selected_range(),
+                field.cursor_offset(),
+            )
+        })
+    };
+    let before = state(&mut f);
+    assert_eq!(before.1, 1..3);
+    // Re-render the dialog repeatedly (the owner changes an action, the window repaints).
+    let dialog = f.dialog.clone();
+    for _ in 0..3 {
+        f.host.app().update(|cx| {
+            dialog.update(cx, |dialog, cx| dialog.set_action_busy("cancel", false, cx))
+        });
+        f.host.invalidate();
+        f.settle();
+    }
+    assert_eq!(
+        state(&mut f),
+        before,
+        "the editor kept text, cursor and selection"
+    );
+    assert!(f.is_open());
 }

@@ -31,13 +31,14 @@ use crate::floating::{
     EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, OutsidePress,
     TriggerBounds, containment_limits, is_top_layer, open_layer, set_layer_bounds,
 };
+use crate::text::{TextField, TextFieldEvent};
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
-    Anchor, AnyElement, AnyView, App, Bounds, Context, ElementId, Empty, FocusHandle,
+    Anchor, AnyElement, AnyView, App, Bounds, Context, ElementId, Empty, Entity, FocusHandle,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render, Role,
-    SharedString, StatefulInteractiveElement, Styled, Window, anchored, canvas, deferred, div,
-    hsla, point, px,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, canvas,
+    deferred, div, hsla, point, px,
 };
 
 /// Layer priority of the portal: below priority-1 menus and priority-2 nested menus.
@@ -119,6 +120,7 @@ pub struct Dialog {
     open: Option<OpenDialog>,
     popup_focus: FocusHandle,
     popup_bounds: TriggerBounds,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Dialog {
@@ -153,6 +155,7 @@ impl Dialog {
             // and the first Tab enters its first focusable descendant (R5, R6).
             popup_focus: cx.focus_handle().tab_index(-1),
             popup_bounds: TriggerBounds::new(),
+            _subscriptions: Vec::new(),
         }
     }
 
@@ -229,6 +232,23 @@ impl Dialog {
     /// Uses a popup-bounds tracker created by the caller (see [`limits_following`]).
     pub fn popup_tracker(mut self, tracker: TriggerBounds) -> Self {
         self.popup_bounds = tracker;
+        self
+    }
+
+    /// Makes Enter in the single-line `field` the dialog's default action (R12): the primary
+    /// action when it is enabled, otherwise nothing happens.
+    pub fn default_action_field(
+        mut self,
+        field: &Entity<TextField>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let subscription = cx.subscribe_in(field, window, |this, _, event, window, cx| {
+            if matches!(event, TextFieldEvent::Submitted(_)) {
+                this.activate_default(window, cx);
+            }
+        });
+        self._subscriptions.push(subscription);
         self
     }
 
