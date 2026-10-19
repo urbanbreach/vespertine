@@ -1066,10 +1066,14 @@ impl Element for TextElement {
         );
         // The field owns the selection started inside it (R11).
         if let Some(service) = vespertine_richtext::TextService::current() {
-            service.register_region(vespertine_richtext::StartRegion {
-                bounds,
-                selectable: false,
-            });
+            service.register_region(
+                vespertine_richtext::StartRegion {
+                    bounds,
+                    selectable: false,
+                },
+                window,
+                cx,
+            );
         }
 
         let (line, scroll, selection, caret, line_height, text_top) = {
