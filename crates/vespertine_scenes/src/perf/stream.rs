@@ -126,7 +126,7 @@ impl StreamScene {
         self.live_body.push_str(&corpus::token(LIVE_TOKEN_BASE + f as usize));
         self.messages.borrow_mut()[live].body = SharedString::from(self.live_body.clone());
         self.list.remeasure_items(live..live + 1);
-        if f > 0 && f % LIVE_PERIOD == 0 {
+        if f > 0 && f.is_multiple_of(LIVE_PERIOD) {
             self.messages
                 .borrow_mut()
                 .push(Message::new(live + 1, String::new()));
