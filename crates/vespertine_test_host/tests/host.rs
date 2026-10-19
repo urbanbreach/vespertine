@@ -633,6 +633,11 @@ fn dev_006_a8_drag_selection_returns_the_run_and_needs_a_painted_frame_between_e
     let frames_before = host.paint_log().frames();
     let selected = host.drag_select((0.5, 10.0), (390.0, 10.0)).unwrap();
     assert_eq!(selected.as_deref(), Some("Selectable run of text"));
+    assert!(
+        host.painted_text()
+            .contains(&"Selectable run of text".to_owned()),
+        "text painted by a custom element is in the painted strings"
+    );
     assert_eq!(
         host.selected_text().unwrap().as_deref(),
         Some("Selectable run of text")
@@ -884,4 +889,134 @@ fn dev_006_teardown_releases_entities_before_the_application() {
         *released.borrow(),
         "the view-owned entity was released on teardown"
     );
+}
+
+#[test]
+fn dev_006_key_down_repeat_flag_key_up_and_mouse_exit_reach_window_listeners() {
+    require_backend!();
+    #[derive(Default)]
+    struct Seen {
+        downs: Vec<(String, bool)>,
+        ups: Vec<String>,
+        exits: usize,
+    }
+    struct Listeners {
+        seen: Rc<RefCell<Seen>>,
+        focus: vespertine::FocusHandle,
+    }
+    impl Render for Listeners {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (down, up, exit) = (self.seen.clone(), self.seen.clone(), self.seen.clone());
+            div()
+                .id("listeners")
+                .size_full()
+                .track_focus(&self.focus)
+                .on_key_down(move |event, _, _| {
+                    down.borrow_mut()
+                        .downs
+                        .push((event.keystroke.key.clone(), event.is_held));
+                })
+                .on_key_up(move |event, _, _| {
+                    up.borrow_mut().ups.push(event.keystroke.key.clone());
+                })
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |_, _, window, _| {
+                            let exit = exit.clone();
+                            window.on_mouse_event(
+                                move |_: &vespertine::MouseExitEvent, phase, _, _| {
+                                    if phase.bubble() {
+                                        exit.borrow_mut().exits += 1;
+                                    }
+                                },
+                            );
+                        },
+                    )
+                    .size_full(),
+                )
+        }
+    }
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let mut host = TestHost::with_view(HostOptions::with_size(100.0, 100.0), {
+        let seen = seen.clone();
+        move |window, cx| {
+            let focus = cx.focus_handle();
+            window.focus(&focus, cx);
+            cx.new(|_| Listeners { seen, focus })
+        }
+    })
+    .unwrap();
+    host.flush();
+    host.key_down("a", false, None).unwrap();
+    host.key_down("a", true, None).unwrap();
+    host.key_up("a", None).unwrap();
+    host.mouse_exit(120.0, 50.0).unwrap();
+    let seen = seen.borrow();
+    assert_eq!(
+        seen.downs,
+        [("a".to_owned(), false), ("a".to_owned(), true)],
+        "the repeat flag is carried"
+    );
+    assert_eq!(seen.ups, ["a"]);
+    assert_eq!(seen.exits, 1);
+}
+
+#[test]
+fn dev_006_painted_washes_are_a_per_frame_log_cleared_once_per_frame() {
+    require_backend!();
+    use vespertine_test_host::{PaintedWash, Rect};
+    struct Washes;
+    impl Render for Washes {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            canvas(
+                |_, _, _| (),
+                |bounds, _, window, cx| {
+                    PaintLog::record_wash(
+                        cx,
+                        PaintedWash {
+                            element_id: 9,
+                            run_index: 1,
+                            text: "Find red".to_owned(),
+                            start_utf16: 5,
+                            end_utf16: 8,
+                            active: true,
+                            rects: vec![Rect::from(bounds)],
+                        },
+                    );
+                    PaintLog::record_text(cx, "generated chrome");
+                    let _ = window;
+                },
+            )
+            .size_full()
+        }
+    }
+    let mut host = TestHost::with_view(HostOptions::with_size(60.0, 40.0), |_, cx| {
+        cx.new(|_| Washes)
+    })
+    .unwrap();
+    host.flush();
+    let washes = host.painted_washes();
+    assert_eq!(
+        washes.len(),
+        1,
+        "one wash per frame, not accumulated: {washes:?}"
+    );
+    assert_eq!(washes[0].element_id, 9);
+    assert_eq!((washes[0].start_utf16, washes[0].end_utf16), (5, 8));
+    assert_eq!(
+        washes[0].rects,
+        [Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 60.0,
+            height: 40.0
+        }]
+    );
+    assert_eq!(host.painted_text(), ["generated chrome"]);
+    let frames = host.paint_log().frames();
+    host.paint_frame();
+    assert!(host.paint_log().frames() > frames);
+    assert_eq!(host.painted_washes().len(), 1);
+    assert_eq!(host.painted_text(), ["generated chrome"]);
 }

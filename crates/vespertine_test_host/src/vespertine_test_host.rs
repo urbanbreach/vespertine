@@ -15,7 +15,7 @@
 //! alike (or with no session at all).
 //!
 //! ```no_run
-//! use vespertine::{Context, IntoElement, Render, Styled, Window, div, rgb};
+//! use vespertine::{AppContext as _, Context, IntoElement, Render, Styled, Window, div, rgb};
 //! use vespertine_test_host::{HostOptions, TestHost};
 //!
 //! struct Swatch;
