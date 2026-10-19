@@ -255,6 +255,7 @@ impl Window {
         let scene = std::mem::replace(&mut self.next_frame.scene, main);
         // The row's scene operations are kept apart: as far as the frame's ranges are
         // concerned the row produced no scene output, at this position.
+        let switched = end.surface_switches_index != start.surface_switches_index;
         let (mut start, mut end) = (start, end);
         start.scene_index = scene_position;
         end.scene_index = scene_position;
@@ -265,8 +266,7 @@ impl Window {
             record.paint = Some(start..end);
             if let Some(row) = record.row.as_deref_mut() {
                 row.hover_sensitive |= hover_read;
-                row.replayable &= !scene.has_active_scope()
-                    && end.surface_switches_index == start.surface_switches_index;
+                row.replayable &= !scene.has_active_scope() && !switched;
                 row.scene = scene;
                 row.hovered = hovered;
             }
