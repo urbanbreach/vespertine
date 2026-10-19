@@ -7252,6 +7252,7 @@ dependencies = [
  "url",
  "vespertine",
  "vespertine_platform",
+ "vespertine_theme",
  "vespertine_webview",
 ]
 

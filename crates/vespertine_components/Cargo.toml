@@ -15,6 +15,7 @@ doctest = false
 
 [dependencies]
 vespertine.workspace = true
+vespertine_theme.workspace = true
 vespertine_webview.workspace = true
 unicode-segmentation.workspace = true
 url.workspace = true
