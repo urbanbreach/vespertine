@@ -128,7 +128,7 @@ fn an_additional_renderer_shares_the_device_and_the_atlas() {
     let before = gpu_creation_counts();
     let (_overlay_surface, overlay_raw) = session.surface();
     let overlay = WgpuRenderer::new_sharing_atlas(
-        gpu.clone(),
+        gpu,
         &overlay_raw,
         config(),
         None,

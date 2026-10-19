@@ -230,6 +230,10 @@ fn main() {
         return;
     }
     let executable = std::env::current_exe().expect("the example's path");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the example waits for its scripted child process"
+    )]
     let output = Command::new(executable)
         .env("PROBE_CHILD", "1")
         .env("WAYLAND_DEBUG", "1")

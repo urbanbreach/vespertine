@@ -68,7 +68,6 @@ impl Render for Resizing {
                     |_, _, _| (),
                     move |_, _, window, _| {
                         let surface = surface.clone();
-                        let presented = presented.clone();
                         window.on_present(move |window, _| {
                             if let Some(surface) = &surface {
                                 presented.borrow_mut().push(Presented {
