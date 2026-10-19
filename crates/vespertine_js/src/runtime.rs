@@ -502,6 +502,21 @@ impl HostRenderer {
             .unwrap_or(false))
     }
 
+    /// Scrolls a virtual list to a logical row with a signed pixel offset inside the row.
+    /// Returns whether the element is a virtual list.
+    pub fn scroll_to_item(&self, id: u64, index: usize, offset: f32) -> Result<bool, HostError> {
+        Ok(self
+            .with_scene("scrolling to a list item", move |view, window, _| view.scene().scroll_to_item(id, index, offset, window))?
+            .unwrap_or(false))
+    }
+
+    /// The logical scroll anchor of a virtual list: `(row, offset within the row, viewport height)`.
+    pub fn list_anchor(&self, id: u64) -> Result<Option<(usize, f32, f32)>, HostError> {
+        Ok(self
+            .with_scene("list position", move |view, _, _| view.scene().list_anchor(id))?
+            .flatten())
+    }
+
     /// Scrolls the nearest scrolling ancestor of an element so that the element is visible.
     pub fn scroll_into_view(&self, id: u64) -> Result<bool, HostError> {
         Ok(self

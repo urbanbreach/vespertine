@@ -18,8 +18,8 @@ use vespertine::host_events::{
 };
 use vespertine::{
     AnyElement, App, Bounds, DeclarativeAria, ElementId, HostStyle, ImageHostState,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Styled, SvgHostState, Window, div,
-    point, px,
+    InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, ParentElement, Pixels,
+    Styled, SvgHostState, Window, div, list, point, px,
 };
 use vespertine_host_tree::{HostTree, NodeId, NodeRef};
 use vespertine_richtext::{
@@ -57,12 +57,121 @@ const SCROLL_STYLE_KEYS: [(&str, &str); 3] = [
     ("overflowY", "y"),
 ];
 
+/// Temporary read access to the retained tree. Lets a row of a virtual list be built again
+/// during layout, when the tree is not otherwise borrowed.
+pub trait TreeSource {
+    /// Runs `read` with the tree.
+    fn read(&self, read: &mut dyn FnMut(&HostTree));
+}
+
+impl TreeSource for Arc<std::sync::Mutex<HostTree>> {
+    fn read(&self, read: &mut dyn FnMut(&HostTree)) {
+        read(&self.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    }
+}
+
+impl TreeSource for Rc<RefCell<HostTree>> {
+    fn read(&self, read: &mut dyn FnMut(&HostTree)) {
+        read(&self.borrow());
+    }
+}
+
+/// The configuration properties of a `virtual-list` node (ELM-001 host element).
+#[derive(Clone, Debug, PartialEq)]
+struct ListConfig {
+    bottom: bool,
+    follow_tail: bool,
+    overdraw: f32,
+    estimate: Option<f32>,
+    item_count: Option<f64>,
+    window_start: usize,
+}
+
+impl ListConfig {
+    fn of(node: NodeRef<'_>) -> Self {
+        let number = |name: &str| node.prop(name).and_then(Value::as_f64);
+        Self {
+            bottom: node.prop("alignment").and_then(Value::as_str) == Some("bottom"),
+            follow_tail: node.prop("followTail").and_then(Value::as_bool).unwrap_or(false),
+            overdraw: number("overdraw").filter(|value| value.is_finite()).map_or(512.0, |value| value.max(0.0) as f32),
+            estimate: number("estimatedItemHeight").filter(|value| value.is_finite() && *value > 0.0).map(|value| value as f32),
+            item_count: number("itemCount").filter(|value| value.is_finite() && *value >= 0.0).map(f64::trunc),
+            window_start: number("windowStart").filter(|value| value.is_finite() && *value >= 0.0).map_or(0, |value| value as usize),
+        }
+    }
+}
+
+/// The native state of a `virtual-list` node: a persistent [`ListState`] that follows the
+/// node's keyed children through splices, so measurements, hints and the scroll anchor survive
+/// rerenders (ELM-001 R13, R15).
+struct ListHost {
+    state: ListState,
+    /// The keys (child identities) of the rows the state currently describes.
+    keys: Vec<NodeId>,
+    config: Option<ListConfig>,
+    /// Whether the node subscribed to `visibleRange`; shared with the scroll handler.
+    reports_range: Rc<Cell<bool>>,
+}
+
+impl ListHost {
+    fn new(emit: &EmitEvent, id: NodeId) -> Self {
+        let state = ListState::new(0, ListAlignment::Top, px(512.));
+        let reports_range = Rc::new(Cell::new(false));
+        let enabled = reports_range.clone();
+        let emit = emit.clone();
+        state.set_scroll_handler(move |event, _, cx| {
+            if enabled.get() {
+                emit(
+                    cx,
+                    id,
+                    "visibleRange",
+                    json!({ "start": event.visible_range.start, "end": event.visible_range.end, "count": event.count }),
+                );
+            }
+        });
+        Self { state, keys: Vec::new(), config: None, reports_range }
+    }
+
+    /// Brings the state in line with the node: configuration changes first (each only when it
+    /// changed), then the keyed row sequence.
+    fn sync(&mut self, node: NodeRef<'_>) {
+        let config = ListConfig::of(node);
+        if self.config.as_ref() != Some(&config) {
+            let previous = self.config.as_ref();
+            if previous.is_none_or(|old| old.bottom != config.bottom) {
+                self.state.set_alignment(if config.bottom { ListAlignment::Bottom } else { ListAlignment::Top });
+            }
+            if previous.is_none_or(|old| old.overdraw != config.overdraw) {
+                self.state.set_overdraw(px(config.overdraw));
+            }
+            if previous.is_none_or(|old| old.estimate != config.estimate) {
+                self.state.set_estimated_item_height(config.estimate.map(px));
+            }
+            if previous.is_none_or(|old| old.follow_tail != config.follow_tail) {
+                self.state.set_follow_tail(config.follow_tail);
+            }
+            if previous.is_none_or(|old| old.item_count != config.item_count) {
+                self.state.set_logical_item_count(config.item_count);
+            }
+        }
+        let keys: Vec<NodeId> = node.children().collect();
+        if self.state.is_windowed() {
+            self.state.reconcile_keys_in_window(config.window_start, &self.keys, &keys);
+        } else {
+            self.state.reconcile_keys(&self.keys, &keys);
+        }
+        self.keys = keys;
+        self.config = Some(config);
+    }
+}
+
 struct SceneNode {
     host: HostNode,
     /// The events this node's listeners are currently registered for.
     registered: HashSet<&'static str>,
     image: Option<ImageHostState>,
     svg: Option<SvgHostState>,
+    list: Option<ListHost>,
 }
 
 struct ParsedStyle {
@@ -88,6 +197,9 @@ pub struct HostScene {
     /// The node each text run (identified by its hashed owner) belongs to.
     run_owners: Rc<RefCell<HashMap<u64, NodeId>>>,
     washes: Option<WashesHook>,
+    /// This scene, for rows of virtual lists that are built again during layout.
+    me: std::rc::Weak<RefCell<HostScene>>,
+    tree: Rc<dyn TreeSource>,
 }
 
 fn mods(event: &HostPointerEvent) -> [(&'static str, bool); 4] {
@@ -150,9 +262,10 @@ fn host_event(name: &str) -> Option<(&'static str, HostEvent)> {
 }
 
 impl HostScene {
-    /// A scene delivering events through `emit`. `generation` is the identity of the mounted
-    /// root's window-level key events (announced by `setWindowGeneration`).
-    pub fn new(emit: EmitEvent, generation: Arc<AtomicU64>) -> Self {
+    /// A shared scene delivering events through `emit`. `generation` is the identity of the
+    /// mounted root's window-level key events (announced by `setWindowGeneration`); `tree`
+    /// gives rows of virtual lists read access to the retained tree during layout.
+    pub fn new(emit: EmitEvent, generation: Arc<AtomicU64>, tree: Rc<dyn TreeSource>) -> Rc<RefCell<Self>> {
         let context = HostContext::new();
         for key_up in [false, true] {
             let emit = emit.clone();
@@ -167,19 +280,23 @@ impl HostScene {
                 context.set_window_key_down(Some(listener));
             }
         }
-        Self {
-            context,
-            nodes: HashMap::new(),
-            emit,
-            generation,
-            painted: None,
-            styles: HashMap::new(),
-            rejected: HashSet::new(),
-            service: None,
-            selection_notifications: Rc::new(Cell::new(false)),
-            run_owners: Rc::new(RefCell::new(HashMap::new())),
-            washes: None,
-        }
+        Rc::new_cyclic(|me| {
+            RefCell::new(Self {
+                context,
+                nodes: HashMap::new(),
+                emit,
+                generation,
+                painted: None,
+                styles: HashMap::new(),
+                rejected: HashSet::new(),
+                service: None,
+                selection_notifications: Rc::new(Cell::new(false)),
+                run_owners: Rc::new(RefCell::new(HashMap::new())),
+                washes: None,
+                me: me.clone(),
+                tree,
+            })
+        })
     }
 
     /// Installs the hook that learns each node's painted bounds.
@@ -319,6 +436,7 @@ impl HostScene {
                 registered: HashSet::new(),
                 image: None,
                 svg: None,
+                list: None,
             });
             Self::configure(&self.emit, id, scene_node, node);
         }
@@ -357,6 +475,11 @@ impl HostScene {
                 let svg = scene_node.svg.get_or_insert_with(SvgHostState::new);
                 svg.set_src(node.prop("src").and_then(Value::as_str));
                 svg.set_source(node.prop("source").and_then(Value::as_str));
+            }
+            "virtual-list" => {
+                let list = scene_node.list.get_or_insert_with(|| ListHost::new(emit, id));
+                list.reports_range.set(node.listeners().any(|name| name == "visibleRange"));
+                list.sync(node);
             }
             _ => {}
         }
@@ -446,6 +569,23 @@ impl HostScene {
                 if let Some(svg) = scene_node.svg.as_mut() {
                     let refinement = style.as_ref().map(|style| style.to_refinement()).unwrap_or_default();
                     return svg.render(ElementId::Integer(id), refinement, cx);
+                }
+            }
+            "virtual-list" => {
+                if let Some(list_host) = scene_node.list.as_ref() {
+                    let source = self.tree.clone();
+                    let scene = self.me.clone();
+                    let rows = list(list_host.state.clone(), move |ix, window, cx| {
+                        let mut row = None;
+                        if let Some(scene) = scene.upgrade() {
+                            source.read(&mut |tree| {
+                                let child = tree.node(id).and_then(|list| list.children().nth(ix));
+                                row = child.map(|child| scene.borrow_mut().build(tree, child, window, cx));
+                            });
+                        }
+                        row.unwrap_or_else(|| div().into_any_element())
+                    });
+                    return host.child(rows.w_full().h_full()).into_any_element();
                 }
             }
             _ => {}
@@ -561,8 +701,12 @@ impl HostScene {
     /// The scroll offset of a scrolling node `(x, y)`, zero at the start and negative toward the
     /// far side.
     pub fn scroll_offset(&self, id: NodeId) -> Option<(f32, f32)> {
-        let handle = self.nodes.get(&id)?.host.scroll_handle()?;
-        let offset = handle.offset();
+        let node = self.nodes.get(&id)?;
+        if let Some(list) = &node.list {
+            let offset = list.state.scroll_px_offset_for_scrollbar();
+            return Some((f32::from(offset.x) + 0.0, f32::from(offset.y) + 0.0));
+        }
+        let offset = node.host.scroll_handle()?.offset();
         // `+ 0.0` turns a negative zero (an unscrolled axis) into a plain zero.
         let (x, y): (f32, f32) = (offset.x.into(), offset.y.into());
         Some((x + 0.0, y + 0.0))
@@ -570,13 +714,35 @@ impl HostScene {
 
     /// Scrolls a scrolling node to an absolute offset (positive numbers scroll toward the far side).
     pub fn scroll_to(&self, id: NodeId, x: f32, y: f32, window: &mut Window) -> bool {
-        match self.nodes.get(&id) {
-            Some(node) if node.host.scroll_handle().is_some() => {
-                node.host.scroll_to(point(px(-x), px(-y)), window);
-                true
-            }
-            _ => false,
+        let Some(node) = self.nodes.get(&id) else { return false };
+        if let Some(list) = &node.list {
+            list.state.set_offset_from_scrollbar(point(px(-x), px(-y)));
+            window.refresh();
+            return true;
         }
+        if node.host.scroll_handle().is_some() {
+            node.host.scroll_to(point(px(-x), px(-y)), window);
+            return true;
+        }
+        false
+    }
+
+    /// The logical scroll anchor of a virtual list: row index, offset within the row and the
+    /// viewport height. `None` for nodes that are not lists.
+    pub fn list_anchor(&self, id: NodeId) -> Option<(usize, f32, f32)> {
+        let list = self.nodes.get(&id)?.list.as_ref()?;
+        let top = list.state.logical_scroll_top_and_extent().offset;
+        let viewport = list.state.viewport_bounds().size.height;
+        Some((top.item_ix, f32::from(top.offset_in_item), f32::from(viewport)))
+    }
+
+    /// Scrolls a virtual list so that logical row `index` is at the top, `offset` pixels into
+    /// the row (a negative offset places the row below the top). Returns whether `id` is a list.
+    pub fn scroll_to_item(&self, id: NodeId, index: usize, offset: f32, window: &mut Window) -> bool {
+        let Some(list) = self.nodes.get(&id).and_then(|node| node.list.as_ref()) else { return false };
+        list.state.scroll_to(ListOffset { item_ix: index, offset_in_item: px(offset) });
+        window.refresh();
+        true
     }
 
     /// Scrolls the nearest scrolling ancestor of `id` so that the branch containing the node is
@@ -586,7 +752,16 @@ impl HostScene {
         let mut parent = tree.node(id).and_then(|node| node.parent());
         while let Some(current) = parent {
             let Some(node) = tree.node(current) else { return false };
-            if let Some(handle) = self.nodes.get(&current).and_then(|scene| scene.host.scroll_handle()) {
+            let scene = self.nodes.get(&current);
+            if let Some(list) = scene.and_then(|scene| scene.list.as_ref()) {
+                if let Some(index) = node.children().position(|candidate| candidate == child) {
+                    // Rows are indexed logically: the mounted window starts at `window_start`.
+                    list.state.scroll_to_reveal_item(list.state.window_start() + index);
+                    window.refresh();
+                    return true;
+                }
+            }
+            if let Some(handle) = scene.and_then(|scene| scene.host.scroll_handle()) {
                 let index = node.children().position(|candidate| candidate == child);
                 if let Some(index) = index {
                     handle.scroll_to_item(index);

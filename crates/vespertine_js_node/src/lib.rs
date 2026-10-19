@@ -259,6 +259,28 @@ impl Renderer {
         }
     }
 
+    /// Scrolls a virtual list to a logical row, `offset` pixels into the row; throws for other elements.
+    #[napi]
+    pub fn scroll_to_item(&self, id: f64, index: f64, offset: Option<f64>) -> Result<()> {
+        if self
+            .inner
+            .scroll_to_item(id as u64, index.max(0.0) as usize, offset.unwrap_or(0.0) as f32)
+            .map_err(to_napi)?
+        {
+            Ok(())
+        } else {
+            Err(Error::from_reason(format!("element {id} is not a virtual list")))
+        }
+    }
+
+    /// The logical scroll position `{ itemIndex, offset, viewportHeight }` of a virtual list, or null.
+    #[napi]
+    pub fn get_list_scroll_top(&self, id: f64) -> Result<Option<Value>> {
+        Ok(self.inner.list_anchor(id as u64).map_err(to_napi)?.map(|(item_index, offset, viewport_height)| {
+            serde_json::json!({ "itemIndex": item_index, "offset": offset, "viewportHeight": viewport_height })
+        }))
+    }
+
     /// Scrolls the nearest scrolling ancestor so the element is visible; throws when none scrolls.
     #[napi]
     pub fn scroll_into_view(&self, id: f64, _options: Option<Value>) -> Result<()> {

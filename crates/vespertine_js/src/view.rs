@@ -1,5 +1,7 @@
 //! The window's root view: draws the retained host tree through the native scene.
 
+use std::cell::{RefCell, RefMut};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,7 +35,7 @@ pub fn sink_emitter(sink: Option<EventSink>) -> EmitEvent {
 pub struct HostView {
     tree: SharedTree,
     renders: Arc<AtomicU64>,
-    scene: HostScene,
+    scene: Rc<RefCell<HostScene>>,
 }
 
 impl HostView {
@@ -46,15 +48,15 @@ impl HostView {
         generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            tree,
+            tree: tree.clone(),
             renders,
-            scene: HostScene::new(sink_emitter(sink), generation),
+            scene: HostScene::new(sink_emitter(sink), generation, Rc::new(tree)),
         }
     }
 
     /// The scene (for UI-thread operations on nodes).
-    pub fn scene(&mut self) -> &mut HostScene {
-        &mut self.scene
+    pub fn scene(&self) -> RefMut<'_, HostScene> {
+        self.scene.borrow_mut()
     }
 
     /// The retained tree.
@@ -70,6 +72,6 @@ impl Render for HostView {
             .tree
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.scene.render(&tree, window, cx)
+        self.scene.borrow_mut().render(&tree, window, cx)
     }
 }

@@ -261,3 +261,59 @@ native("text search washes follow the match count and the active index (APP-010 
   assert.equal(washes().length, 1);
   assert.equal(host.renderer.findByTestId("doc")[0].id, washes()[0].elementId);
 });
+
+const rowsOf = (keys, extra = {}) =>
+  keys.map((key) => h("div", { key, testId: `row-${key}`, style: { height: 40, width: 200 }, ...extra }, h("text", {}, `row ${key}`)));
+
+native("a virtual list paints only the rows it needs and keeps its position through keyed changes (ELM-001 host)", () => {
+  const host = createTestHost({ width: 300, height: 200 });
+  const list = (keys, props = {}) =>
+    h("div", { style: { width: 300, height: 200, display: "flex", flexDirection: "column" } }, h("virtual-list", { testId: "list", estimatedItemHeight: 40, style: { height: 120, width: 300 }, ...props }, rowsOf(keys)));
+  const keys = Array.from({ length: 100 }, (_, index) => index);
+  host.render(list(keys));
+  const { renderer } = host;
+  const painted = () => renderer.getPaintedText().filter((text) => text.startsWith("row "));
+  assert.ok(painted().length >= 3 && painted().length < 40, `only viewport and overdraw rows paint, got ${painted().length}`);
+  assert.deepEqual(painted().slice(0, 3), ["row 0", "row 1", "row 2"]);
+  const id = byTestId(host, "list").id;
+  assert.equal(renderer.getListScrollTop(id).itemIndex, 0);
+
+  renderer.scrollToItem(id, 10, 8);
+  renderer.flush();
+  assert.deepEqual([renderer.getListScrollTop(id).itemIndex, renderer.getListScrollTop(id).offset], [10, 8]);
+  assert.equal(painted()[0], "row 10");
+  assert.equal(renderer.findByTestId("row-10")[0].bounds.y, -8, "the row is 8 px into the viewport top");
+
+  // Removing a row before the anchor keeps the same row at the viewport top.
+  host.render(list(keys.filter((key) => key !== 3)));
+  renderer.flush();
+  assert.deepEqual([renderer.getListScrollTop(id).itemIndex, renderer.getListScrollTop(id).offset], [9, 8]);
+  assert.equal(painted()[0], "row 10");
+
+  // Unchanged rerenders keep the native state.
+  host.render(list(keys.filter((key) => key !== 3)));
+  renderer.flush();
+  assert.deepEqual([renderer.getListScrollTop(id).itemIndex, renderer.getListScrollTop(id).offset], [9, 8]);
+  assert.deepEqual(host.errors, []);
+});
+
+native("a row of a virtual list reacts to input and scrolls into view", () => {
+  const clicks = [];
+  const host = createTestHost({ width: 300, height: 200 });
+  host.render(
+    h(
+      "div",
+      { style: { width: 300, height: 200, display: "flex", flexDirection: "column" } },
+      h("virtual-list", { testId: "list", estimatedItemHeight: 40, style: { height: 120, width: 300 } }, rowsOf([0, 1, 2, 3, 4, 5], { onClick: (event) => clicks.push(event.x) })),
+    ),
+  );
+  const { renderer } = host;
+  renderer.nativeSimulateClick(10, 50);
+  assert.deepEqual(clicks, [10]);
+  const id = byTestId(host, "list").id;
+  assert.deepEqual(renderer.getScrollOffset(id), { x: 0, y: 0 });
+  renderer.scrollIntoView(byTestId(host, "row-5").id);
+  renderer.flush();
+  const offset = renderer.getScrollOffset(id);
+  assert.equal(offset.y, -(6 * 40 - 120), "the last row is brought fully into view with minimal movement");
+});
