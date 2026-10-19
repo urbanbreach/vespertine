@@ -217,6 +217,14 @@ impl Img {
         ]
     }
 
+    /// Sets the image alternative text. It becomes the accessible label only
+    /// when no `aria-label` was supplied (not even an invalid or empty one) and
+    /// the text is nonempty.
+    pub fn alt(mut self, alt: impl Into<SharedString>) -> Self {
+        self.interactivity.aria.alt = Some(alt.into());
+        self
+    }
+
     /// Sets the image cache for the current node.
     ///
     /// If the `image_cache` is not explicitly provided, the function will determine the image cache by:
@@ -232,6 +240,14 @@ impl Img {
             image_cache: Some(image_cache.clone().into()),
             ..self
         }
+    }
+}
+
+impl Stateful<Img> {
+    /// Sets the image alternative text; see [`Img::alt`].
+    pub fn alt(mut self, alt: impl Into<SharedString>) -> Self {
+        self.element.interactivity.aria.alt = Some(alt.into());
+        self
     }
 }
 
@@ -272,6 +288,15 @@ impl Element for Img {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         self.interactivity.source_location()
+    }
+
+    fn a11y_role(&self) -> Option<accesskit::Role> {
+        self.interactivity.a11y_role()
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        self.interactivity.write_a11y_info(node);
+        self.interactivity.write_alt_fallback(node);
     }
 
     fn request_layout(

@@ -102,7 +102,7 @@ use crate::*;
 
 pub(crate) mod debug;
 
-use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
+use crate::{App, FocusId, SharedString, Window};
 use accesskit::{Action, NodeId, TreeUpdate};
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
@@ -147,7 +147,6 @@ pub(crate) struct A11y {
     active_this_frame: bool,
     pub(crate) nodes: A11yNodeBuilder,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
-    pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
@@ -175,7 +174,6 @@ impl A11y {
             active_this_frame: false,
             nodes: A11yNodeBuilder::new(),
             focus_ids: FxHashMap::default(),
-            node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
             window_title,
             last_focus_without_node: None,
@@ -211,6 +209,15 @@ impl A11y {
     /// for more commentary.
     pub(crate) fn sync_active_flag(&mut self) {
         self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
+    }
+
+    /// Simulates the platform adapter activating or deactivating accessibility,
+    /// without a connected assistive client. Does nothing when accessibility is
+    /// force-disabled.
+    pub(crate) fn set_simulated_active(&mut self, active: bool) {
+        if self.is_enabled() {
+            self.active_flag.store(active, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -274,7 +281,6 @@ impl A11y {
     /// Clear per-frame state and push the root node to start a new frame.
     pub(crate) fn begin_frame(&mut self) {
         self.focus_ids.clear();
-        self.node_bounds.clear();
         self.action_listeners.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }

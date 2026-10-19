@@ -210,6 +210,10 @@ name = "input"
 path = "examples/input.rs"
 
 [[example]]
+name = "pane_group"
+path = "examples/pane_group.rs"
+
+[[example]]
 name = "on_window_close_quit"
 path = "examples/on_window_close_quit.rs"
 
@@ -283,6 +287,14 @@ name = "list_example"
 path = "examples/list_example.rs"
 
 [[example]]
+name = "virtual_list_windowed"
+path = "examples/virtual_list_windowed.rs"
+
+[[example]]
+name = "list_trailing_reservation"
+path = "examples/list_trailing_reservation.rs"
+
+[[example]]
 name = "mouse_pressure"
 path = "examples/mouse_pressure.rs"
 
@@ -330,3 +342,15 @@ path = "examples/reactive_background.rs"
 [[example]]
 name = "menus_in_window"
 path = "examples/menus_in_window.rs"
+
+[[example]]
+name = "a11y_declarative"
+path = "examples/a11y_declarative.rs"
+
+[[example]]
+name = "responsive_layout"
+path = "examples/responsive_layout.rs"
+
+[[example]]
+name = "image_treatments"
+path = "examples/image_treatments.rs"

@@ -7509,9 +7509,11 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "libc",
+ "serde_json",
  "vespertine",
  "vespertine_platform",
  "vespertine_richtext",
+ "vespertine_theme",
  "vespertine_wgpu",
 ]
 
@@ -7563,6 +7565,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "ttf-parser",
+ "vespertine",
+ "vespertine_platform",
+ "vespertine_wgpu",
+]
+
+[[package]]
+name = "vespertine_theme"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "log",
+ "serde",
+ "serde_json",
  "vespertine",
  "vespertine_platform",
  "vespertine_wgpu",

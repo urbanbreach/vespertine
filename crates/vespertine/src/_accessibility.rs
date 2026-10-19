@@ -218,7 +218,25 @@
 //!
 //! Note that some common actions are automatically registered. For example,
 //! [`.on_click()`][StatefulInteractiveElement::on_click] adds an
-//! [`AccessibleAction::Click`] handler that calls the click handler.
+//! [`AccessibleAction::Click`] handler that delivers the same click event as a
+//! pointer click would (left button, click count 1, not a right click) to the
+//! click handlers. A node without a click subscription has no click action.
+//!
+//! ## Declarative properties
+//!
+//! Declarative hosts describe accessibility with DOM-style role tokens and
+//! hyphenated `aria-*` properties. [`apply_aria_properties`] applies a property
+//! map to an element, and [`DeclarativeAria`] offers the same as builders:
+//! role tokens are case-sensitive (see [`AriaRoleToken`]), invalid property
+//! values are ignored, `none` and `presentation` suppress the element's own
+//! node, and `alt` is an image's label only when no `aria-label` is present.
+//! Images ([`img`]), vector images ([`svg`]) and virtual lists ([`list`]) forward
+//! their accessibility builders into the generated node.
+//!
+//! Tests can build the accessibility tree without a screen reader:
+//! [`Window::set_a11y_active_for_tests`] marks accessibility active (unless the
+//! app was created without accessibility) and [`Window::debug_a11y_tree_json`]
+//! dumps the tree, including each node's `author_id`.
 //!
 //! ## Synthetic children
 //!

@@ -10,10 +10,12 @@ mod action;
 mod app;
 
 mod arena;
+mod aria;
 mod asset_cache;
 mod assets;
 mod bounds_tree;
 mod color;
+mod color_css;
 /// The default colors used by VESPERTINE.
 pub mod colors;
 #[cfg(feature = "profiler")]
@@ -34,6 +36,7 @@ mod gpu_context;
 mod hot_reload;
 mod image_fit;
 mod image_mask;
+mod image_treatment;
 mod input;
 mod inspector;
 mod interactive;
@@ -43,6 +46,7 @@ mod motion_clock;
 mod paint_scope;
 #[cfg(test)]
 mod paint_scope_window_tests;
+pub mod panes;
 mod path_builder;
 mod platform;
 pub mod prelude;
@@ -60,6 +64,8 @@ pub mod queue;
 /// A seeded, mutable element tree for benchmarks and tests of VESPERTINE rendering.
 #[cfg(any(test, feature = "bench-support"))]
 pub mod randomized_element_tree;
+#[cfg(test)]
+mod responsive_layout_tests;
 #[cfg(test)]
 mod rounded_clip_tests;
 mod scene;
@@ -116,9 +122,11 @@ pub use action::*;
 pub use anyhow::Result;
 pub use app::*;
 pub(crate) use arena::*;
+pub use aria::*;
 pub use asset_cache::*;
 pub use assets::*;
 pub use color::*;
+pub use color_css::{css_color_to_packed, css_color_to_rgba, oklch_to_rgba, parse_css_color};
 pub use ctor::ctor;
 #[cfg(feature = "profiler")]
 pub use debug_overlay::*;
@@ -202,6 +210,7 @@ macro_rules! bench_main {
 }
 pub use image_fit::{anchor_zoom, cover_fit, pan_focal};
 pub use image_mask::*;
+pub use image_treatment::*;
 pub use input::*;
 pub use inspector::*;
 pub use interactive::*;

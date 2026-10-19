@@ -1,0 +1,27 @@
+[package]
+name = "vespertine_theme"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "Apache-2.0"
+description = "Component palettes, semantic themes and theme import for Vespertine"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/vespertine_theme.rs"
+doctest = false
+
+[dependencies]
+vespertine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+vespertine = { workspace = true, features = ["test-support"] }
+vespertine_platform = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
+vespertine_wgpu = { workspace = true, features = ["test-support"] }
+image.workspace = true

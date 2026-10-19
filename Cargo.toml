@@ -26,6 +26,7 @@ members = [
     "crates/vespertine_shared_string",
     "crates/vespertine_sum_tree",
     "crates/vespertine_test_host",
+    "crates/vespertine_theme",
     "crates/vespertine_tokio",
     "crates/vespertine_util",
     "crates/vespertine_util_core",
@@ -611,6 +612,9 @@ path = "crates/vespertine_shared_string"
 
 [workspace.dependencies.vespertine_sum_tree]
 path = "crates/vespertine_sum_tree"
+
+[workspace.dependencies.vespertine_theme]
+path = "crates/vespertine_theme"
 
 [workspace.dependencies.vespertine_util]
 path = "crates/vespertine_util"

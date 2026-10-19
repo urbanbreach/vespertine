@@ -34,6 +34,10 @@ cargo run -p vespertine --example hello_world
 - `drag_drop` shows draggable elements and drop targets.
 - `focus_visible` demonstrates keyboard-visible focus styling.
 - `mouse_pressure` demonstrates pressure-sensitive pointer input where supported.
+- `pane_group` composes collapsible, resizable side and bottom panes around a
+  main region while a retained text input keeps typing, selection, composition
+  and focus (ctrl-1..4 toggle panes and dock the input; drag a seam, double-click
+  it to reset).
 - `popover` shows floating layers with `deferred` and `anchored`.
 - `scrollable` demonstrates scrollable content.
 - `tab_stop` shows keyboard tab navigation.

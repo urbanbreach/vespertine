@@ -272,6 +272,14 @@ impl Element for UniformList {
         None
     }
 
+    fn a11y_role(&self) -> Option<accesskit::Role> {
+        self.interactivity.a11y_role()
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        self.interactivity.write_a11y_info(node);
+    }
+
     fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,

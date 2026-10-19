@@ -233,6 +233,10 @@ fn node_to_json(
     }
 
     // String properties.
+    // Present exactly when an identifier was set, including an empty one.
+    if let Some(v) = node.author_id() {
+        aria.insert("author_id".into(), json!(v));
+    }
     if let Some(v) = node.label() {
         aria.insert("label".into(), json!(v));
     }

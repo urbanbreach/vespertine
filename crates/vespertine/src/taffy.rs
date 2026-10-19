@@ -377,6 +377,17 @@ impl TaffyLayoutEngine {
         self.absolute_layout_bounds.insert(id, bounds);
         bounds
     }
+
+    /// The size Taffy solved for a node in logical pixels, before post-layout
+    /// edge snapping.
+    #[cfg(test)]
+    pub fn unsnapped_size(&self, id: LayoutId, scale_factor: f32) -> Size<Pixels> {
+        let solved = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE).size;
+        size(
+            Pixels(solved.width / scale_factor),
+            Pixels(solved.height / scale_factor),
+        )
+    }
 }
 
 /// A unique identifier for a layout node, generated when requesting a layout from Taffy

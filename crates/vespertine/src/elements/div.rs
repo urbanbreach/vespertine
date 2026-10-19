@@ -1306,13 +1306,14 @@ pub trait InteractiveElement: Sized {
 pub trait StatefulInteractiveElement: InteractiveElement {
     /// Set the accessible role for this element.
     ///
+    /// `Role::GenericContainer` never forces a node into the accessibility tree:
+    /// assigning it behaves like assigning no role.
+    ///
     /// See the [accessibility guide](crate::_accessibility) for an overview.
     fn role(mut self, role: accesskit::Role) -> Self {
-        debug_assert!(
-            role != accesskit::Role::GenericContainer,
-            "GenericContainer is filtered out of the a11y tree and has no effect"
-        );
-        self.interactivity().override_role = Some(role);
+        let interactivity = self.interactivity();
+        interactivity.override_role = Some(role);
+        interactivity.aria.suppress_node = false;
         self
     }
 
@@ -1903,11 +1904,9 @@ impl Element for Div {
     }
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
-        // Nodes with `GenericContainer` should never be reported to accesskit.
-        // Equivalent to an HTML div with no role.
-        self.interactivity
-            .override_role
-            .filter(|role| *role != accesskit::Role::GenericContainer)
+        // Nodes with `GenericContainer` or a suppressing role token are never
+        // reported to accesskit. Equivalent to an HTML div with no role.
+        self.interactivity.a11y_role()
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
@@ -2125,6 +2124,12 @@ pub(crate) struct AriaProperties {
     pub(crate) column_index: Option<usize>,
     pub(crate) row_count: Option<usize>,
     pub(crate) column_count: Option<usize>,
+    /// Image alternative text; used as the label only when no label attribute exists.
+    pub(crate) alt: Option<SharedString>,
+    /// An `aria-label` attribute was supplied (even if rejected as invalid).
+    pub(crate) label_attribute_present: bool,
+    /// An explicit `none`/`presentation`/`generic` role suppresses this node.
+    pub(crate) suppress_node: bool,
 }
 
 /// The interactivity struct. Powers all of the general-purpose
@@ -2596,6 +2601,7 @@ impl Interactivity {
                                                 );
                                             }
 
+                                            self.register_a11y_click(global_id, hitbox, window);
                                             self.paint_mouse_listeners(
                                                 hitbox,
                                                 element_state.as_mut(),

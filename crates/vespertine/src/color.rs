@@ -1,4 +1,5 @@
-use anyhow::{Context as _, bail};
+use crate::css_color_to_rgba;
+use anyhow::Context as _;
 use schemars::{JsonSchema, json_schema};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
@@ -149,7 +150,7 @@ impl Visitor<'_> for RgbaVisitor {
     type Value = Rgba;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a string in the format #rrggbb or #rrggbbaa")
+        formatter.write_str("a CSS color string such as #rrggbb, #rrggbbaa or rgb(255 0 0)")
     }
 
     fn visit_str<E: de::Error>(self, value: &str) -> Result<Rgba, E> {
@@ -224,107 +225,10 @@ impl From<Hsla> for Rgba {
 impl TryFrom<&'_ str> for Rgba {
     type Error = anyhow::Error;
 
+    /// Parses color text with the shared CSS color parser ([`css_color_to_rgba`]), which accepts
+    /// every hexadecimal form upstream accepted plus named and functional notations.
     fn try_from(value: &'_ str) -> Result<Self, Self::Error> {
-        const RGB: usize = "rgb".len();
-        const RGBA: usize = "rgba".len();
-        const RRGGBB: usize = "rrggbb".len();
-        const RRGGBBAA: usize = "rrggbbaa".len();
-
-        const EXPECTED_FORMATS: &str = "Expected #rgb, #rgba, #rrggbb, or #rrggbbaa";
-        const INVALID_UNICODE: &str = "invalid unicode characters in color";
-
-        let Some(("", hex)) = value.trim().split_once('#') else {
-            bail!("invalid RGBA hex color: '{value}'. {EXPECTED_FORMATS}");
-        };
-
-        let (r, g, b, a) = match hex.len() {
-            RGB | RGBA => {
-                let r = u8::from_str_radix(
-                    hex.get(0..1).with_context(|| {
-                        format!("{INVALID_UNICODE}: r component of #rgb/#rgba for value: '{value}'")
-                    })?,
-                    16,
-                )?;
-                let g = u8::from_str_radix(
-                    hex.get(1..2).with_context(|| {
-                        format!("{INVALID_UNICODE}: g component of #rgb/#rgba for value: '{value}'")
-                    })?,
-                    16,
-                )?;
-                let b = u8::from_str_radix(
-                    hex.get(2..3).with_context(|| {
-                        format!("{INVALID_UNICODE}: b component of #rgb/#rgba for value: '{value}'")
-                    })?,
-                    16,
-                )?;
-                let a = if hex.len() == RGBA {
-                    u8::from_str_radix(
-                        hex.get(3..4).with_context(|| {
-                            format!("{INVALID_UNICODE}: a component of #rgba for value: '{value}'")
-                        })?,
-                        16,
-                    )?
-                } else {
-                    0xf
-                };
-
-                /// Duplicates a given hex digit.
-                /// E.g., `0xf` -> `0xff`.
-                const fn duplicate(value: u8) -> u8 {
-                    (value << 4) | value
-                }
-
-                (duplicate(r), duplicate(g), duplicate(b), duplicate(a))
-            }
-            RRGGBB | RRGGBBAA => {
-                let r = u8::from_str_radix(
-                    hex.get(0..2).with_context(|| {
-                        format!(
-                            "{}: r component of #rrggbb/#rrggbbaa for value: '{}'",
-                            INVALID_UNICODE, value
-                        )
-                    })?,
-                    16,
-                )?;
-                let g = u8::from_str_radix(
-                    hex.get(2..4).with_context(|| {
-                        format!(
-                            "{INVALID_UNICODE}: g component of #rrggbb/#rrggbbaa for value: '{value}'"
-                        )
-                    })?,
-                    16,
-                )?;
-                let b = u8::from_str_radix(
-                    hex.get(4..6).with_context(|| {
-                        format!(
-                            "{INVALID_UNICODE}: b component of #rrggbb/#rrggbbaa for value: '{value}'"
-                        )
-                    })?,
-                    16,
-                )?;
-                let a = if hex.len() == RRGGBBAA {
-                    u8::from_str_radix(
-                        hex.get(6..8).with_context(|| {
-                            format!(
-                                "{INVALID_UNICODE}: a component of #rrggbbaa for value: '{value}'"
-                            )
-                        })?,
-                        16,
-                    )?
-                } else {
-                    0xff
-                };
-                (r, g, b, a)
-            }
-            _ => bail!("invalid RGBA hex color: '{value}'. {EXPECTED_FORMATS}"),
-        };
-
-        Ok(Rgba {
-            r: r as f32 / 255.,
-            g: g as f32 / 255.,
-            b: b as f32 / 255.,
-            a: a as f32 / 255.,
-        })
+        css_color_to_rgba(value).with_context(|| format!("invalid CSS color: '{value}'"))
     }
 }
 

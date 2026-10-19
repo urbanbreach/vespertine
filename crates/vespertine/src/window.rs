@@ -2024,18 +2024,7 @@ impl Window {
             move |active| {
                 handle
                     .update(&mut cx, |_, window, cx| {
-                        window.active.set(active);
-                        window.modifiers = window.platform_window.modifiers();
-                        window.capslock = window.platform_window.capslock();
-                        window
-                            .activation_observers
-                            .clone()
-                            .retain(&(), |callback| callback(window, cx));
-
-                        window.bounds_changed(cx);
-                        window.refresh();
-
-                        SystemWindowTabController::update_last_active(cx, window.handle.id);
+                        window.handle_active_status_change(active, cx);
                     })
                     .log_err();
             }
@@ -5816,6 +5805,17 @@ impl Window {
         bounds
     }
 
+    /// The size Taffy solved for the layout node, in logical pixels, before any
+    /// device-pixel snapping. Test-only.
+    #[cfg(test)]
+    pub(crate) fn unsnapped_layout_size(&mut self, layout_id: LayoutId) -> Size<Pixels> {
+        let scale_factor = self.scale_factor();
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .unsnapped_size(layout_id, scale_factor)
+    }
+
     /// This method should be called during `prepaint`. You can use
     /// the returned [Hitbox] during `paint` or in an event handler
     /// to determine whether the inserted hitbox was the topmost.
@@ -7585,6 +7585,39 @@ impl Window {
         self.a11y.is_active()
     }
 
+    /// Marks accessibility active or inactive without a connected assistive
+    /// client, then refreshes the window so the next frame builds (or stops
+    /// building) an accessibility tree. Has no effect on a window of an app
+    /// created without accessibility ([`crate::Application::new_inaccessible`]).
+    pub fn set_a11y_active_for_tests(&mut self, active: bool) {
+        self.a11y.set_simulated_active(active);
+        self.refresh();
+    }
+
+    /// Reports this window as active or inactive without asking the window
+    /// system to activate it. It runs the same logical transition as a native
+    /// activation change (activity flag, modifier and caps-lock state,
+    /// activation observers, bounds, refresh and last-active-window
+    /// bookkeeping), so focus and blur observers can be exercised on offscreen
+    /// windows while the real keyboard focus is left untouched.
+    pub fn set_active_for_tests(&mut self, active: bool, cx: &mut App) {
+        self.handle_active_status_change(active, cx);
+    }
+
+    fn handle_active_status_change(&mut self, active: bool, cx: &mut App) {
+        self.active.set(active);
+        self.modifiers = self.platform_window.modifiers();
+        self.capslock = self.platform_window.capslock();
+        self.activation_observers
+            .clone()
+            .retain(&(), |callback| callback(self, cx));
+
+        self.bounds_changed(cx);
+        self.refresh();
+
+        SystemWindowTabController::update_last_active(cx, self.handle.id);
+    }
+
     /// Debug representation of the last frame's accessibility information.
     pub fn debug_a11y_tree_json(&self) -> Option<String> {
         self.a11y.debug_tree_json()
@@ -7630,26 +7663,6 @@ impl Window {
 
         // Fall back to built-in action handling.
         match request.action {
-            accesskit::Action::Click => {
-                if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
-                    let center = bounds.center();
-                    let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: center,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                        first_mouse: false,
-                    });
-                    let mouse_up = PlatformInput::MouseUp(MouseUpEvent {
-                        button: MouseButton::Left,
-                        position: center,
-                        modifiers: Modifiers::default(),
-                        click_count: 1,
-                    });
-                    self.dispatch_event(mouse_down, cx);
-                    self.dispatch_event(mouse_up, cx);
-                }
-            }
             accesskit::Action::Focus => {
                 if let Some(focus_id) = self.a11y.focus_ids.get(&request.target_node).copied()
                     && let Some(handle) = FocusHandle::for_id(focus_id, &cx.focus_handles)
