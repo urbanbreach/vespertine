@@ -18,8 +18,10 @@ vespertine.workspace = true
 vespertine_theme.workspace = true
 vespertine_webview.workspace = true
 thiserror.workspace = true
+image.workspace = true
 unicode-segmentation.workspace = true
 url.workspace = true
+usvg.workspace = true
 
 [dev-dependencies]
 image.workspace = true
@@ -42,3 +44,7 @@ path = "examples/chart_gallery.rs"
 [[example]]
 name = "audio_activity"
 path = "examples/audio_activity.rs"
+
+[[example]]
+name = "media_viewer"
+path = "examples/media_viewer.rs"

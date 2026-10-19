@@ -7380,6 +7380,7 @@ dependencies = [
  "thiserror 2.0.17",
  "unicode-segmentation",
  "url",
+ "usvg",
  "vespertine",
  "vespertine_platform",
  "vespertine_test_host",

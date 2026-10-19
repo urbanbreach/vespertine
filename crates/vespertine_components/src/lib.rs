@@ -3,10 +3,13 @@
 //! [`browser`] is the embedded browser surface of CMP-022: ordinary framework chrome (history and
 //! reload buttons, an address input, an open-in-default-browser button, validation and
 //! placeholder states) around the embedded web page of `vespertine_webview`.
+//!
+//! [`media`] holds the bounded image layer and the zoomable viewer of CMP-020.
 
 pub mod audio;
 pub mod browser;
 pub mod chart;
 pub mod floating;
+pub mod media;
 pub mod status;
 pub mod tokens;
