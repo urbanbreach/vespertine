@@ -19,5 +19,6 @@ path = "src/bin/vsp-scene-runner.rs"
 [dependencies]
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
+vespertine_wgpu.workspace = true
 inventory.workspace = true
 libc.workspace = true
