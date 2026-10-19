@@ -2470,10 +2470,13 @@ impl StateInner {
                 }
             }
             if let Some((item_index, focus_id, focus_handle)) = found {
+                // Reborrowed for each row: the loop keeps using the session afterwards.
+                #[allow(clippy::needless_option_as_deref)]
+                let session = rows.as_deref_mut();
                 let (element, element_size, row) = self.build_row(
                     item_index,
                     available_item_space,
-                    rows.as_deref_mut(),
+                    session,
                     render_item,
                     window,
                     cx,

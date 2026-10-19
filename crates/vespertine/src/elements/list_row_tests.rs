@@ -187,7 +187,7 @@ fn row_element(
         .aria_label(format!("row {ix}"))
         .h(px(height))
         .w_full()
-        .bg(if ix % 2 == 0 {
+        .bg(if ix.is_multiple_of(2) {
             crate::white()
         } else {
             crate::rgb(0xf0f0f0).into()
