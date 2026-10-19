@@ -85,6 +85,11 @@ pub(crate) struct IndexScratch {
     counts: Vec<u32>,
     keys: Vec<u64>,
     sprite_keys: Vec<SpriteKey>,
+    /// `(texture, tile, index)` keys of one order bucket of sprites.
+    bucket_keys: Vec<u128>,
+    /// Counting-sort counters and destination of one order bucket of sprites.
+    tile_counts: Vec<u32>,
+    bucket_out: Vec<u32>,
     /// Number of times any scratch vector had to grow.
     allocations: u64,
 }
@@ -192,13 +197,80 @@ fn counting_permutation<T: SortRecord>(
         for order in 0..=max_order {
             let end = scratch.counts[order] as usize;
             if end - start > 1 {
-                scratch.source[start..end].sort_unstable_by_key(|&index| {
-                    let (texture, tile) = records[index as usize].group_key();
-                    (texture, tile, index)
-                });
+                sort_bucket(records, scratch, start, end);
             }
             start = end;
         }
+    }
+}
+
+/// Orders `scratch.source[start..end]` (record indices of one order, ascending) by group key,
+/// keeping the index order among equal keys.
+///
+/// The sprites of one order mostly share a texture and their tiles are small dense numbers, so
+/// they are placed by a stable counting sort on the tile; anything else is sorted through packed
+/// keys that are compared without touching the records.
+fn sort_bucket<T: SortRecord>(records: &[T], scratch: &mut IndexScratch, start: usize, end: usize) {
+    let len = end - start;
+    let (first_texture, _) = records[scratch.source[start] as usize].group_key();
+    let (mut one_texture, mut sorted) = (true, true);
+    let (mut min_tile, mut max_tile) = (u32::MAX, 0u32);
+    let mut last = (0u64, 0u32);
+    for &index in &scratch.source[start..end] {
+        let key = records[index as usize].group_key();
+        one_texture &= key.0 == first_texture;
+        sorted &= key >= last;
+        last = key;
+        min_tile = min_tile.min(key.1);
+        max_tile = max_tile.max(key.1);
+    }
+    if sorted {
+        return;
+    }
+
+    let range = (max_tile - min_tile) as usize;
+    if one_texture && range <= COUNTING_SORT_FACTOR * len + 64 {
+        reserve_counted(
+            &mut scratch.tile_counts,
+            range + 2,
+            &mut scratch.allocations,
+        );
+        scratch.tile_counts.clear();
+        scratch.tile_counts.resize(range + 2, 0);
+        for &index in &scratch.source[start..end] {
+            let tile = records[index as usize].group_key().1;
+            scratch.tile_counts[(tile - min_tile) as usize + 1] += 1;
+        }
+        for tile in 1..scratch.tile_counts.len() {
+            scratch.tile_counts[tile] += scratch.tile_counts[tile - 1];
+        }
+        reserve_counted(&mut scratch.bucket_out, len, &mut scratch.allocations);
+        scratch.bucket_out.clear();
+        scratch.bucket_out.resize(len, 0);
+        for &index in &scratch.source[start..end] {
+            let tile = records[index as usize].group_key().1;
+            let slot = &mut scratch.tile_counts[(tile - min_tile) as usize];
+            scratch.bucket_out[*slot as usize] = index;
+            *slot += 1;
+        }
+        scratch.source[start..end].copy_from_slice(&scratch.bucket_out);
+        return;
+    }
+
+    reserve_counted(&mut scratch.bucket_keys, len, &mut scratch.allocations);
+    scratch.bucket_keys.clear();
+    for &index in &scratch.source[start..end] {
+        let (texture, tile) = records[index as usize].group_key();
+        scratch
+            .bucket_keys
+            .push((u128::from(texture) << 64) | (u128::from(tile) << 32) | u128::from(index));
+    }
+    scratch.bucket_keys.sort_unstable();
+    for (slot, key) in scratch.source[start..end]
+        .iter_mut()
+        .zip(&scratch.bucket_keys)
+    {
+        *slot = *key as u32;
     }
 }
 

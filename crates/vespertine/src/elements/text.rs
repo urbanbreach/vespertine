@@ -461,15 +461,10 @@ impl StyledText {
         for (range, highlight) in highlights {
             if ix < range.start {
                 debug_assert!(text.is_char_boundary(range.start));
-                runs.push(default_style.clone().to_run(range.start - ix));
+                runs.push(default_style.to_run(range.start - ix));
             }
             debug_assert!(text.is_char_boundary(range.end));
-            runs.push(
-                default_style
-                    .clone()
-                    .highlight(highlight)
-                    .to_run(range.len()),
-            );
+            runs.push(default_style.to_highlighted_run(highlight, range.len()));
             ix = range.end;
         }
         if ix < text.len() {

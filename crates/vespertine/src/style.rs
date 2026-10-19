@@ -712,6 +712,32 @@ impl TextStyle {
         self
     }
 
+    /// The run [`TextStyle::highlight`] followed by [`TextStyle::to_run`] would produce, without
+    /// cloning the style.
+    pub(crate) fn to_highlighted_run(&self, highlight: HighlightStyle, len: usize) -> TextRun {
+        let mut color = self.color;
+        if let Some(highlight_color) = highlight.color {
+            color = color.blend(highlight_color);
+        }
+        if let Some(factor) = highlight.fade_out {
+            color.fade_out(factor);
+        }
+        TextRun {
+            len,
+            font: Font {
+                family: self.font_family.clone(),
+                features: self.font_features.clone(),
+                fallbacks: self.font_fallbacks.clone(),
+                weight: highlight.font_weight.unwrap_or(self.font_weight),
+                style: highlight.font_style.unwrap_or(self.font_style),
+            },
+            color,
+            background_color: highlight.background_color.or(self.background_color),
+            underline: highlight.underline.or(self.underline),
+            strikethrough: highlight.strikethrough.or(self.strikethrough),
+        }
+    }
+
     /// Get the font configured for this text style.
     pub fn font(&self) -> Font {
         Font {

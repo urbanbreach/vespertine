@@ -5,12 +5,12 @@
 //! reach used for culling, and the test-support counters that make the
 //! per-run / per-line decisions observable.
 
+use crate::util::{ceil_fast, floor_fast};
 use crate::{
     AtlasTile, Bounds, ContentMask, DevicePixels, FontId, Hsla, IsZero, Pixels, Point,
     RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Size,
 };
 use smallvec::SmallVec;
-use std::hash::{Hash, Hasher};
 
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 use std::cell::Cell;
@@ -98,17 +98,17 @@ impl GlyphCounters {
 #[inline]
 pub(crate) fn quantize_glyph_axis(value: f32, variants: u8) -> (f32, u8) {
     let variants = f32::from(variants);
-    let whole = value.floor();
+    let whole = floor_fast(value);
     let fraction = value - whole;
-    let steps = (fraction * variants - 0.5).ceil().max(0.0);
-    let carry = (steps / variants).floor();
+    let steps = ceil_fast(fraction * variants - 0.5).max(0.0);
+    let carry = floor_fast(steps / variants);
     (whole + carry, (steps - carry * variants) as u8)
 }
 
 /// Whole-pixel origin of an emoji coordinate: the floor, plus one if the fraction exceeds one half.
 #[inline]
 pub(crate) fn quantize_emoji_axis(value: f32) -> f32 {
-    let whole = value.floor();
+    let whole = floor_fast(value);
     if value - whole <= 0.5 {
         whole
     } else {
@@ -324,17 +324,19 @@ impl RasterStore {
     }
 
     /// Hash of every field of the request, reduced to a slot index.
+    #[inline]
     pub(crate) fn slot_index(params: &RenderGlyphParams) -> usize {
         let mut hasher = SlotHasher(0);
-        params.font_id.hash(&mut hasher);
-        params.glyph_id.0.hash(&mut hasher);
-        params.font_size.0.to_bits().hash(&mut hasher);
-        params.subpixel_variant.x.hash(&mut hasher);
-        params.subpixel_variant.y.hash(&mut hasher);
-        params.scale_factor.to_bits().hash(&mut hasher);
-        params.is_emoji.hash(&mut hasher);
-        params.subpixel_rendering.hash(&mut hasher);
-        params.dilation.hash(&mut hasher);
+        hasher.mix(params.font_id.0 as u64);
+        hasher.mix(u64::from(params.glyph_id.0) | (u64::from(params.font_size.0.to_bits()) << 32));
+        hasher.mix(
+            u64::from(params.scale_factor.to_bits())
+                | (u64::from(params.subpixel_variant.x) << 32)
+                | (u64::from(params.subpixel_variant.y) << 40)
+                | (u64::from(params.is_emoji) << 48)
+                | (u64::from(params.subpixel_rendering) << 49)
+                | (u64::from(params.dilation) << 56),
+        );
         // The multiplicative hash mixes into the high bits.
         (hasher.0 >> (64 - RASTER_STORE_SLOTS.trailing_zeros())) as usize
     }
@@ -388,7 +390,7 @@ impl RasterStore {
                 origin,
                 size: size.map(Into::into),
             };
-            if known.intersect(&mask.bounds).is_empty() {
+            if disjoint(&known, &mask.bounds) {
                 return Ok(None);
             }
         }
@@ -412,7 +414,17 @@ impl RasterStore {
     }
 }
 
-/// Fibonacci-style multiplicative hasher; the slot index is taken from the high bits.
+/// Whether `a` and `b` share no area, that is, whether their intersection is empty.
+#[inline]
+fn disjoint(a: &Bounds<ScaledPixels>, b: &Bounds<ScaledPixels>) -> bool {
+    let left = a.origin.x.0.max(b.origin.x.0);
+    let top = a.origin.y.0.max(b.origin.y.0);
+    let right = (a.origin.x.0 + a.size.width.0).min(b.origin.x.0 + b.size.width.0);
+    let bottom = (a.origin.y.0 + a.size.height.0).min(b.origin.y.0 + b.size.height.0);
+    right <= left || bottom <= top
+}
+
+/// Fibonacci-style multiplicative hash; the slot index is taken from the high bits.
 struct SlotHasher(u64);
 
 impl SlotHasher {
@@ -421,34 +433,6 @@ impl SlotHasher {
     #[inline]
     fn mix(&mut self, value: u64) {
         self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(Self::SEED);
-    }
-}
-
-impl Hasher for SlotHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.mix(u64::from(byte));
-        }
-    }
-
-    fn write_u8(&mut self, value: u8) {
-        self.mix(u64::from(value));
-    }
-
-    fn write_u32(&mut self, value: u32) {
-        self.mix(u64::from(value));
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.mix(value);
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.mix(value as u64);
     }
 }
 

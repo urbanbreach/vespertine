@@ -1652,8 +1652,8 @@ impl Size<Pixels> {
     /// Converts the size from logical to physical pixels.
     pub fn to_device_pixels(self, scale_factor: f32) -> Size<DevicePixels> {
         size(
-            DevicePixels((self.width.0 * scale_factor).round() as i32),
-            DevicePixels((self.height.0 * scale_factor).round() as i32),
+            DevicePixels(crate::util::round_fast(self.width.0 * scale_factor) as i32),
+            DevicePixels(crate::util::round_fast(self.height.0 * scale_factor) as i32),
         )
     }
 }
@@ -1706,8 +1706,8 @@ impl Bounds<Pixels> {
     pub fn to_device_pixels(self, factor: f32) -> Bounds<DevicePixels> {
         Bounds {
             origin: point(
-                DevicePixels((self.origin.x.0 * factor).round() as i32),
-                DevicePixels((self.origin.y.0 * factor).round() as i32),
+                DevicePixels(crate::util::round_fast(self.origin.x.0 * factor) as i32),
+                DevicePixels(crate::util::round_fast(self.origin.y.0 * factor) as i32),
             ),
             size: self.size.to_device_pixels(factor),
         }
@@ -2809,7 +2809,7 @@ impl Pixels {
     ///
     /// Returns a new `Pixels` instance with the floored value.
     pub fn floor(&self) -> Self {
-        Self(self.0.floor())
+        Self(crate::util::floor_fast(self.0))
     }
 
     /// Rounds the `Pixels` value to the nearest whole number.
@@ -2818,7 +2818,7 @@ impl Pixels {
     ///
     /// Returns a new `Pixels` instance with the rounded value.
     pub fn round(&self) -> Self {
-        Self(self.0.round())
+        Self(crate::util::round_fast(self.0))
     }
 
     /// Returns the ceiling of the `Pixels` value to the nearest whole number.
@@ -2827,7 +2827,7 @@ impl Pixels {
     ///
     /// Returns a new `Pixels` instance with the ceiling value.
     pub fn ceil(&self) -> Self {
-        Self(self.0.ceil())
+        Self(crate::util::ceil_fast(self.0))
     }
 
     /// Scales the `Pixels` value by a given factor, producing `ScaledPixels`.
@@ -3098,7 +3098,7 @@ impl ScaledPixels {
     ///
     /// Returns a new `ScaledPixels` instance with the floored value.
     pub fn floor(&self) -> Self {
-        Self(self.0.floor())
+        Self(crate::util::floor_fast(self.0))
     }
 
     /// Rounds the `ScaledPixels` value to the nearest whole number.
@@ -3107,7 +3107,7 @@ impl ScaledPixels {
     ///
     /// Returns a new `ScaledPixels` instance with the rounded value.
     pub fn round(&self) -> Self {
-        Self(self.0.round())
+        Self(crate::util::round_fast(self.0))
     }
 
     /// Ceils the `ScaledPixels` value to the nearest whole number.
@@ -3116,7 +3116,7 @@ impl ScaledPixels {
     ///
     /// Returns a new `ScaledPixels` instance with the ceiled value.
     pub fn ceil(&self) -> Self {
-        Self(self.0.ceil())
+        Self(crate::util::ceil_fast(self.0))
     }
 }
 
@@ -3142,7 +3142,7 @@ impl Debug for ScaledPixels {
 
 impl From<ScaledPixels> for DevicePixels {
     fn from(scaled: ScaledPixels) -> Self {
-        DevicePixels(scaled.0.ceil() as i32)
+        DevicePixels(crate::util::ceil_fast(scaled.0) as i32)
     }
 }
 

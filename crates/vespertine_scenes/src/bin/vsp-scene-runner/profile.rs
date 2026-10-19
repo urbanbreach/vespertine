@@ -30,29 +30,57 @@ struct Counters {
     poller: JoinHandle<Vec<[u64; 3]>>,
 }
 
-fn open_counter(config: u64) -> Option<libc::c_int> {
-    // `perf_event_attr`: type, size, config, sample_period, sample_type, read_format, flags.
-    let mut attr = [0u64; 16];
-    attr[0] = 128 << 32; // type PERF_TYPE_HARDWARE (0), size
-    attr[1] = config;
-    // inherit (bit 1), pinned (bit 2: never multiplexed away), exclude_kernel (bit 5),
-    // exclude_hv (bit 6)
-    attr[5] = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6);
-    // SAFETY: `attr` is a valid, fully initialized perf_event_attr of the declared size.
-    let fd = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0) };
-    (fd >= 0).then_some(fd as libc::c_int)
+/// The performance monitoring units that execute user code. A hybrid CPU has one per core type
+/// and a hardware event only counts while the thread runs on cores of the unit it was opened
+/// for, so every event is opened once per unit. Zero stands for the single legacy unit.
+fn pmu_types() -> Vec<u64> {
+    let types: Vec<u64> = ["cpu_core", "cpu_atom"]
+        .iter()
+        .filter_map(|name| std::fs::read_to_string(format!("/sys/devices/{name}/type")).ok())
+        .filter_map(|text| text.trim().parse().ok())
+        .collect();
+    if types.is_empty() { vec![0] } else { types }
 }
 
-fn read_counter(fd: libc::c_int) -> u64 {
-    let mut value = 0u64;
-    // SAFETY: reads at most 8 bytes into `value`.
-    let read = unsafe { libc::read(fd, (&mut value as *mut u64).cast(), 8) };
-    assert_eq!(read, 8, "reading performance counter");
-    value
+/// A hardware event for one unit: the unit's type travels in the upper half of `config`.
+fn hardware_config(event: u64, pmu: u64) -> u64 {
+    event | (pmu << 32)
+}
+
+fn open_counters(event: u64) -> Vec<libc::c_int> {
+    pmu_types()
+        .into_iter()
+        .map(|pmu| {
+            // `perf_event_attr`: type, size, config, sample_period, sample_type, read_format, flags.
+            let mut attr = [0u64; 16];
+            attr[0] = 128 << 32; // type PERF_TYPE_HARDWARE (0), size
+            attr[1] = hardware_config(event, pmu);
+            // inherit (bit 1), pinned (bit 2: never multiplexed away), exclude_kernel (bit 5),
+            // exclude_hv (bit 6)
+            attr[5] = (1 << 1) | (1 << 2) | (1 << 5) | (1 << 6);
+            // SAFETY: `attr` is a valid, fully initialized perf_event_attr of the declared size.
+            let fd =
+                unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0) };
+            assert!(fd >= 0, "opening a performance counter");
+            fd as libc::c_int
+        })
+        .collect()
+}
+
+fn read_counters(fds: &[libc::c_int]) -> u64 {
+    fds.iter()
+        .map(|&fd| {
+            let mut value = 0u64;
+            // SAFETY: reads at most 8 bytes into `value`.
+            let read = unsafe { libc::read(fd, (&mut value as *mut u64).cast(), 8) };
+            assert_eq!(read, 8, "reading performance counter");
+            value
+        })
+        .sum()
 }
 
 /// `[wall-clock ns, instructions, cycles]`.
-fn sample(instructions: libc::c_int, cycles: libc::c_int) -> [u64; 3] {
+fn sample(instructions: &[libc::c_int], cycles: &[libc::c_int]) -> [u64; 3] {
     let mut now = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -61,23 +89,23 @@ fn sample(instructions: libc::c_int, cycles: libc::c_int) -> [u64; 3] {
     unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) };
     [
         now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64,
-        read_counter(instructions),
-        read_counter(cycles),
+        read_counters(instructions),
+        read_counters(cycles),
     ]
 }
 
 impl Counters {
     fn start() -> Option<Self> {
         let path = std::env::var("VSP_COUNT").ok()?;
-        let instructions = open_counter(1).expect("opening instruction counter");
-        let cycles = open_counter(0).expect("opening cycle counter");
+        let instructions = open_counters(1);
+        let cycles = open_counters(0);
         let (stop, stopped) = mpsc::channel::<()>();
         let poller = std::thread::spawn(move || {
-            let mut samples = vec![sample(instructions, cycles)];
+            let mut samples = vec![sample(&instructions, &cycles)];
             while stopped.recv_timeout(Duration::from_millis(20)).is_err() {
-                samples.push(sample(instructions, cycles));
+                samples.push(sample(&instructions, &cycles));
             }
-            samples.push(sample(instructions, cycles));
+            samples.push(sample(&instructions, &cycles));
             samples
         });
         Some(Self { path, stop, poller })
@@ -127,79 +155,91 @@ impl InstructionProfile {
     fn start() -> Option<Self> {
         let path = std::env::var("VSP_IPROF").ok()?;
         let period = env_u64("VSP_IPROF_PERIOD", 100_000);
-        // `perf_event_attr`: type, size, config, sample_period, sample_type, read_format, flags.
-        let mut attr = [0u64; 16];
-        attr[0] = 128 << 32; // PERF_TYPE_HARDWARE, size
-        attr[1] = 1; // PERF_COUNT_HW_INSTRUCTIONS
-        attr[2] = period;
-        attr[3] = 1 | (1 << 2); // PERF_SAMPLE_IP | PERF_SAMPLE_TIME
-        // pinned (bit 2: never multiplexed away), exclude_kernel (bit 5), exclude_hv (bit 6),
-        // precise_ip = 2 (bits 15-16), use_clockid
-        // (bit 25); `clockid` is the upper half of word 11.
-        attr[5] = (1 << 2) | (1 << 5) | (1 << 6) | (2 << 15) | (1 << 25);
-        attr[11] = (libc::CLOCK_MONOTONIC as u64) << 32;
-        // SAFETY: `attr` is a valid perf_event_attr of the declared size.
-        let mut fd = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0) };
-        if fd < 0 {
-            attr[5] = (1 << 2) | (1 << 5) | (1 << 6) | (1 << 25);
-            // SAFETY: as above.
-            fd = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0) };
-        }
-        assert!(fd >= 0, "opening the instruction sampling counter");
-        let fd = fd as libc::c_int;
         // SAFETY: querying the page size has no preconditions.
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        // SAFETY: maps the counter's ring buffer (one control page and `RING_PAGES` data pages).
-        let map = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                (1 + RING_PAGES) * page,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        };
-        assert!(map != libc::MAP_FAILED, "mapping the sampling ring buffer");
-        let base = map as usize;
+        let bases: Vec<usize> = pmu_types()
+            .into_iter()
+            .map(|pmu| {
+                // `perf_event_attr`: type, size, config, sample_period, sample_type, read_format,
+                // flags.
+                let mut attr = [0u64; 16];
+                attr[0] = 128 << 32; // PERF_TYPE_HARDWARE, size
+                attr[1] = hardware_config(1, pmu); // PERF_COUNT_HW_INSTRUCTIONS
+                attr[2] = period;
+                attr[3] = 1 | (1 << 2); // PERF_SAMPLE_IP | PERF_SAMPLE_TIME
+                // pinned (bit 2: never multiplexed away), exclude_kernel (bit 5), exclude_hv
+                // (bit 6), precise_ip = 2 (bits 15-16), use_clockid (bit 25); `clockid` is the
+                // upper half of word 11.
+                attr[5] = (1 << 2) | (1 << 5) | (1 << 6) | (2 << 15) | (1 << 25);
+                attr[11] = (libc::CLOCK_MONOTONIC as u64) << 32;
+                // SAFETY: `attr` is a valid perf_event_attr of the declared size.
+                let mut fd = unsafe {
+                    libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0)
+                };
+                if fd < 0 {
+                    attr[5] = (1 << 2) | (1 << 5) | (1 << 6) | (1 << 25);
+                    // SAFETY: as above.
+                    fd = unsafe {
+                        libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 0)
+                    };
+                }
+                assert!(fd >= 0, "opening the instruction sampling counter");
+                // SAFETY: maps the counter's ring buffer (one control page and `RING_PAGES` data
+                // pages).
+                let map = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        (1 + RING_PAGES) * page,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_SHARED,
+                        fd as libc::c_int,
+                        0,
+                    )
+                };
+                assert!(map != libc::MAP_FAILED, "mapping the sampling ring buffer");
+                map as usize
+            })
+            .collect();
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = std::thread::spawn(move || {
             let mut ips = Vec::new();
             let data_size = RING_PAGES * page;
             let drain = |ips: &mut Vec<(u64, u64)>| {
-                let head_ptr = (base + 1024) as *const std::sync::atomic::AtomicU64;
-                let tail_ptr = (base + 1032) as *const std::sync::atomic::AtomicU64;
-                // SAFETY: both addresses lie inside the control page of the mapping.
-                let (head, mut tail) = unsafe {
-                    (
-                        (*head_ptr).load(std::sync::atomic::Ordering::Acquire),
-                        (*tail_ptr).load(std::sync::atomic::Ordering::Relaxed),
-                    )
-                };
-                let read = |offset: u64, out: &mut [u8]| {
-                    for (ix, byte) in out.iter_mut().enumerate() {
-                        let at = (offset as usize + ix) % data_size;
-                        // SAFETY: `at` is inside the data area of the mapping.
-                        *byte = unsafe { *((base + page + at) as *const u8) };
+                for &base in &bases {
+                    let head_ptr = (base + 1024) as *const std::sync::atomic::AtomicU64;
+                    let tail_ptr = (base + 1032) as *const std::sync::atomic::AtomicU64;
+                    // SAFETY: both addresses lie inside the control page of the mapping.
+                    let (head, mut tail) = unsafe {
+                        (
+                            (*head_ptr).load(std::sync::atomic::Ordering::Acquire),
+                            (*tail_ptr).load(std::sync::atomic::Ordering::Relaxed),
+                        )
+                    };
+                    let read = |offset: u64, out: &mut [u8]| {
+                        for (ix, byte) in out.iter_mut().enumerate() {
+                            let at = (offset as usize + ix) % data_size;
+                            // SAFETY: `at` is inside the data area of the mapping.
+                            *byte = unsafe { *((base + page + at) as *const u8) };
+                        }
+                    };
+                    while tail < head {
+                        let mut header = [0u8; 8];
+                        read(tail, &mut header);
+                        let kind = u32::from_le_bytes(header[0..4].try_into().unwrap());
+                        let size = u16::from_le_bytes(header[6..8].try_into().unwrap()) as u64;
+                        if kind == 9 {
+                            let mut body = [0u8; 16];
+                            read(tail + 8, &mut body);
+                            ips.push((
+                                u64::from_le_bytes(body[8..16].try_into().unwrap()),
+                                u64::from_le_bytes(body[0..8].try_into().unwrap()),
+                            ));
+                        }
+                        tail += size.max(8);
                     }
-                };
-                while tail < head {
-                    let mut header = [0u8; 8];
-                    read(tail, &mut header);
-                    let kind = u32::from_le_bytes(header[0..4].try_into().unwrap());
-                    let size = u16::from_le_bytes(header[6..8].try_into().unwrap()) as u64;
-                    if kind == 9 {
-                        let mut body = [0u8; 16];
-                        read(tail + 8, &mut body);
-                        ips.push((
-                            u64::from_le_bytes(body[8..16].try_into().unwrap()),
-                            u64::from_le_bytes(body[0..8].try_into().unwrap()),
-                        ));
-                    }
-                    tail += size.max(8);
+                    // SAFETY: as above; publishes the consumed position to the kernel.
+                    unsafe { (*tail_ptr).store(tail, std::sync::atomic::Ordering::Release) };
                 }
-                // SAFETY: as above; publishes the consumed position to the kernel.
-                unsafe { (*tail_ptr).store(tail, std::sync::atomic::Ordering::Release) };
             };
             while stopped.recv_timeout(Duration::from_millis(25)).is_err() {
                 drain(&mut ips);
@@ -233,7 +273,10 @@ impl InstructionProfile {
                 let wall = text.split("\"wall_ns\":").nth(1)?;
                 let wall: u64 = wall.trim().trim_end_matches('}').trim().parse().ok()?;
                 let written = std::fs::metadata(&out).ok()?.modified().ok()?;
-                let written = written.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64;
+                let written = written
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_nanos() as u64;
                 let end = mono_now.checked_sub(real_now.checked_sub(written)?)?;
                 Some((end.checked_sub(wall)?, end))
             });
@@ -247,15 +290,25 @@ impl InstructionProfile {
         let maps = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
         let ranges: Vec<(u64, u64, String)> = maps
             .lines()
-            .filter(|line| line.split_whitespace().nth(1).is_some_and(|perms| perms.contains('x')))
+            .filter(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .is_some_and(|perms| perms.contains('x'))
+            })
             .filter_map(|line| {
                 let mut parts = line.split_whitespace();
                 let (low, high) = parts.next()?.split_once('-')?;
                 let path = parts.nth(4).unwrap_or("[anon]").to_string();
-                Some((u64::from_str_radix(low, 16).ok()?, u64::from_str_radix(high, 16).ok()?, path))
+                Some((
+                    u64::from_str_radix(low, 16).ok()?,
+                    u64::from_str_radix(high, 16).ok()?,
+                    path,
+                ))
             })
             .collect();
-        let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let exe = std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let module_of = |ip: u64| -> String {
             ranges
                 .iter()
@@ -288,7 +341,10 @@ impl InstructionProfile {
                 let file = symbol
                     .filename()
                     .and_then(|path| path.file_name())
-                    .map_or_else(|| "?".to_string(), |name| name.to_string_lossy().into_owned());
+                    .map_or_else(
+                        || "?".to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
                 frames.push((name, format!("{file}:{}", symbol.lineno().unwrap_or(0))));
             });
             if frames.is_empty() {
@@ -304,7 +360,11 @@ impl InstructionProfile {
         let _ = writeln!(
             out,
             "window: {}",
-            if window.is_some() { "measured window of the run" } else { "whole run" }
+            if window.is_some() {
+                "measured window of the run"
+            } else {
+                "whole run"
+            }
         );
         let relative = |time: u64| time as i64 - mono_now as i64;
         let _ = writeln!(
@@ -317,7 +377,13 @@ impl InstructionProfile {
         let _ = writeln!(out, "instruction samples: {total}");
         let _ = writeln!(out, "stable samples (runner, libc, libm): {stable}");
         section(&mut out, "modules", by_module, total, 20);
-        section(&mut out, "self by physical function (inlined callees included)", by_function, total, 70);
+        section(
+            &mut out,
+            "self by physical function (inlined callees included)",
+            by_function,
+            total,
+            70,
+        );
         section(&mut out, "self by innermost function", by_inline, total, 70);
         section(&mut out, "self by line", by_line, total, 90);
         std::fs::write(&self.path, out).expect("writing instruction profile");
@@ -423,7 +489,11 @@ fn section(out: &mut String, title: &str, map: HashMap<String, isize>, total: is
     rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let _ = writeln!(out, "\n== {title}");
     for (name, count) in rows.into_iter().take(limit) {
-        let _ = writeln!(out, "{:6.2}% {count:6}  {name}", 100.0 * count as f64 / total as f64);
+        let _ = writeln!(
+            out,
+            "{:6.2}% {count:6}  {name}",
+            100.0 * count as f64 / total as f64
+        );
     }
 }
 

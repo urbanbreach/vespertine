@@ -1,4 +1,5 @@
-//! Bounded recent shaping store (PRF-012) and validated numeric shaping (PRF-013).
+//! Bounded recent shaping store (PRF-012), validated numeric shaping (PRF-013) and validated
+//! shaping of appended text.
 //!
 //! Both pieces of state belong to one [`TextSystem`](crate::TextSystem) and are shared by every
 //! window text system built on it, so they are guarded by locks. A lock is never held while the
@@ -31,6 +32,26 @@ pub(crate) const NUMERIC_TOLERANCE: f32 = 0.001;
 
 const NUMERIC_ALPHABET: &[u8; 20] = b"0123456789.,+-%$KMBT";
 
+/// Shortest line, in bytes, whose growth is shaped incrementally.
+pub(crate) const APPEND_MIN_LEN: usize = 48;
+
+/// Longest line, in bytes, kept for incremental shaping.
+pub(crate) const APPEND_MAX_LEN: usize = 16 * 1024;
+
+/// Growing lines tracked at once.
+pub(crate) const APPEND_TAILS: usize = 4;
+
+/// Longest chain of lines that each extend the previous one's layout before the next line is
+/// shaped in full again. Every link adds the rounding error of one addition to the positions
+/// of the words it shapes; the full shaping anchors the chain.
+pub(crate) const APPEND_MAX_CHAIN: u32 = 6;
+
+/// Incrementally shaped lines compared with full platform shaping before sampling starts.
+pub(crate) const APPEND_INITIAL_CHECKS: u64 = 16;
+
+/// After the initial checks, every n-th incrementally shaped line is compared.
+pub(crate) const APPEND_CHECK_INTERVAL: u64 = 128;
+
 /// Counters describing shaping work. Compiled always (relaxed atomics), read only by tests and
 /// diagnostics.
 #[derive(Default)]
@@ -43,6 +64,9 @@ pub(crate) struct ShapeCounters {
     pub(crate) synthesized_lines: AtomicU64,
     pub(crate) validation_checks: AtomicU64,
     pub(crate) disabled_font_sizes: AtomicU64,
+    pub(crate) appended_lines: AtomicU64,
+    pub(crate) append_checks: AtomicU64,
+    pub(crate) append_disabled: AtomicU64,
 }
 
 impl ShapeCounters {
@@ -74,6 +98,12 @@ pub struct ShapeStats {
     pub disabled_font_sizes: u64,
     /// Glyph units currently retained by both recent generations.
     pub retained_glyph_units: usize,
+    /// Lines assembled from the layout of a shorter line they extend and a platform-shaped tail.
+    pub appended_lines: u64,
+    /// Appended lines compared with full platform shaping.
+    pub append_checks: u64,
+    /// Whether appended-line shaping was permanently disabled by a failed comparison.
+    pub append_disabled: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -289,10 +319,95 @@ pub(crate) enum NumericOutcome {
     Layout(LineLayout),
 }
 
+/// A recently shaped line that a longer line may continue.
+struct Tail {
+    text: SharedString,
+    size_bits: u32,
+    font_id: FontId,
+    layout: LineLayout,
+    /// Lines assembled since the layout was shaped in full.
+    chain: u32,
+}
+
+/// The growing lines tracked for incremental shaping.
+#[derive(Default)]
+struct AppendState {
+    font_generation: usize,
+    tails: SmallVec<[Tail; APPEND_TAILS]>,
+    /// The tail replaced next when a new line starts while every slot is taken.
+    victim: usize,
+    /// Lines assembled so far, counting the sampled comparisons.
+    assembled: u64,
+    /// Set when an assembled line disagreed with full shaping: no line is assembled any more.
+    disabled: bool,
+}
+
+impl AppendState {
+    fn sync(&mut self, font_generation: usize) -> bool {
+        if font_generation > self.font_generation {
+            self.tails.clear();
+            self.font_generation = font_generation;
+            true
+        } else {
+            font_generation == self.font_generation
+        }
+    }
+
+    fn remember(&mut self, tail: Tail) {
+        if self.tails.len() < APPEND_TAILS {
+            self.tails.push(tail);
+        } else {
+            self.victim %= APPEND_TAILS;
+            self.tails[self.victim] = tail;
+            self.victim += 1;
+        }
+    }
+}
+
+/// Whether `bytes` holds only printable ASCII: a single left-to-right script run whose words
+/// the platform shapes independently of their neighbours.
+fn is_printable_ascii(bytes: &[u8]) -> bool {
+    bytes.iter().all(|byte| (0x20..0x7F).contains(byte))
+}
+
+/// The one font of a line that is a single run of `text`.
+fn single_run_font(text: &str, runs: &[FontRun]) -> Option<FontId> {
+    match runs {
+        [run] if run.len == text.len() => Some(run.font_id),
+        _ => None,
+    }
+}
+
+/// The largest split position `p <= limit` at which `text` can be cut into two independently
+/// shaped parts: a single space between two ASCII alphanumerics, with `text[p]` the first
+/// character of the second part. Such a position is a line-break opportunity whatever precedes
+/// it, so the platform shapes the words on both sides separately.
+fn split_position(text: &[u8], limit: usize) -> Option<usize> {
+    let limit = limit.min(text.len().checked_sub(1)?);
+    (2..=limit).rev().find(|&p| {
+        text[p - 1] == b' '
+            && text[p - 2].is_ascii_alphanumeric()
+            && text[p].is_ascii_alphanumeric()
+    })
+}
+
+/// A tail shaped in place of a full line; see [`ShapeCaches::append_layout`].
+struct Continuation {
+    tail: usize,
+    chain: u32,
+    split: usize,
+    offset: Pixels,
+    glyphs: Vec<ShapedGlyph>,
+    ascent: Pixels,
+    descent: Pixels,
+    font_id: FontId,
+}
+
 /// Shaping state shared by every window text system of one text system.
 pub(crate) struct ShapeCaches {
     recent: Mutex<RecentShapes>,
     numeric: Mutex<NumericState>,
+    append: Mutex<AppendState>,
     pub(crate) counters: ShapeCounters,
     numeric_enabled: std::sync::atomic::AtomicBool,
 }
@@ -302,6 +417,7 @@ impl Default for ShapeCaches {
         Self {
             recent: Mutex::default(),
             numeric: Mutex::default(),
+            append: Mutex::default(),
             counters: ShapeCounters::default(),
             numeric_enabled: std::sync::atomic::AtomicBool::new(true),
         }
@@ -363,6 +479,210 @@ impl ShapeCaches {
     ) -> LineLayout {
         ShapeCounters::bump(&self.counters.platform_line_shapes);
         platform.layout_line(text, font_size, runs)
+    }
+
+    /// Remembers a line shaped in full so that a longer line extending it can be shaped
+    /// incrementally. It replaces the tracked line it extends, if any.
+    pub(crate) fn append_track(
+        &self,
+        font_generation: usize,
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+        layout: &LineLayout,
+    ) {
+        let Some(tail) = Self::tail_of(text, font_size, runs, layout, 0) else {
+            return;
+        };
+        let mut append = self.append.lock();
+        ShapeCounters::bump(&self.counters.lock_acquisitions);
+        if append.disabled || !append.sync(font_generation) {
+            return;
+        }
+        let bytes = text.as_bytes();
+        match append.tails.iter_mut().find(|known| {
+            known.size_bits == tail.size_bits
+                && known.font_id == tail.font_id
+                && known.text.len() <= text.len()
+                && bytes.starts_with(known.text.as_bytes())
+        }) {
+            Some(known) => *known = tail,
+            None => append.remember(tail),
+        }
+    }
+
+    /// The tail record of a line eligible for incremental shaping.
+    fn tail_of(
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+        layout: &LineLayout,
+        chain: u32,
+    ) -> Option<Tail> {
+        let font_id = single_run_font(text, runs)?;
+        let eligible = (APPEND_MIN_LEN..=APPEND_MAX_LEN).contains(&text.len())
+            && is_printable_ascii(text.as_bytes())
+            && layout.len == text.len()
+            && matches!(layout.runs.as_slice(), [run]
+                if run.font_id == font_id
+                    && !run.glyphs.is_empty()
+                    && run.glyphs.iter().all(|glyph| glyph.id != GlyphId(0)));
+        eligible.then(|| Tail {
+            text: text.clone(),
+            size_bits: font_size.0.to_bits(),
+            font_id,
+            layout: layout.clone(),
+            chain,
+        })
+    }
+
+    /// Shapes `text` as the layout of a shorter, recently shaped line it extends plus the
+    /// platform shaping of only the words after the last shared word boundary.
+    ///
+    /// Only printable ASCII in a single font run qualifies: every word then is shaped by itself,
+    /// so the shared prefix keeps its glyphs and positions and the shaped remainder is moved
+    /// right by the width of that prefix. The first lines and then every
+    /// [`APPEND_CHECK_INTERVAL`]-th line are compared with full platform shaping; a
+    /// disagreement (a platform that shapes across spaces) permanently disables the method and
+    /// the full layout is used.
+    pub(crate) fn append_layout(
+        &self,
+        platform: &dyn PlatformTextSystem,
+        font_generation: usize,
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+    ) -> Option<LineLayout> {
+        let font_id = single_run_font(text, runs)?;
+        if !(APPEND_MIN_LEN..=APPEND_MAX_LEN).contains(&text.len()) {
+            return None;
+        }
+        let size_bits = font_size.0.to_bits();
+        let bytes = text.as_bytes();
+
+        let found = {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            if append.disabled || !append.sync(font_generation) {
+                return None;
+            }
+            append.tails.iter().enumerate().find_map(|(index, tail)| {
+                if tail.size_bits != size_bits
+                    || tail.font_id != font_id
+                    || tail.chain >= APPEND_MAX_CHAIN
+                    || tail.text.len() >= text.len()
+                    || !bytes.starts_with(tail.text.as_bytes())
+                {
+                    return None;
+                }
+                let split = split_position(bytes, tail.text.len())?;
+                let [run] = tail.layout.runs.as_slice() else {
+                    return None;
+                };
+                let kept = run.glyphs.partition_point(|glyph| glyph.index < split);
+                let offset = match run.glyphs.get(kept) {
+                    Some(glyph) if glyph.index == split => glyph.position.x,
+                    None if split == tail.text.len() => tail.layout.width,
+                    _ => return None,
+                };
+                Some(Continuation {
+                    tail: index,
+                    chain: tail.chain + 1,
+                    split,
+                    offset,
+                    glyphs: run.glyphs[..kept].to_vec(),
+                    ascent: tail.layout.ascent,
+                    descent: tail.layout.descent,
+                    font_id,
+                })
+            })
+        }?;
+        if !is_printable_ascii(&bytes[found.split..]) {
+            return None;
+        }
+
+        let rest = &text[found.split..];
+        let rest_layout = self.platform_shape(
+            platform,
+            rest,
+            font_size,
+            &[FontRun {
+                len: rest.len(),
+                font_id,
+            }],
+        );
+        let [rest_run] = rest_layout.runs.as_slice() else {
+            return None;
+        };
+        if rest_run.font_id != found.font_id
+            || rest_layout.len != rest.len()
+            || rest_layout.ascent != found.ascent
+            || rest_layout.descent != found.descent
+            || rest_run.glyphs.is_empty()
+            || rest_run.glyphs.iter().any(|glyph| glyph.id == GlyphId(0))
+        {
+            return None;
+        }
+
+        let mut glyphs = found.glyphs;
+        glyphs.extend(rest_run.glyphs.iter().map(|glyph| ShapedGlyph {
+            id: glyph.id,
+            position: point(glyph.position.x + found.offset, glyph.position.y),
+            index: glyph.index + found.split,
+            is_emoji: glyph.is_emoji,
+        }));
+        let layout = LineLayout {
+            font_size,
+            width: found.offset + rest_layout.width,
+            ascent: found.ascent,
+            descent: found.descent,
+            runs: vec![ShapedRun {
+                font_id: found.font_id,
+                glyphs,
+            }],
+            len: text.len(),
+        };
+        ShapeCounters::bump(&self.counters.appended_lines);
+
+        let (layout, validate) = {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            append.assembled += 1;
+            let validate = append.assembled <= APPEND_INITIAL_CHECKS
+                || append.assembled.is_multiple_of(APPEND_CHECK_INTERVAL);
+            (layout, validate)
+        };
+        let layout = if validate {
+            ShapeCounters::bump(&self.counters.append_checks);
+            let platform_layout = self.platform_shape(platform, text, font_size, runs);
+            if layouts_agree_within(&layout, &platform_layout, append_tolerance(&layout)) {
+                layout
+            } else {
+                let mut append = self.append.lock();
+                ShapeCounters::bump(&self.counters.lock_acquisitions);
+                if !append.disabled {
+                    append.disabled = true;
+                    append.tails.clear();
+                    ShapeCounters::bump(&self.counters.append_disabled);
+                }
+                return Some(platform_layout);
+            }
+        } else {
+            layout
+        };
+
+        // The extended line replaces the line it extends as the tail of the lineage.
+        if let Some(tail) = Self::tail_of(text, font_size, runs, &layout, found.chain) {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            if !append.disabled && append.sync(font_generation) {
+                match append.tails.get_mut(found.tail) {
+                    Some(slot) if bytes.starts_with(slot.text.as_bytes()) => *slot = tail,
+                    _ => append.remember(tail),
+                }
+            }
+        }
+        Some(layout)
     }
 
     fn unit_shape(
@@ -567,6 +887,9 @@ impl ShapeCaches {
             validation_checks: counters.validation_checks.load(Ordering::Relaxed),
             disabled_font_sizes: counters.disabled_font_sizes.load(Ordering::Relaxed),
             retained_glyph_units: recent.current.units + recent.old.units,
+            appended_lines: counters.appended_lines.load(Ordering::Relaxed),
+            append_checks: counters.append_checks.load(Ordering::Relaxed),
+            append_disabled: counters.append_disabled.load(Ordering::Relaxed) != 0,
         }
     }
 
@@ -688,7 +1011,23 @@ fn assemble(font: &NumericFont, indices: &[u8], font_id: FontId, font_size: Pixe
 
 /// Whether two layouts agree under the PRF-013 validation rule.
 pub(crate) fn layouts_agree(synthesized: &LineLayout, platform: &LineLayout) -> bool {
-    let close = |a: Pixels, b: Pixels| (a - b).0.abs() <= NUMERIC_TOLERANCE;
+    layouts_agree_within(synthesized, platform, NUMERIC_TOLERANCE)
+}
+
+/// The agreement tolerance for an assembled line: [`NUMERIC_TOLERANCE`], or a few units in the
+/// last place of the line's width when that is larger (positions of long lines are not
+/// representable more finely, and a sum in a different order differs by such units).
+fn append_tolerance(layout: &LineLayout) -> f32 {
+    NUMERIC_TOLERANCE.max(layout.width.0.abs() * 8.0 * f32::EPSILON)
+}
+
+/// [`layouts_agree`] with an explicit position tolerance in logical pixels.
+pub(crate) fn layouts_agree_within(
+    synthesized: &LineLayout,
+    platform: &LineLayout,
+    tolerance: f32,
+) -> bool {
+    let close = |a: Pixels, b: Pixels| (a - b).0.abs() <= tolerance;
     if synthesized.len != platform.len
         || synthesized.font_size != platform.font_size
         || !close(synthesized.width, platform.width)

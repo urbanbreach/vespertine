@@ -7,12 +7,7 @@ use crate::{
     },
 };
 use smallvec::SmallVec;
-use std::{
-    any::Any,
-    fmt::Debug,
-    hash::{Hash, Hasher},
-    ops::Range,
-};
+use std::{any::Any, fmt::Debug, ops::Range};
 use taffy::{
     TaffyTree,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -439,82 +434,106 @@ pub struct LayoutStats {
 // Style fingerprint
 // ---------------------------------------------------------------------------
 
-/// A 64-bit multiply-fold hasher used to fingerprint the layout-relevant fields
-/// of a [`Style`].
-struct Fingerprint(u64);
-
-impl Hasher for Fingerprint {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
-            let mut word = [0u8; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            self.write_u64(u64::from_le_bytes(word));
-        }
-    }
-
-    #[inline]
-    fn write_u8(&mut self, value: u8) {
-        self.write_u64(u64::from(value));
-    }
-
-    #[inline]
-    fn write_u32(&mut self, value: u32) {
-        self.write_u64(u64::from(value));
-    }
-
-    #[inline]
-    fn write_u64(&mut self, value: u64) {
-        // Xor then multiply by an odd constant and xorshift: every step is a bijection of
-        // the state for a fixed word, so two inputs that differ in one word never collide.
-        self.0 = (self.0 ^ value).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        self.0 ^= self.0 >> 32;
-    }
-
-    #[inline]
-    fn write_usize(&mut self, value: usize) {
-        self.write_u64(value as u64);
-    }
+/// A 64-bit multiply-fold hasher used to fingerprint the layout-relevant fields of a
+/// [`Style`].
+///
+/// Style fields are packed before they are mixed: enum tags share the words of one bit
+/// accumulator and `f32` values are paired two per word, so a style costs a handful of
+/// dependent multiplications instead of one per field. Both streams follow the fixed field
+/// order of [`style_fingerprint`] (a tag decides whether a value follows), so different
+/// styles produce different streams.
+struct Fingerprint {
+    state: u64,
+    /// Packed tags and their count of used bits.
+    tags: u64,
+    tag_bits: u32,
+    /// The first `f32` of a pair, valid while `has_half`.
+    half: u32,
+    has_half: bool,
 }
 
 impl Fingerprint {
     #[inline]
-    fn f32(&mut self, value: f32) {
-        self.write_u32(value.to_bits());
+    fn new() -> Self {
+        Self {
+            state: 0x1F83_D9AB_FB41_BD6B,
+            tags: 0,
+            tag_bits: 0,
+            half: 0,
+            has_half: false,
+        }
     }
 
     #[inline]
-    fn tag<T>(&mut self, value: &T) {
-        std::mem::discriminant(value).hash(self);
+    fn mix(&mut self, value: u64) {
+        // Xor then multiply by an odd constant and xorshift: every step is a bijection of
+        // the state for a fixed word, so two inputs that differ in one word never collide.
+        self.state = (self.state ^ value).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.state ^= self.state >> 32;
     }
 
+    /// Appends the low `width` bits of `value` to the tag stream.
+    #[inline]
+    fn bits(&mut self, value: u8, width: u32) {
+        if self.tag_bits + width > 64 {
+            self.mix(self.tags);
+            self.tags = 0;
+            self.tag_bits = 0;
+        }
+        self.tags |= u64::from(value) << self.tag_bits;
+        self.tag_bits += width;
+    }
+
+    #[inline]
+    fn f32(&mut self, value: f32) {
+        let bits = value.to_bits();
+        if self.has_half {
+            self.has_half = false;
+            self.mix((u64::from(self.half) << 32) | u64::from(bits));
+        } else {
+            self.half = bits;
+            self.has_half = true;
+        }
+    }
+
+    #[inline]
     fn pixels(&mut self, value: Pixels) {
         self.f32(value.0);
     }
 
     fn absolute(&mut self, value: &AbsoluteLength) {
-        self.tag(value);
         match value {
-            AbsoluteLength::Pixels(pixels) => self.pixels(*pixels),
-            AbsoluteLength::Rems(rems) => self.f32(rems.0),
+            AbsoluteLength::Pixels(pixels) => {
+                self.bits(0, 1);
+                self.pixels(*pixels);
+            }
+            AbsoluteLength::Rems(rems) => {
+                self.bits(1, 1);
+                self.f32(rems.0);
+            }
         }
     }
 
     fn definite(&mut self, value: &DefiniteLength) {
-        self.tag(value);
         match value {
-            DefiniteLength::Absolute(length) => self.absolute(length),
-            DefiniteLength::Fraction(fraction) => self.f32(*fraction),
+            DefiniteLength::Absolute(length) => {
+                self.bits(0, 1);
+                self.absolute(length);
+            }
+            DefiniteLength::Fraction(fraction) => {
+                self.bits(1, 1);
+                self.f32(*fraction);
+            }
         }
     }
 
     fn length(&mut self, value: &Length) {
-        self.tag(value);
-        if let Length::Definite(length) = value {
-            self.definite(length);
+        match value {
+            Length::Definite(length) => {
+                self.bits(0, 1);
+                self.definite(length);
+            }
+            Length::Auto => self.bits(1, 1),
         }
     }
 
@@ -540,65 +559,79 @@ impl Fingerprint {
 
     fn grid_template(&mut self, template: &Option<GridTemplate>) {
         match template {
-            None => self.write_u8(0),
+            None => self.bits(0, 1),
             Some(template) => {
-                self.write_u8(1);
-                self.write_u32(u32::from(template.repeat));
-                self.tag(&template.min_size);
+                self.bits(1, 1);
+                self.bits(template.min_size as u8, 2);
+                self.f32(f32::from_bits(u32::from(template.repeat)));
             }
         }
     }
 
     fn grid_placement(&mut self, placement: &crate::GridPlacement) {
-        self.tag(placement);
         match placement {
-            crate::GridPlacement::Line(line) => self.write_u32(*line as u32),
-            crate::GridPlacement::Span(span) => self.write_u32(u32::from(*span)),
-            crate::GridPlacement::Auto => {}
+            crate::GridPlacement::Line(line) => {
+                self.bits(0, 2);
+                self.f32(f32::from_bits(*line as u32));
+            }
+            crate::GridPlacement::Span(span) => {
+                self.bits(1, 2);
+                self.f32(f32::from_bits(u32::from(*span)));
+            }
+            crate::GridPlacement::Auto => self.bits(2, 2),
         }
+    }
+
+    fn finish(mut self) -> u64 {
+        if self.has_half {
+            self.mix((u64::from(self.half) << 32) | 0xFFFF_FFFF);
+        }
+        let tags = self.tags | (u64::from(self.tag_bits) << 58);
+        self.mix(tags);
+        self.state
     }
 }
 
 /// Fingerprints every field of `style` the conversion to a layout-engine style
 /// consumes, together with the inputs of that conversion.
 fn style_fingerprint(style: &Style, rem_size: Pixels, scale_factor: f32) -> u64 {
-    let mut h = Fingerprint(0x1F83_D9AB_FB41_BD6B);
+    let mut h = Fingerprint::new();
     h.pixels(rem_size);
     h.f32(scale_factor);
-    h.tag(&style.display);
-    h.tag(&style.overflow.x);
-    h.tag(&style.overflow.y);
-    h.tag(&style.position);
+    h.bits(style.display as u8, 2);
+    h.bits(style.overflow.x as u8, 2);
+    h.bits(style.overflow.y as u8, 2);
+    h.bits(style.position as u8, 1);
     h.edges(&style.inset, |h, v| h.length(v));
     h.pair(&style.size, |h, v| h.length(v));
     h.pair(&style.min_size, |h, v| h.length(v));
     h.pair(&style.max_size, |h, v| h.length(v));
     match style.aspect_ratio {
-        None => h.write_u8(0),
+        None => h.bits(0, 1),
         Some(ratio) => {
-            h.write_u8(1);
+            h.bits(1, 1);
             h.f32(ratio);
         }
     }
     h.edges(&style.margin, |h, v| h.length(v));
     h.edges(&style.padding, |h, v| h.definite(v));
     h.edges(&style.border_widths, |h, v| h.absolute(v));
-    h.write_u8(style.align_items.map_or(0, |v| 1 + v as u8));
-    h.write_u8(style.align_self.map_or(0, |v| 1 + v as u8));
-    h.write_u8(style.align_content.map_or(0, |v| 1 + v as u8));
-    h.write_u8(style.justify_content.map_or(0, |v| 1 + v as u8));
+    h.bits(style.align_items.map_or(0, |v| 1 + v as u8), 4);
+    h.bits(style.align_self.map_or(0, |v| 1 + v as u8), 4);
+    h.bits(style.align_content.map_or(0, |v| 1 + v as u8), 4);
+    h.bits(style.justify_content.map_or(0, |v| 1 + v as u8), 4);
     h.pair(&style.gap, |h, v| h.definite(v));
-    h.tag(&style.flex_direction);
-    h.tag(&style.flex_wrap);
+    h.bits(style.flex_direction as u8, 2);
+    h.bits(style.flex_wrap as u8, 2);
     h.length(&style.flex_basis);
     h.f32(style.flex_grow);
     h.f32(style.flex_shrink);
     h.grid_template(&style.grid_rows);
     h.grid_template(&style.grid_cols);
     match &style.grid_location {
-        None => h.write_u8(0),
+        None => h.bits(0, 1),
         Some(location) => {
-            h.write_u8(1);
+            h.bits(1, 1);
             h.grid_placement(&location.row.start);
             h.grid_placement(&location.row.end);
             h.grid_placement(&location.column.start);

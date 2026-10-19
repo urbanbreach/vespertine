@@ -575,7 +575,8 @@ impl LineLayoutCache {
     }
 
     /// Shapes a line that missed the frame cache: recent shapes first, then numeric assembly,
-    /// then the platform. No cache lock is held while the platform shapes.
+    /// then the extension of a shorter recent line, then the platform. No cache lock is held
+    /// while the platform shapes.
     fn shape_line(
         &self,
         font_generation: usize,
@@ -595,9 +596,25 @@ impl LineLayoutCache {
             runs,
         ) {
             NumericOutcome::Layout(layout) => layout,
-            NumericOutcome::Platform => {
-                caches.platform_shape(self.platform_text_system.as_ref(), text, font_size, runs)
-            }
+            NumericOutcome::Platform => match caches.append_layout(
+                self.platform_text_system.as_ref(),
+                font_generation,
+                text,
+                font_size,
+                runs,
+            ) {
+                Some(layout) => layout,
+                None => {
+                    let layout = caches.platform_shape(
+                        self.platform_text_system.as_ref(),
+                        text,
+                        font_size,
+                        runs,
+                    );
+                    caches.append_track(font_generation, text, font_size, runs, &layout);
+                    layout
+                }
+            },
         };
         caches.recent_insert(font_generation, text, font_size, runs, &layout);
         layout

@@ -909,3 +909,213 @@ mod numeric {
         assert_eq!(stats.platform_line_shapes, 50);
     }
 }
+
+mod appended {
+    use super::*;
+    use crate::text_system::shape_cache::{
+        APPEND_CHECK_INTERVAL, APPEND_INITIAL_CHECKS, APPEND_MAX_CHAIN, APPEND_MIN_LEN,
+        layouts_agree_within,
+    };
+
+    struct Fixture {
+        shaper: Arc<TestShaper>,
+        system: Arc<TextSystem>,
+        window: WindowTextSystem,
+        font: Font,
+    }
+
+    fn fixture() -> Fixture {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let window = WindowTextSystem::new(system.clone());
+        Fixture {
+            shaper,
+            system,
+            window,
+            font: font("Test Sans"),
+        }
+    }
+
+    impl Fixture {
+        fn platform(&self, text: &str) -> LineLayout {
+            let font_id = self.system.resolve_font(&self.font);
+            self.shaper.layout_line(
+                text,
+                px(16.),
+                &[FontRun {
+                    len: text.len(),
+                    font_id,
+                }],
+            )
+        }
+
+        /// Lays `text` out through the cache and checks it against full platform shaping.
+        fn checked(&self, text: &str) -> Arc<LineLayout> {
+            let cached = layout(&self.window, text, &self.font);
+            let platform = self.platform(text);
+            let tolerance = 0.001f32.max(platform.width.0 * 8.0 * f32::EPSILON);
+            assert!(
+                layouts_agree_within(&cached, &platform, tolerance),
+                "`{text}` differs from platform shaping"
+            );
+            cached
+        }
+    }
+
+    fn stream(words: usize) -> String {
+        let mut text = String::from("a streaming message begins with some ordinary words");
+        for ix in 0..words {
+            text.push_str(&format!(" w{ix}"));
+        }
+        text
+    }
+
+    /// Lines of the growing stream that are assembled rather than shaped in full: every
+    /// `APPEND_MAX_CHAIN + 1`-th line anchors a new chain.
+    fn assembled_of(steps: usize) -> u64 {
+        (steps - steps / (APPEND_MAX_CHAIN as usize + 1)) as u64
+    }
+
+    #[test]
+    fn a_growing_line_shapes_only_its_new_words() {
+        let f = fixture();
+        assert!(stream(0).len() >= APPEND_MIN_LEN);
+        f.checked(&stream(0));
+        let steps = APPEND_INITIAL_CHECKS as usize + 12;
+        for words in 1..=steps {
+            f.checked(&stream(words));
+        }
+        let stats = f.system.shape_stats();
+        assert_eq!(stats.appended_lines, assembled_of(steps));
+        assert_eq!(stats.append_checks, APPEND_INITIAL_CHECKS);
+        assert!(!stats.append_disabled);
+
+        // The next line extends a chain: only the words after the last shared boundary reach
+        // the platform (the direct comparison below is not counted by the cache).
+        let next = steps + 1;
+        assert_ne!(next % (APPEND_MAX_CHAIN as usize + 1), 0);
+        let before = f.system.shape_stats().platform_line_shapes;
+        f.checked(&stream(next));
+        assert_eq!(f.system.shape_stats().platform_line_shapes - before, 1);
+    }
+
+    #[test]
+    fn a_chain_ends_with_a_full_shape_that_anchors_the_next() {
+        let f = fixture();
+        f.checked(&stream(0));
+        let chain = APPEND_MAX_CHAIN as usize;
+        for words in 1..=chain {
+            f.checked(&stream(words));
+        }
+        assert_eq!(f.system.shape_stats().appended_lines, chain as u64);
+        // The chain is exhausted: the next line is shaped in full and starts another chain.
+        f.checked(&stream(chain + 1));
+        assert_eq!(f.system.shape_stats().appended_lines, chain as u64);
+        f.checked(&stream(chain + 2));
+        assert_eq!(f.system.shape_stats().appended_lines, chain as u64 + 1);
+    }
+
+    #[test]
+    fn lines_that_do_not_extend_a_tracked_line_are_shaped_in_full() {
+        let f = fixture();
+        f.checked(&stream(3));
+        f.checked(&format!(
+            "{} and then something else",
+            stream(3).replace("some", "any")
+        ));
+        f.checked("short");
+        f.checked(&"x".repeat(APPEND_MIN_LEN + 10));
+        assert_eq!(f.system.shape_stats().appended_lines, 0);
+    }
+
+    #[test]
+    fn non_ascii_text_is_never_assembled() {
+        let f = fixture();
+        let base = format!("{} caf\u{e9} au lait", stream(4));
+        f.checked(&base);
+        f.checked(&format!("{base} et du pain"));
+        f.checked(&format!("{} and more", stream(4)));
+        f.checked(&format!("{} and more words \u{e9}", stream(4)));
+        assert_eq!(f.system.shape_stats().appended_lines, 0);
+    }
+
+    #[test]
+    fn lines_with_several_runs_are_shaped_in_full() {
+        let f = fixture();
+        let text = stream(3);
+        let split = 10;
+        let runs = [
+            TextRun {
+                len: split,
+                font: f.font.clone(),
+                ..Default::default()
+            },
+            TextRun {
+                len: text.len() - split,
+                font: f.font.clone(),
+                color: crate::red(),
+                ..Default::default()
+            },
+        ];
+        f.window.layout_line(&text, px(16.), &runs, None);
+        let longer = format!("{text} and more");
+        let longer_runs = [
+            runs[0].clone(),
+            TextRun {
+                len: longer.len() - split,
+                ..runs[1].clone()
+            },
+        ];
+        f.window.layout_line(&longer, px(16.), &longer_runs, None);
+        assert_eq!(f.system.shape_stats().appended_lines, 0);
+    }
+
+    #[test]
+    fn a_platform_that_shapes_across_spaces_disables_assembly() {
+        let f = fixture();
+        // A glyph shift that depends on a word before the shaped tail.
+        f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
+        let base = "a streaming message begins with 999 and some ordinary words";
+        f.checked(base);
+        f.checked(&format!("{base} w0"));
+        let stats = f.system.shape_stats();
+        assert!(stats.append_disabled, "{stats:?}");
+        assert_eq!(stats.append_checks, 1);
+        let assembled = stats.appended_lines;
+        for words in 1..6 {
+            f.checked(&format!("{base} w0 w{words}"));
+        }
+        assert_eq!(f.system.shape_stats().appended_lines, assembled);
+    }
+
+    #[test]
+    fn sampled_comparisons_continue_after_the_initial_checks() {
+        let f = fixture();
+        f.checked(&stream(0));
+        let steps = (APPEND_INITIAL_CHECKS + 2 * APPEND_CHECK_INTERVAL) as usize * 8 / 7 + 8;
+        for words in 1..=steps {
+            f.checked(&stream(words));
+        }
+        let stats = f.system.shape_stats();
+        assert_eq!(stats.appended_lines, assembled_of(steps));
+        assert!(stats.appended_lines > APPEND_INITIAL_CHECKS + 2 * APPEND_CHECK_INTERVAL);
+        assert_eq!(
+            stats.append_checks,
+            APPEND_INITIAL_CHECKS + stats.appended_lines / APPEND_CHECK_INTERVAL
+        );
+        assert!(!stats.append_disabled);
+    }
+
+    #[test]
+    fn a_new_font_generation_forgets_tracked_lines() {
+        let f = fixture();
+        f.checked(&stream(0));
+        f.checked(&stream(1));
+        assert_eq!(f.system.shape_stats().appended_lines, 1);
+        f.system
+            .add_fonts(vec![Cow::Borrowed(b"Another Family".as_slice())])
+            .unwrap();
+        f.checked(&stream(2));
+        assert_eq!(f.system.shape_stats().appended_lines, 1);
+    }
+}

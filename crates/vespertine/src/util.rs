@@ -125,10 +125,61 @@ pub(crate) fn atomic_incr_if_not_zero(counter: &AtomicUsize) -> usize {
     }
 }
 
+/// `f32::floor`, computed through a hardware truncation for magnitudes below 2^23 (all layout
+/// and glyph coordinates). The baseline x86-64 target has no rounding instruction, so
+/// `f32::floor` is a library call there. Identical to `f32::floor`, including the sign of zero.
+#[inline]
+pub(crate) fn floor_fast(value: f32) -> f32 {
+    if value.abs() < 8_388_608.0 {
+        let truncated = value as i32 as f32;
+        let floor = if truncated > value {
+            truncated - 1.0
+        } else {
+            truncated
+        };
+        if floor == 0.0 {
+            0.0f32.copysign(value)
+        } else {
+            floor
+        }
+    } else {
+        value.floor()
+    }
+}
+
+/// `f32::round` (ties away from zero) computed like [`floor_fast`].
+#[inline]
+pub(crate) fn round_fast(value: f32) -> f32 {
+    if value.abs() < 8_388_608.0 {
+        let truncated = value as i32 as f32;
+        let fraction = value - truncated;
+        let round = if fraction >= 0.5 {
+            truncated + 1.0
+        } else if fraction <= -0.5 {
+            truncated - 1.0
+        } else {
+            truncated
+        };
+        if round == 0.0 {
+            0.0f32.copysign(value)
+        } else {
+            round
+        }
+    } else {
+        value.round()
+    }
+}
+
+/// `f32::ceil` computed like [`floor_fast`].
+#[inline]
+pub(crate) fn ceil_fast(value: f32) -> f32 {
+    -floor_fast(-value)
+}
+
 /// Rounds to the nearest integer with 0.5 ties toward zero.
 #[inline]
 pub(crate) fn round_half_toward_zero(value: f32) -> f32 {
-    (value.abs() - 0.5).ceil().copysign(value)
+    ceil_fast(value.abs() - 0.5).copysign(value)
 }
 
 #[inline]
@@ -152,12 +203,12 @@ pub(crate) fn round_stroke_to_device_pixel(logical: f32, scale_factor: f32) -> f
 
 #[inline]
 pub(crate) fn floor_to_device_pixel(logical: f32, scale_factor: f32) -> f32 {
-    (logical * scale_factor).floor()
+    floor_fast(logical * scale_factor)
 }
 
 #[inline]
 pub(crate) fn ceil_to_device_pixel(logical: f32, scale_factor: f32) -> f32 {
-    (logical * scale_factor).ceil()
+    ceil_fast(logical * scale_factor)
 }
 
 #[cfg(test)]
@@ -165,6 +216,62 @@ mod tests {
     use crate::TestAppContext;
 
     use super::*;
+
+    #[test]
+    fn floor_ceil_and_round_fast_match_the_library_bit_for_bit() {
+        let mut values = vec![
+            0.0f32,
+            -0.0,
+            0.25,
+            -0.25,
+            0.5,
+            -0.5,
+            1.0,
+            -1.0,
+            0.999_999_9,
+            -0.999_999_9,
+            8_388_607.5,
+            -8_388_607.5,
+            8_388_608.0,
+            -8_388_608.0,
+            1.0e10,
+            -1.0e10,
+            f32::MAX,
+            f32::MIN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+        ];
+        let mut state = 0x9E37_79B9u32;
+        for _ in 0..20_000 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            values.push((state as i32 as f32) / 4096.0);
+            values.push((state >> 16) as f32 / 64.0 - 512.0);
+        }
+        for value in values {
+            assert_eq!(
+                floor_fast(value).to_bits(),
+                value.floor().to_bits(),
+                "floor {value}"
+            );
+            assert_eq!(
+                ceil_fast(value).to_bits(),
+                value.ceil().to_bits(),
+                "ceil {value}"
+            );
+            assert_eq!(
+                round_fast(value).to_bits(),
+                value.round().to_bits(),
+                "round {value}"
+            );
+        }
+        assert!(
+            floor_fast(f32::NAN).is_nan()
+                && ceil_fast(f32::NAN).is_nan()
+                && round_fast(f32::NAN).is_nan()
+        );
+    }
 
     #[test]
     fn test_round_half_toward_zero() {

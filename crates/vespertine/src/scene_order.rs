@@ -11,6 +11,7 @@
 //!   linearly until [`REPLAY_COMPARISON_BUDGET`] comparisons were spent, after which a uniform
 //!   spatial grid is built from the frame's entries and used for the rest of the frame.
 
+use crate::util::{ceil_fast, floor_fast};
 use crate::{Bounds, ScaledPixels};
 
 /// Side of one spatial grid cell in device pixels.
@@ -53,25 +54,45 @@ struct Rect {
     y0: f32,
     x1: f32,
     y1: f32,
+    /// The edges as integers that compare in the IEEE total order (`x0`, `y0`, `x1`, `y1`).
+    keys: [i32; 4],
+}
+
+/// The integer that orders like `value` does in the IEEE total order (see `f32::total_cmp`).
+#[inline]
+fn total_order_key(value: f32) -> i32 {
+    let bits = value.to_bits() as i32;
+    bits ^ (((bits >> 31) as u32) >> 1) as i32
 }
 
 impl Rect {
     fn new(bounds: &Bounds<ScaledPixels>) -> Self {
+        let x0 = bounds.origin.x.0;
+        let y0 = bounds.origin.y.0;
+        let x1 = x0 + bounds.size.width.0;
+        let y1 = y0 + bounds.size.height.0;
         Self {
-            x0: bounds.origin.x.0,
-            y0: bounds.origin.y.0,
-            x1: bounds.origin.x.0 + bounds.size.width.0,
-            y1: bounds.origin.y.0 + bounds.size.height.0,
+            x0,
+            y0,
+            x1,
+            y1,
+            keys: [
+                total_order_key(x0),
+                total_order_key(y0),
+                total_order_key(x1),
+                total_order_key(y1),
+            ],
         }
     }
 
-    /// The upstream strict-inequality overlap predicate.
+    /// The upstream strict-inequality overlap predicate: each rect starts strictly before the
+    /// other one ends, on both axes, in the IEEE total order.
     #[inline]
     fn intersects(&self, other: &Rect) -> bool {
-        before(self.x0, other.x1)
-            && before(other.x0, self.x1)
-            && before(self.y0, other.y1)
-            && before(other.y0, self.y1)
+        self.keys[0] < other.keys[2]
+            && other.keys[0] < self.keys[2]
+            && self.keys[1] < other.keys[3]
+            && other.keys[1] < self.keys[3]
     }
 
     /// Finite edges with non-negative extent. Anything else is handled by exact scans only.
@@ -100,12 +121,6 @@ impl PartialEq for Rect {
             && self.x1.to_bits() == other.x1.to_bits()
             && self.y1.to_bits() == other.y1.to_bits()
     }
-}
-
-/// `a < b` in the IEEE total order, which upstream uses for pixel values.
-#[inline]
-fn before(a: f32, b: f32) -> bool {
-    a.total_cmp(&b).is_lt()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -158,7 +173,7 @@ fn lower_cell(edge: f32, count: usize) -> usize {
     if edge == 0.0 {
         return 0;
     }
-    ((edge / GRID_CELL_SIZE).floor() + 1.0).clamp(0.0, (count - 1) as f32) as usize
+    (floor_fast(edge / GRID_CELL_SIZE) + 1.0).clamp(0.0, (count - 1) as f32) as usize
 }
 
 /// Last cell the upper edge of a bounds with positive extent touches (see [`lower_cell`]).
@@ -167,9 +182,7 @@ fn upper_cell(edge: f32, count: usize) -> usize {
     if edge == 0.0 {
         return 1;
     }
-    (edge / GRID_CELL_SIZE)
-        .ceil()
-        .clamp(0.0, (count - 1) as f32) as usize
+    ceil_fast(edge / GRID_CELL_SIZE).clamp(0.0, (count - 1) as f32) as usize
 }
 
 /// Cells of one axis that the interval touches, first to last inclusive.
@@ -321,9 +334,7 @@ impl ChangedBits {
             return None;
         }
         let cell = |edge: f32| {
-            (edge / self.side)
-                .floor()
-                .clamp(0.0, (CHANGED_GRID_SIZE - 1) as f32) as usize
+            floor_fast(edge / self.side).clamp(0.0, (CHANGED_GRID_SIZE - 1) as f32) as usize
         };
         let (x_first, x_last) = (cell(rect.x0), cell(rect.x1));
         let (y_first, y_last) = (cell(rect.y0), cell(rect.y1));
@@ -369,6 +380,10 @@ enum ChangedCheck {
 pub(crate) struct OrderIndex {
     previous: Vec<Entry>,
     current: Vec<Entry>,
+    /// Largest finite lower-right edge (on either axis, at least zero) among `previous`.
+    previous_extent: f32,
+    /// The same for `current`, kept up to date by [`insert`](Self::insert).
+    current_extent: f32,
     max_order: u32,
     changed: Vec<Rect>,
     changed_unmarkable: u32,
@@ -384,6 +399,8 @@ impl Default for OrderIndex {
         Self {
             previous: Vec::new(),
             current: Vec::new(),
+            previous_extent: 0.0,
+            current_extent: 0.0,
             max_order: 0,
             changed: Vec::new(),
             changed_unmarkable: 0,
@@ -401,6 +418,7 @@ impl OrderIndex {
     /// baseline (unless [`adopt_baseline`](Self::adopt_baseline) replaces it).
     pub fn begin_frame(&mut self) {
         std::mem::swap(&mut self.previous, &mut self.current);
+        self.previous_extent = self.current_extent;
         self.reset_frame_state();
     }
 
@@ -409,21 +427,17 @@ impl OrderIndex {
     pub fn adopt_baseline(&mut self, previous_frame: &OrderIndex) {
         self.previous.clear();
         self.previous.extend_from_slice(&previous_frame.current);
+        self.previous_extent = previous_frame.current_extent;
         self.reset_frame_state();
     }
 
     fn reset_frame_state(&mut self) {
         self.current.clear();
+        self.current_extent = 0.0;
         self.max_order = 0;
         self.changed.clear();
         self.changed_unmarkable = 0;
-        let extent = self
-            .previous
-            .iter()
-            .flat_map(|entry| [entry.rect.x1, entry.rect.y1])
-            .filter(|edge| edge.is_finite())
-            .fold(0.0f32, f32::max);
-        self.changed_bits.clear(extent);
+        self.changed_bits.clear(self.previous_extent);
         self.comparisons = 0;
         self.grid_active = false;
         self.stats = SceneOrderStats::default();
@@ -469,6 +483,12 @@ impl OrderIndex {
         }
         self.current.push(entry);
         self.max_order = self.max_order.max(order);
+        if rect.x1.is_finite() {
+            self.current_extent = self.current_extent.max(rect.x1);
+        }
+        if rect.y1.is_finite() {
+            self.current_extent = self.current_extent.max(rect.y1);
+        }
         order
     }
 
