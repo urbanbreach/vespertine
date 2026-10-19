@@ -20,14 +20,14 @@
 use crate::{HostError, HostEvents, HostResult, NativeEvent, PaintLog, RetainedHost, TreeNode};
 use serde_json::{Map, Value, json};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeSet, HashMap},
     rc::Rc,
 };
 use vespertine::{
     AnyElement, App, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, ScrollHandle, StatefulInteractiveElement, Styled, Window, canvas, div, point,
-    px, relative, rgba,
+    ParentElement, ScrollHandle, StatefulInteractiveElement, Styled, Window, div, point, px,
+    relative, rgba,
 };
 
 const MAX_SAFE_ID: f64 = 9007199254740991.0;
@@ -58,6 +58,9 @@ struct State {
 #[derive(Clone, Default)]
 pub struct FixtureTree {
     state: Rc<RefCell<State>>,
+    /// Pre-order position of the next element built in the current render: the stacking order
+    /// the paint log needs, because paint observers report after their descendants painted.
+    build_order: Cell<u64>,
 }
 
 enum Op {
@@ -502,14 +505,13 @@ impl FixtureTree {
             };
         }
 
-        let mut element = element.child(
-            canvas(
-                |_bounds, _window, _cx| (),
-                move |bounds, _, _window, cx| PaintLog::record_bounds(cx, id, bounds),
-            )
-            .absolute()
-            .size_full(),
-        );
+        // The element's own committed paint bounds (DEV-005): no wrapper or recorder child, so
+        // layout is identical with and without tracking.
+        let order = self.build_order.get();
+        self.build_order.set(order + 1);
+        let mut element = element.on_painted(move |bounds, _window, cx| {
+            PaintLog::record_bounds_ordered(cx, id, order, bounds);
+        });
         if is_input {
             element = element.child(value);
         } else if let Some(text) = text {
@@ -542,6 +544,7 @@ impl RetainedHost for FixtureTree {
     }
 
     fn render(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        self.build_order.set(0);
         let root = self.state.borrow().root;
         root.and_then(|root| self.build(root, cx))
             .unwrap_or_else(|| div().into_any_element())

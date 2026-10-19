@@ -14,7 +14,9 @@ use vespertine::{App, Bounds, Global, Pixels};
 #[derive(Default)]
 struct State {
     frames: u64,
-    bounds: Vec<(u64, Rect)>,
+    /// `(identity, bounds, stacking order)`; a higher order paints above a lower one.
+    bounds: Vec<(u64, Rect, u64)>,
+    next_order: u64,
     strings: Vec<String>,
     washes: Vec<PaintedWash>,
 }
@@ -33,6 +35,7 @@ impl PaintLog {
         let mut state = self.state.borrow_mut();
         state.frames += 1;
         state.bounds.clear();
+        state.next_order = 0;
         state.strings.clear();
         state.washes.clear();
     }
@@ -43,15 +46,35 @@ impl PaintLog {
     }
 
     /// Records the painted border-box bounds of element `id` (window coordinates, logical
-    /// pixels) into the application's log. A second record of the same identity within a frame
-    /// (an element painted twice) replaces the first and takes the later paint position.
-    /// Does nothing when the application has no log.
+    /// pixels) into the application's log; elements recorded later stack above earlier ones. A
+    /// second record of the same identity within a frame (an element painted twice) replaces
+    /// the first and takes the later paint position. Does nothing when the application has no
+    /// log.
+    ///
+    /// An `on_painted` observer (DEV-005) reports after the element's descendants have painted,
+    /// so a host whose elements nest should call [`PaintLog::record_bounds_ordered`] with the
+    /// element's pre-order position instead.
     pub fn record_bounds(cx: &App, id: u64, bounds: Bounds<Pixels>) {
         if let Some(log) = cx.try_global::<PaintLog>() {
             let mut state = log.state.borrow_mut();
-            state.bounds.retain(|(existing, _)| *existing != id);
-            state.bounds.push((id, bounds.into()));
+            let order = state.next_order;
+            Self::insert(&mut state, id, order, bounds);
         }
+    }
+
+    /// Like [`PaintLog::record_bounds`] with an explicit stacking `order` (the element's
+    /// pre-order position in the frame): a higher order is topmost in
+    /// [`PaintLog::elements_at`].
+    pub fn record_bounds_ordered(cx: &App, id: u64, order: u64, bounds: Bounds<Pixels>) {
+        if let Some(log) = cx.try_global::<PaintLog>() {
+            Self::insert(&mut log.state.borrow_mut(), id, order, bounds);
+        }
+    }
+
+    fn insert(state: &mut State, id: u64, order: u64, bounds: Bounds<Pixels>) {
+        state.bounds.retain(|(existing, ..)| *existing != id);
+        state.bounds.push((id, bounds.into(), order));
+        state.next_order = state.next_order.max(order) + 1;
     }
 
     /// Records a painted string that did not pass through the shaped-line painter (for example
@@ -90,25 +113,30 @@ impl PaintLog {
             .borrow()
             .bounds
             .iter()
-            .find(|(existing, _)| *existing == id)
-            .map(|(_, rect)| *rect)
+            .find(|(existing, ..)| *existing == id)
+            .map(|(_, rect, _)| *rect)
     }
 
     /// Identities of the elements whose last-painted bounds contain the point, topmost
     /// (painted last) first.
     pub fn elements_at(&self, x: f64, y: f64) -> Vec<u64> {
-        self.state
-            .borrow()
+        let state = self.state.borrow();
+        let mut hits: Vec<_> = state
             .bounds
             .iter()
-            .rev()
-            .filter(|(_, rect)| rect.contains(x, y))
-            .map(|(id, _)| *id)
-            .collect()
+            .filter(|(_, rect, _)| rect.contains(x, y))
+            .map(|(id, _, order)| (*order, *id))
+            .collect();
+        hits.sort_by(|a, b| b.0.cmp(&a.0));
+        hits.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// Every element painted in the last frame with its bounds, in paint order.
+    /// Every element painted in the last frame with its bounds, in stacking order (bottom
+    /// first).
     pub fn all_bounds(&self) -> Vec<(u64, Rect)> {
-        self.state.borrow().bounds.clone()
+        let state = self.state.borrow();
+        let mut all: Vec<_> = state.bounds.iter().collect();
+        all.sort_by_key(|(_, _, order)| *order);
+        all.into_iter().map(|(id, rect, _)| (*id, *rect)).collect()
     }
 }

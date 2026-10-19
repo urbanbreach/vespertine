@@ -191,16 +191,9 @@ impl Render for Rows {
                         div()
                             .id(("row", row))
                             .h(px(20.0))
-                            .child(
-                                canvas(
-                                    |_, _, _| (),
-                                    move |bounds, _, _, cx| {
-                                        PaintLog::record_bounds(cx, row as u64, bounds)
-                                    },
-                                )
-                                .absolute()
-                                .size_full(),
-                            )
+                            .on_painted(move |bounds, _, cx| {
+                                PaintLog::record_bounds(cx, row as u64, bounds)
+                            })
                             .child(format!("row {row}"))
                     })
                     .collect()
@@ -234,6 +227,65 @@ fn dev_006_a2_virtual_list_rows_beyond_the_visible_window_have_no_bounds() {
     let strings = host.painted_text();
     assert!(strings.contains(&"row 0".to_owned()));
     assert!(!strings.contains(&"row 60".to_owned()));
+}
+
+/// A2: tracking an image element's bounds through its own paint observer (DEV-005) adds no
+/// wrapper and leaves the image's intrinsic layout size unchanged.
+#[test]
+fn dev_006_a2_tracking_an_image_elements_bounds_leaves_its_intrinsic_size_unchanged() {
+    require_backend!();
+    use std::sync::Arc;
+    use vespertine::{ImageSource, RenderImage, img};
+
+    struct Pictures {
+        image: Arc<RenderImage>,
+        tracked: bool,
+    }
+    impl Render for Pictures {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let picture = img(ImageSource::Render(self.image.clone()));
+            let picture = if self.tracked {
+                picture.on_painted(|bounds, _, cx| PaintLog::record_bounds(cx, 1, bounds))
+            } else {
+                picture
+            };
+            // The image is a leaf with no explicit size: its box is the image's own size.
+            div().flex().child(
+                div()
+                    .pl(px(8.0))
+                    .pt(px(4.0))
+                    .on_painted(|bounds, _, cx| PaintLog::record_bounds(cx, 2, bounds))
+                    .child(picture),
+            )
+        }
+    }
+    let measure = |tracked: bool| {
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(16, 12),
+        )]));
+        let mut host = TestHost::with_view(HostOptions::with_size(100.0, 60.0), |_, cx| {
+            cx.new(|_| Pictures { image, tracked })
+        })
+        .unwrap();
+        host.flush();
+        (host.element_bounds(1), host.element_bounds(2))
+    };
+    let (untracked_image, untracked_parent) = measure(false);
+    let (tracked_image, tracked_parent) = measure(true);
+    assert_eq!(untracked_image, None, "an untracked image reports nothing");
+    assert_eq!(
+        untracked_parent, tracked_parent,
+        "the image's container is laid out identically with and without tracking"
+    );
+    let parent = tracked_parent.expect("the container reports its bounds");
+    assert_eq!((parent.width, parent.height), (24.0, 16.0));
+    let tracked = tracked_image.expect("the painted image reports its own bounds");
+    assert_eq!((tracked.x, tracked.y), (8.0, 4.0));
+    assert_eq!(
+        (tracked.width, tracked.height),
+        (16.0, 12.0),
+        "the tracked bounds are the image's intrinsic size, not a wrapper's"
+    );
 }
 
 #[test]

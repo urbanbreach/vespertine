@@ -10,8 +10,8 @@
 //! never silently ignored.
 //!
 //! The paint-time contract: while building elements for a frame, an implementation reports the
-//! painted border-box bounds of each identified element from its paint observer
-//! (`PaintLog::record_bounds`), and generated text and highlight washes through
+//! painted border-box bounds of each identified element from its `on_painted` observer
+//! (DEV-005, `PaintLog::record_bounds`), and generated text and highlight washes through
 //! `PaintLog::record_text` / `PaintLog::record_wash`. Events its handlers produce go through
 //! `HostEvents::emit`.
 

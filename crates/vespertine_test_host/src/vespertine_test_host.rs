@@ -59,7 +59,8 @@
 //! ## Hosting content
 //!
 //! * Native views: [`TestHost::with_view`]. Report painted geometry of identified elements
-//!   with [`PaintLog::record_bounds`] from a paint observer; strings painted through shaped
+//!   with [`PaintLog::record_bounds`] from the element's `on_painted` observer (DEV-005; it adds
+//!   no wrapper and leaves layout unchanged, including for image and SVG leaves); strings painted through shaped
 //!   lines are recorded automatically.
 //! * Retained host trees (APP-006): implement [`RetainedHost`]. Capabilities beyond batches,
 //!   rendering and serialization (focus by identity, scrolling, selection, syntax-cache
