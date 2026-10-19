@@ -208,7 +208,7 @@ fn rows_leaving_paint_keep_their_text_in_the_copy() {
     );
     // Rows 0 and 1 are virtualized away while the drag continues.
     first_row.set(2);
-    harness.draw();
+    harness.redraw();
     harness.move_to(at(50., 36.), Some(MouseButton::Left));
     let text = service.selected_text().unwrap();
     assert!(

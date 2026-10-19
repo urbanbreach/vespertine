@@ -51,9 +51,9 @@ wgpu = { workspace = true, features = ["std", "dx12", "metal", "gles", "vulkan",
 criterion.workspace = true
 vespertine = { workspace = true, features = ["bench-support", "test-support"] }
 image.workspace = true
-vespertine_bench_metrics.workspace = true
 # Integration tests (tests/retention.rs) read the PRF-014 retention counters, which exist only with `test-support`.
 vespertine_wgpu = { workspace = true, features = ["test-support"] }
+vespertine_bench_metrics.workspace = true
 # Validate shaders with the same Naga revision that wgpu uses at runtime.
 naga = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", features = ["wgsl-in"] }
 

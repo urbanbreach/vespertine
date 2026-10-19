@@ -38,6 +38,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use thin_vec::ThinVec;
 use vespertine_collections::HashMap;
 use vespertine_refineable::Refineable;
 use vespertine_util::ResultExt;
@@ -117,6 +118,84 @@ impl Interactivity {
         {
             None
         }
+    }
+
+    /// The accessibility properties of this element. An element that never mutated them
+    /// reports the defaults without owning a property block.
+    pub(crate) fn aria(&self) -> &AriaProperties {
+        self.aria.as_deref().unwrap_or(&DEFAULT_ARIA_PROPERTIES)
+    }
+
+    /// Mutable access to the accessibility properties. The property block is allocated by
+    /// the first call.
+    pub(crate) fn aria_mut(&mut self) -> &mut AriaProperties {
+        self.aria.get_or_insert_with(Default::default)
+    }
+
+    /// Stops suppressing the element's own accessibility node. An element that never
+    /// mutated its properties does not suppress it, so no property block is allocated.
+    pub(crate) fn clear_aria_suppression(&mut self) {
+        if let Some(aria) = self.aria.as_deref_mut() {
+            aria.suppress_node = false;
+        }
+    }
+
+    /// Registers an observer that is called with this element's painted bounds (in logical
+    /// pixels, window coordinates) each time the element is actually painted and is visible.
+    /// It is not called from layout, from speculative prepaint, for hidden elements, or when a
+    /// cached paint range is reused without painting the element.
+    /// The imperative API equivalent of [`InteractiveElement::on_painted`].
+    ///
+    /// Observers registered more than once are called in registration order.
+    pub fn on_painted(
+        &mut self,
+        observer: impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) {
+        let observer: PaintObserver = match self.on_painted.take() {
+            Some(previous) => Box::new(move |bounds, window, cx| {
+                previous(bounds, window, cx);
+                observer(bounds, window, cx);
+            }),
+            None => Box::new(observer),
+        };
+        self.on_painted = Some(Box::new(observer));
+    }
+
+    /// The number of listener and style collections of this element that currently own a
+    /// backing allocation. An element without listeners reports zero. This is a diagnostic
+    /// for allocation tests and examples.
+    #[doc(hidden)]
+    pub fn allocated_listener_collections(&self) -> usize {
+        [
+            self.drag_over_styles.capacity(),
+            self.group_drag_over_styles.capacity(),
+            self.mouse_down_listeners.capacity(),
+            self.mouse_up_listeners.capacity(),
+            self.mouse_pressure_listeners.capacity(),
+            self.mouse_move_listeners.capacity(),
+            self.mouse_exit_listeners.capacity(),
+            self.file_drop_exit_listeners.capacity(),
+            self.scroll_wheel_listeners.capacity(),
+            self.pinch_listeners.capacity(),
+            self.key_down_listeners.capacity(),
+            self.key_up_listeners.capacity(),
+            self.modifiers_changed_listeners.capacity(),
+            self.action_listeners.capacity(),
+            self.drop_listeners.capacity(),
+            self.click_listeners.capacity(),
+            self.aux_click_listeners.capacity(),
+            self.a11y_action_listeners.capacity(),
+        ]
+        .into_iter()
+        .filter(|capacity| *capacity > 0)
+        .count()
+    }
+
+    /// Whether this element owns an accessibility property block (allocated by the first
+    /// mutation of an accessibility property). A diagnostic for allocation tests and examples.
+    #[doc(hidden)]
+    pub fn has_accessibility_property_block(&self) -> bool {
+        self.aria.is_some()
     }
 
     /// Bind the given callback to the mouse down event for the given mouse button, during the bubble phase.
@@ -580,7 +659,7 @@ impl Interactivity {
         &mut self,
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) {
-        self.can_drop_predicate = Some(Box::new(predicate));
+        self.can_drop_predicate = Some(Box::new(Box::new(predicate)));
     }
 
     /// Bind the given callback to click events of this element.
@@ -625,13 +704,13 @@ impl Interactivity {
             self.drag_listener.is_none(),
             "calling on_drag more than once on the same element is not supported"
         );
-        self.drag_listener = Some(DragListener {
+        self.drag_listener = Some(Box::new(DragListener {
             value: Arc::new(value),
             render: Box::new(move |value, offset, window, cx| {
                 constructor(value.downcast_ref().unwrap(), offset, window, cx).into()
             }),
             external_payload: None,
-        });
+        }));
     }
 
     /// Registers a callback resolving a payload to offer the platform if a drag started by this
@@ -703,10 +782,10 @@ impl Interactivity {
             self.tooltip_builder.is_none(),
             "calling tooltip more than once on the same element is not supported"
         );
-        self.tooltip_builder = Some(TooltipBuilder {
+        self.tooltip_builder = Some(Box::new(TooltipBuilder {
             build: Rc::new(build_tooltip),
             hoverable: false,
-        });
+        }));
     }
 
     /// Constructs a tooltip when the element is hovered or long-pressed.
@@ -722,10 +801,10 @@ impl Interactivity {
             self.tooltip_builder.is_none(),
             "calling tooltip more than once on the same element is not supported"
         );
-        self.tooltip_builder = Some(TooltipBuilder {
+        self.tooltip_builder = Some(Box::new(TooltipBuilder {
             build: Rc::new(build_tooltip),
             hoverable: true,
-        });
+        }));
     }
 
     /// Sets the delay before this element's tooltip is shown on hover.
@@ -772,6 +851,25 @@ pub trait InteractiveElement: Sized {
     /// Assign this element to a group of elements that can be styled together
     fn group(mut self, group: impl Into<SharedString>) -> Self {
         self.interactivity().group = Some(group.into());
+        self
+    }
+
+    /// Observe this element's painted bounds.
+    ///
+    /// The callback receives the element's own border-box bounds in logical pixels (window
+    /// coordinates), a mutable window and a mutable application context. It runs from actual
+    /// paint, after the element has passed the visibility check: never from layout or from the
+    /// speculative prepaint phase (so rows a virtual list prepaints and then discards report
+    /// nothing), never for a hidden element, and not for an element whose cached paint is reused
+    /// without painting it again. It runs at most once per actual paint of the element. It does
+    /// not add a wrapper node, change layout, or require a hitbox or pointer listener, and it is
+    /// supported on leaf elements such as [`Img`](crate::Img) and [`Svg`](crate::Svg).
+    /// The fluent API equivalent of [`Interactivity::on_painted`].
+    fn on_painted(
+        mut self,
+        observer: impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_painted(observer);
         self
     }
 
@@ -854,10 +952,10 @@ pub trait InteractiveElement: Sized {
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
-        self.interactivity().group_hover_style = Some(GroupStyle {
+        self.interactivity().group_hover_style = Some(Box::new(GroupStyle {
             group: group_name.into(),
             style: Box::new(f(StyleRefinement::default())),
-        });
+        }));
         self
     }
 
@@ -1313,7 +1411,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     fn role(mut self, role: accesskit::Role) -> Self {
         let interactivity = self.interactivity();
         interactivity.override_role = Some(role);
-        interactivity.aria.suppress_node = false;
+        interactivity.clear_aria_suppression();
         self
     }
 
@@ -1325,13 +1423,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// UIA `AutomationId` on Windows, `AXIdentifier` on macOS, and AT-SPI
     /// `AccessibleId` on Linux stacks whose deployed adapter exposes it.
     fn accessibility_id(mut self, id: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.author_id = Some(id.into());
+        self.interactivity().aria_mut().author_id = Some(id.into());
         self
     }
 
     /// Set the accessible label for this element.
     fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.label = Some(label.into());
+        self.interactivity().aria_mut().label = Some(label.into());
         self
     }
 
@@ -1340,7 +1438,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// that assistive technology announces after the name, role, and value -
     /// for example a settings subtitle or a hint.
     fn aria_description(mut self, description: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.description = Some(description.into());
+        self.interactivity().aria_mut().description = Some(description.into());
         self
     }
 
@@ -1350,7 +1448,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     /// Note that this does not create a keymap. It simply instructs assistive
     /// technology what the keymap is.
     fn aria_keyshortcuts(mut self, keyshortcuts: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.keyshortcuts = Some(keyshortcuts.into());
+        self.interactivity().aria_mut().keyshortcuts = Some(keyshortcuts.into());
         self
     }
 
@@ -1387,112 +1485,112 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         mut self,
         f: impl FnOnce(&mut crate::A11ySubtreeBuilder) + 'static,
     ) -> Self {
-        self.interactivity().a11y_synthetic_children = Some(Box::new(f));
+        self.interactivity().a11y_synthetic_children = Some(Box::new(Box::new(f)));
         self
     }
 
     /// Set the selected state for this element.
     fn aria_selected(mut self, selected: bool) -> Self {
-        self.interactivity().aria.selected = Some(selected);
+        self.interactivity().aria_mut().selected = Some(selected);
         self
     }
 
     /// Set the expanded state for this element.
     fn aria_expanded(mut self, expanded: bool) -> Self {
-        self.interactivity().aria.expanded = Some(expanded);
+        self.interactivity().aria_mut().expanded = Some(expanded);
         self
     }
 
     /// Set the toggled state for this element.
     fn aria_toggled(mut self, toggled: accesskit::Toggled) -> Self {
-        self.interactivity().aria.toggled = Some(toggled);
+        self.interactivity().aria_mut().toggled = Some(toggled);
         self
     }
 
     /// Set the numeric value for this element.
     fn aria_numeric_value(mut self, value: f64) -> Self {
-        self.interactivity().aria.numeric_value = Some(value);
+        self.interactivity().aria_mut().numeric_value = Some(value);
         self
     }
 
     /// Set the step by which assistive technology should expect the numeric
     /// value of this element to change (e.g. when incrementing a spin button).
     fn aria_numeric_value_step(mut self, step: f64) -> Self {
-        self.interactivity().aria.numeric_value_step = Some(step);
+        self.interactivity().aria_mut().numeric_value_step = Some(step);
         self
     }
 
     /// Set the string value of this element, e.g. the text content of a simple
     /// text input.
     fn aria_value(mut self, value: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.value = Some(value.into());
+        self.interactivity().aria_mut().value = Some(value.into());
         self
     }
 
     /// Set the placeholder text reported to assistive technology for this
     /// element, shown when a text input is empty.
     fn aria_placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
-        self.interactivity().aria.placeholder = Some(placeholder.into());
+        self.interactivity().aria_mut().placeholder = Some(placeholder.into());
         self
     }
 
     /// Set the minimum numeric value for this element.
     fn aria_min_numeric_value(mut self, value: f64) -> Self {
-        self.interactivity().aria.min_numeric_value = Some(value);
+        self.interactivity().aria_mut().min_numeric_value = Some(value);
         self
     }
 
     /// Set the maximum numeric value for this element.
     fn aria_max_numeric_value(mut self, value: f64) -> Self {
-        self.interactivity().aria.max_numeric_value = Some(value);
+        self.interactivity().aria_mut().max_numeric_value = Some(value);
         self
     }
 
     /// Set the orientation of this element.
     fn aria_orientation(mut self, orientation: accesskit::Orientation) -> Self {
-        self.interactivity().aria.orientation = Some(orientation);
+        self.interactivity().aria_mut().orientation = Some(orientation);
         self
     }
 
     /// Set the heading level of this element.
     fn aria_level(mut self, level: usize) -> Self {
-        self.interactivity().aria.level = Some(level);
+        self.interactivity().aria_mut().level = Some(level);
         self
     }
 
     /// Set the position in set of this element.
     fn aria_position_in_set(mut self, position: usize) -> Self {
-        self.interactivity().aria.position_in_set = Some(position);
+        self.interactivity().aria_mut().position_in_set = Some(position);
         self
     }
 
     /// Set the size of set for this element.
     fn aria_size_of_set(mut self, size: usize) -> Self {
-        self.interactivity().aria.size_of_set = Some(size);
+        self.interactivity().aria_mut().size_of_set = Some(size);
         self
     }
 
     /// Set the row index for this element.
     fn aria_row_index(mut self, index: usize) -> Self {
-        self.interactivity().aria.row_index = Some(index);
+        self.interactivity().aria_mut().row_index = Some(index);
         self
     }
 
     /// Set the column index for this element.
     fn aria_column_index(mut self, index: usize) -> Self {
-        self.interactivity().aria.column_index = Some(index);
+        self.interactivity().aria_mut().column_index = Some(index);
         self
     }
 
     /// Set the row count for this element.
     fn aria_row_count(mut self, count: usize) -> Self {
-        self.interactivity().aria.row_count = Some(count);
+        self.interactivity().aria_mut().row_count = Some(count);
         self
     }
 
     /// Set the column count for this element.
     fn aria_column_count(mut self, count: usize) -> Self {
-        self.interactivity().aria.column_count = Some(count);
+        self.interactivity().aria_mut().column_count = Some(count);
         self
     }
 
@@ -1554,7 +1652,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
 
     /// Track the scroll state of this element with the given handle.
     fn anchor_scroll(mut self, scroll_anchor: Option<ScrollAnchor>) -> Self {
-        self.interactivity().scroll_anchor = scroll_anchor;
+        self.interactivity().scroll_anchor = scroll_anchor.map(Box::new);
         self
     }
 
@@ -1576,10 +1674,10 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     where
         Self: Sized,
     {
-        self.interactivity().group_active_style = Some(GroupStyle {
+        self.interactivity().group_active_style = Some(Box::new(GroupStyle {
             group: group_name.into(),
             style: Box::new(f(StyleRefinement::default())),
-        });
+        }));
         self
     }
 
@@ -2132,6 +2230,46 @@ pub(crate) struct AriaProperties {
     pub(crate) suppress_node: bool,
 }
 
+/// A synthetic accessibility children callback. Stored behind a second box so the
+/// (usually absent) field is a single pointer.
+pub(crate) type A11ySyntheticChildren = Box<dyn FnOnce(&mut crate::A11ySubtreeBuilder)>;
+
+/// A paint observer: called with the element's painted bounds from actual paint. Stored
+/// behind a second box so the (usually absent) field is a single pointer.
+pub(crate) type PaintObserver = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App)>;
+
+impl AriaProperties {
+    const EMPTY: AriaProperties = AriaProperties {
+        author_id: None,
+        label: None,
+        description: None,
+        keyshortcuts: None,
+        selected: None,
+        expanded: None,
+        toggled: None,
+        numeric_value: None,
+        min_numeric_value: None,
+        max_numeric_value: None,
+        numeric_value_step: None,
+        value: None,
+        placeholder: None,
+        orientation: None,
+        level: None,
+        position_in_set: None,
+        size_of_set: None,
+        row_index: None,
+        column_index: None,
+        row_count: None,
+        column_count: None,
+        alt: None,
+        label_attribute_present: false,
+        suppress_node: false,
+    };
+}
+
+/// The properties every element reports until it mutates them.
+pub(crate) static DEFAULT_ARIA_PROPERTIES: AriaProperties = AriaProperties::EMPTY;
+
 /// The interactivity struct. Powers all of the general-purpose
 /// interactivity in the `Div` element.
 #[derive(Default)]
@@ -2149,7 +2287,7 @@ pub struct Interactivity {
     pub(crate) focusable: bool,
     pub(crate) tracked_focus_handle: Option<FocusHandle>,
     pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
-    pub(crate) scroll_anchor: Option<ScrollAnchor>,
+    pub(crate) scroll_anchor: Option<Box<ScrollAnchor>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
     pub(crate) group: Option<SharedString>,
@@ -2160,34 +2298,34 @@ pub struct Interactivity {
     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
     pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
     pub(crate) hover_style: Option<Box<StyleRefinement>>,
-    pub(crate) group_hover_style: Option<GroupStyle>,
+    pub(crate) group_hover_style: Option<Box<GroupStyle>>,
     pub(crate) active_style: Option<Box<StyleRefinement>>,
-    pub(crate) group_active_style: Option<GroupStyle>,
-    pub(crate) drag_over_styles: Vec<(
+    pub(crate) group_active_style: Option<Box<GroupStyle>>,
+    pub(crate) drag_over_styles: ThinVec<(
         TypeId,
         Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> StyleRefinement>,
     )>,
-    pub(crate) group_drag_over_styles: Vec<(TypeId, GroupStyle)>,
-    pub(crate) mouse_down_listeners: Vec<MouseDownListener>,
-    pub(crate) mouse_up_listeners: Vec<MouseUpListener>,
-    pub(crate) mouse_pressure_listeners: Vec<MousePressureListener>,
-    pub(crate) mouse_move_listeners: Vec<MouseMoveListener>,
-    pub(crate) mouse_exit_listeners: Vec<MouseExitListener>,
-    pub(crate) file_drop_exit_listeners: Vec<FileDropExitListener>,
-    pub(crate) scroll_wheel_listeners: Vec<ScrollWheelListener>,
-    pub(crate) pinch_listeners: Vec<PinchListener>,
-    pub(crate) key_down_listeners: Vec<KeyDownListener>,
-    pub(crate) key_up_listeners: Vec<KeyUpListener>,
-    pub(crate) modifiers_changed_listeners: Vec<ModifiersChangedListener>,
-    pub(crate) action_listeners: Vec<(TypeId, ActionListener)>,
-    pub(crate) drop_listeners: Vec<(TypeId, DropListener)>,
-    pub(crate) can_drop_predicate: Option<CanDropPredicate>,
-    pub(crate) click_listeners: Vec<ClickListener>,
-    pub(crate) aux_click_listeners: Vec<ClickListener>,
-    pub(crate) drag_listener: Option<DragListener>,
+    pub(crate) group_drag_over_styles: ThinVec<(TypeId, GroupStyle)>,
+    pub(crate) mouse_down_listeners: ThinVec<MouseDownListener>,
+    pub(crate) mouse_up_listeners: ThinVec<MouseUpListener>,
+    pub(crate) mouse_pressure_listeners: ThinVec<MousePressureListener>,
+    pub(crate) mouse_move_listeners: ThinVec<MouseMoveListener>,
+    pub(crate) mouse_exit_listeners: ThinVec<MouseExitListener>,
+    pub(crate) file_drop_exit_listeners: ThinVec<FileDropExitListener>,
+    pub(crate) scroll_wheel_listeners: ThinVec<ScrollWheelListener>,
+    pub(crate) pinch_listeners: ThinVec<PinchListener>,
+    pub(crate) key_down_listeners: ThinVec<KeyDownListener>,
+    pub(crate) key_up_listeners: ThinVec<KeyUpListener>,
+    pub(crate) modifiers_changed_listeners: ThinVec<ModifiersChangedListener>,
+    pub(crate) action_listeners: ThinVec<(TypeId, ActionListener)>,
+    pub(crate) drop_listeners: ThinVec<(TypeId, DropListener)>,
+    pub(crate) can_drop_predicate: Option<Box<CanDropPredicate>>,
+    pub(crate) click_listeners: ThinVec<ClickListener>,
+    pub(crate) aux_click_listeners: ThinVec<ClickListener>,
+    pub(crate) drag_listener: Option<Box<DragListener>>,
     pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
     pub(crate) hover_listener_mode: HoverListenerMode,
-    pub(crate) tooltip_builder: Option<TooltipBuilder>,
+    pub(crate) tooltip_builder: Option<Box<TooltipBuilder>>,
     pub(crate) tooltip_show_delay: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
     pub(crate) hitbox_behavior: HitboxBehavior,
@@ -2196,11 +2334,14 @@ pub struct Interactivity {
     pub(crate) tab_stop: bool,
 
     pub(crate) a11y_action_listeners:
-        Vec<(accesskit::Action, crate::window::a11y::A11yActionListener)>,
-    pub(crate) a11y_synthetic_children: Option<Box<dyn FnOnce(&mut crate::A11ySubtreeBuilder)>>,
+        ThinVec<(accesskit::Action, crate::window::a11y::A11yActionListener)>,
+    pub(crate) a11y_synthetic_children: Option<Box<A11ySyntheticChildren>>,
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
-    pub(crate) aria: AriaProperties,
+    /// Accessibility properties; allocated on first mutation (see [`Self::aria_mut`]).
+    pub(crate) aria: Option<Box<AriaProperties>>,
+    /// Observer invoked from actual paint with this element's painted bounds.
+    pub(crate) on_painted: Option<Box<PaintObserver>>,
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
@@ -2388,37 +2529,43 @@ impl Interactivity {
                     }
                 }
 
-                window.with_text_style(style.text_style().cloned(), |window| {
-                    window.with_content_mask(
-                        style.overflow_mask(bounds, window.rem_size()),
-                        |window| {
-                            let mouse_blocking = style.mouse_blocking();
-                            let hitbox = if mouse_blocking != Some(crate::MouseBlocking::Ignored)
-                                && (self.should_insert_hitbox(&style, window, cx)
-                                    || mouse_blocking
-                                        .is_some_and(|blocking| blocking.blocks_hits()))
-                            {
-                                let behavior = match (mouse_blocking, self.hitbox_behavior) {
-                                    (Some(crate::MouseBlocking::All), _) => {
-                                        HitboxBehavior::BlockMouse
-                                    }
-                                    (
-                                        Some(crate::MouseBlocking::ExceptWheel),
-                                        HitboxBehavior::Normal,
-                                    ) => HitboxBehavior::BlockMouseExceptScroll,
-                                    (_, behavior) => behavior,
+                // The inherited opacity is tracked while prepainting as well as while painting,
+                // so views nested here can tell that their painted output depends on it
+                // (PRF-001 R5).
+                window.with_element_opacity(style.opacity, |window| {
+                    window.with_text_style(style.text_style().cloned(), |window| {
+                        window.with_content_mask(
+                            style.overflow_mask(bounds, window.rem_size()),
+                            |window| {
+                                let mouse_blocking = style.mouse_blocking();
+                                let hitbox = if mouse_blocking
+                                    != Some(crate::MouseBlocking::Ignored)
+                                    && (self.should_insert_hitbox(&style, window, cx)
+                                        || mouse_blocking
+                                            .is_some_and(|blocking| blocking.blocks_hits()))
+                                {
+                                    let behavior = match (mouse_blocking, self.hitbox_behavior) {
+                                        (Some(crate::MouseBlocking::All), _) => {
+                                            HitboxBehavior::BlockMouse
+                                        }
+                                        (
+                                            Some(crate::MouseBlocking::ExceptWheel),
+                                            HitboxBehavior::Normal,
+                                        ) => HitboxBehavior::BlockMouseExceptScroll,
+                                        (_, behavior) => behavior,
+                                    };
+                                    Some(window.insert_hitbox(bounds, behavior))
+                                } else {
+                                    None
                                 };
-                                Some(window.insert_hitbox(bounds, behavior))
-                            } else {
-                                None
-                            };
 
-                            let scroll_offset =
-                                self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
-                            (result, element_state)
-                        },
-                    )
+                                let scroll_offset =
+                                    self.clamp_scroll_position(bounds, &style, window, cx);
+                                let result = f(&style, scroll_offset, hitbox, window, cx);
+                                (result, element_state)
+                            },
+                        )
+                    })
                 })
             },
         )
@@ -2535,6 +2682,7 @@ impl Interactivity {
         f: impl FnOnce(&Style, &mut Window, &mut App),
     ) {
         self.hovered = hitbox.map(|hitbox| hitbox.is_hovered(window));
+        let mut painted = false;
         window.with_optional_element_state::<InteractiveElementState, _>(
             global_id,
             |element_state, window| {
@@ -2555,6 +2703,7 @@ impl Interactivity {
                 if style.visibility == Visibility::Hidden {
                     return ((), element_state);
                 }
+                painted = true;
 
                 let mut tab_group = None;
                 if self.tab_group {
@@ -2681,6 +2830,12 @@ impl Interactivity {
                 ((), element_state)
             },
         );
+
+        // Report only after the visibility check passed in the paint above, so hidden
+        // elements and anything that was merely prepainted never reach the observer.
+        if painted && let Some(observer) = self.on_painted.take() {
+            observer(bounds, window, cx);
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -3573,67 +3728,68 @@ impl Interactivity {
     }
 
     pub(crate) fn write_a11y_info(&self, node: &mut accesskit::Node) {
-        if let Some(id) = &self.aria.author_id {
+        let aria = self.aria();
+        if let Some(id) = &aria.author_id {
             node.set_author_id(id.to_string());
         }
-        if let Some(label) = &self.aria.label {
+        if let Some(label) = &aria.label {
             node.set_label(label.to_string());
         }
-        if let Some(description) = &self.aria.description {
+        if let Some(description) = &aria.description {
             node.set_description(description.to_string());
         }
-        if let Some(keyshortcuts) = &self.aria.keyshortcuts {
+        if let Some(keyshortcuts) = &aria.keyshortcuts {
             node.set_keyboard_shortcut(keyshortcuts.to_string());
         }
-        if let Some(selected) = self.aria.selected {
+        if let Some(selected) = aria.selected {
             node.set_selected(selected);
         }
-        if let Some(expanded) = self.aria.expanded {
+        if let Some(expanded) = aria.expanded {
             node.set_expanded(expanded);
         }
-        if let Some(toggled) = self.aria.toggled {
+        if let Some(toggled) = aria.toggled {
             node.set_toggled(toggled);
         }
-        if let Some(value) = self.aria.numeric_value {
+        if let Some(value) = aria.numeric_value {
             node.set_numeric_value(value);
         }
-        if let Some(value) = self.aria.min_numeric_value {
+        if let Some(value) = aria.min_numeric_value {
             node.set_min_numeric_value(value);
         }
-        if let Some(value) = self.aria.max_numeric_value {
+        if let Some(value) = aria.max_numeric_value {
             node.set_max_numeric_value(value);
         }
-        if let Some(step) = self.aria.numeric_value_step {
+        if let Some(step) = aria.numeric_value_step {
             node.set_numeric_value_step(step);
         }
-        if let Some(value) = &self.aria.value {
+        if let Some(value) = &aria.value {
             node.set_value(value.to_string());
         }
-        if let Some(placeholder) = &self.aria.placeholder {
+        if let Some(placeholder) = &aria.placeholder {
             node.set_placeholder(placeholder.to_string());
         }
-        if let Some(orientation) = self.aria.orientation {
+        if let Some(orientation) = aria.orientation {
             node.set_orientation(orientation);
         }
-        if let Some(level) = self.aria.level {
+        if let Some(level) = aria.level {
             node.set_level(level);
         }
-        if let Some(position) = self.aria.position_in_set {
+        if let Some(position) = aria.position_in_set {
             node.set_position_in_set(position);
         }
-        if let Some(size) = self.aria.size_of_set {
+        if let Some(size) = aria.size_of_set {
             node.set_size_of_set(size);
         }
-        if let Some(index) = self.aria.row_index {
+        if let Some(index) = aria.row_index {
             node.set_row_index(index);
         }
-        if let Some(index) = self.aria.column_index {
+        if let Some(index) = aria.column_index {
             node.set_column_index(index);
         }
-        if let Some(count) = self.aria.row_count {
+        if let Some(count) = aria.row_count {
             node.set_row_count(count);
         }
-        if let Some(count) = self.aria.column_count {
+        if let Some(count) = aria.column_count {
             node.set_column_count(count);
         }
         if !self.click_listeners.is_empty() {
@@ -5400,14 +5556,14 @@ mod tests {
     #[test]
     fn test_write_a11y_info_string_and_numeric_properties() {
         let mut interactivity = Interactivity::default();
-        interactivity.aria.author_id = Some("settings.buffer-font-size".into());
-        interactivity.aria.label = Some("Buffer Font Size".into());
-        interactivity.aria.value = Some("15".into());
-        interactivity.aria.placeholder = Some("Search".into());
-        interactivity.aria.numeric_value = Some(15.0);
-        interactivity.aria.min_numeric_value = Some(6.0);
-        interactivity.aria.max_numeric_value = Some(72.0);
-        interactivity.aria.numeric_value_step = Some(1.0);
+        interactivity.aria_mut().author_id = Some("settings.buffer-font-size".into());
+        interactivity.aria_mut().label = Some("Buffer Font Size".into());
+        interactivity.aria_mut().value = Some("15".into());
+        interactivity.aria_mut().placeholder = Some("Search".into());
+        interactivity.aria_mut().numeric_value = Some(15.0);
+        interactivity.aria_mut().min_numeric_value = Some(6.0);
+        interactivity.aria_mut().max_numeric_value = Some(72.0);
+        interactivity.aria_mut().numeric_value_step = Some(1.0);
 
         let mut node = accesskit::Node::new(accesskit::Role::SpinButton);
         interactivity.write_a11y_info(&mut node);

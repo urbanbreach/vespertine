@@ -178,9 +178,14 @@ fn open(
     (handle.into(), painted)
 }
 
+/// Draws one frame. An unchanged view replays its retained output (PRF-001), so the refresh
+/// makes the frame construct and paint the view again.
 fn draw(cx: &mut TestAppContext, handle: crate::AnyWindowHandle) {
-    cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
-        .unwrap();
+    cx.update_window(handle, |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx)
+    })
+    .unwrap();
 }
 
 /// Paints once and returns what was recorded.

@@ -6,8 +6,12 @@ mod deferred;
 mod div;
 mod image_cache;
 mod img;
+#[cfg(test)]
+mod interactivity_storage_tests;
 mod list;
 mod paint_scopes;
+#[cfg(test)]
+mod painted_observer_tests;
 mod surface;
 mod svg;
 mod text;

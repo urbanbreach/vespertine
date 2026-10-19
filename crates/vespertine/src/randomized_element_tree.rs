@@ -1631,7 +1631,9 @@ mod tests {
         draw_window(window, cx);
 
         let incremental_counters = root.read_with(cx, |tree, _| tree.work_counters());
-        assert!(incremental_counters.root_render_count() >= 1);
+        // Retained frames (PRF-001): the mutation notifies only the owning entity, so the
+        // unchanged root view is replayed instead of rendering again.
+        assert_eq!(incremental_counters.root_render_count(), 0);
         assert!(incremental_counters.entity_render_count() >= 1);
         assert!(incremental_counters.element_render_count() >= 1);
         assert!(incremental_counters.handler_registration_count() >= 2);

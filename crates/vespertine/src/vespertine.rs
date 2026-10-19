@@ -13,11 +13,14 @@ mod arena;
 mod aria;
 mod asset_cache;
 mod assets;
+#[cfg(test)]
 mod bounds_tree;
 mod color;
 mod color_css;
 /// The default colors used by VESPERTINE.
 pub mod colors;
+#[cfg(test)]
+mod counting_allocator;
 #[cfg(feature = "profiler")]
 mod debug_overlay;
 mod element;
@@ -74,6 +77,8 @@ mod responsive_layout_tests;
 #[cfg(test)]
 mod rounded_clip_tests;
 mod scene;
+mod scene_order;
+mod scene_sort;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
 mod shared_uri;
@@ -105,6 +110,8 @@ pub use seeds::calculate_seeds;
 pub mod _accessibility;
 #[cfg(doc)]
 pub mod _ownership_and_data_flow;
+#[cfg(doc)]
+pub mod _retained_frames;
 
 /// Do not touch, here be dragons for use by vespertine_macros and such.
 #[doc(hidden)]
@@ -235,6 +242,7 @@ pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use scene::*;
+pub use scene_order::SceneOrderStats;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
@@ -249,6 +257,8 @@ pub use subscription::*;
 pub use subsecond;
 pub use svg_renderer::*;
 pub(crate) use tab_stop::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use taffy::LayoutStats;
 use taffy::TaffyLayoutEngine;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]

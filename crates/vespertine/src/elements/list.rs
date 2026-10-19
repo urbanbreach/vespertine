@@ -1880,7 +1880,11 @@ impl StateInner {
             Some(item) => item.size().map_or_else(
                 || {
                     let mut element = render_item(ix, window, cx);
-                    element.layout_as_root(space, window, cx).height
+                    window
+                        .with_layout_item_index(ix, |window| {
+                            element.layout_as_root(space, window, cx)
+                        })
+                        .height
                 },
                 |size| size.height,
             ),
@@ -1920,8 +1924,11 @@ impl StateInner {
                 continue;
             }
             let size = item.size().unwrap_or_else(|| {
-                let mut element = render_item(mounted.start + ix, window, cx);
-                element.layout_as_root(available_item_space, window, cx)
+                let item_index = mounted.start + ix;
+                let mut element = render_item(item_index, window, cx);
+                window.with_layout_item_index(item_index, |window| {
+                    element.layout_as_root(available_item_space, window, cx)
+                })
             });
 
             measured_items.push(ListItem::Measured {
@@ -1982,7 +1989,9 @@ impl StateInner {
             if let Some(pending_scroll) = self.pending_scroll.take() {
                 let item_ix = scroll_top.item_ix;
                 let mut element = render_item(item_ix, window, cx);
-                let element_size = element.layout_as_root(available_item_space, window, cx);
+                let element_size = window.with_layout_item_index(item_ix, |window| {
+                    element.layout_as_root(available_item_space, window, cx)
+                });
                 match pending_scroll {
                     PendingScroll::Absolute {
                         item_ix: ix,
@@ -2054,8 +2063,9 @@ impl StateInner {
                             Some((_, element, element_size)) => (element, element_size),
                             None => {
                                 let mut element = render_item(ix, window, cx);
-                                let element_size =
-                                    element.layout_as_root(available_item_space, window, cx);
+                                let element_size = window.with_layout_item_index(ix, |window| {
+                                    element.layout_as_root(available_item_space, window, cx)
+                                });
                                 (element, element_size)
                             }
                         };
@@ -2103,7 +2113,9 @@ impl StateInner {
                 let prev_ix = top_ix - 1;
                 if let Some(item) = self.mounted_item(prev_ix) {
                     let mut element = render_item(prev_ix, window, cx);
-                    let element_size = element.layout_as_root(available_item_space, window, cx);
+                    let element_size = window.with_layout_item_index(prev_ix, |window| {
+                        element.layout_as_root(available_item_space, window, cx)
+                    });
                     rendered_height += element_size.height;
                     measured_items.push_front(ListItem::Measured {
                         size: element_size,
@@ -2153,7 +2165,9 @@ impl StateInner {
             leading_overdraw += if let Some(item) = self.mounted_item(prev_ix) {
                 let size = item.size().unwrap_or_else(|| {
                     let mut element = render_item(prev_ix, window, cx);
-                    element.layout_as_root(available_item_space, window, cx)
+                    window.with_layout_item_index(prev_ix, |window| {
+                        element.layout_as_root(available_item_space, window, cx)
+                    })
                 });
                 measured_items.push_front(ListItem::Measured {
                     size,
@@ -2230,7 +2244,9 @@ impl StateInner {
             }
             if let Some((item_index, focus_id, focus_handle)) = found {
                 let mut element = render_item(item_index, window, cx);
-                let element_size = element.layout_as_root(available_item_space, window, cx);
+                let element_size = window.with_layout_item_index(item_index, |window| {
+                    element.layout_as_root(available_item_space, window, cx)
+                });
                 item_layouts.push_back(ItemLayout {
                     index: item_index,
                     element,

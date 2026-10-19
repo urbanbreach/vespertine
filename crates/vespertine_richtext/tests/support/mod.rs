@@ -59,10 +59,22 @@ impl Harness {
         self.cx.run_until_parked();
     }
 
-    /// Redraws until the frame is stable (programmatic selections apply at the end of a frame).
+    /// Draws a frame that constructs and paints every view. An unchanged view replays its
+    /// retained output (PRF-001), which neither paints runs nor finishes the text service's
+    /// frame, so a test that changes state the views read without notifying them, or that
+    /// needs the runs to paint, redraws with this.
+    pub fn redraw(&mut self) {
+        self.cx
+            .update_window(self.window.into(), |_, window, _| window.refresh())
+            .expect("refresh");
+        self.draw();
+    }
+
+    /// Redraws until the frame is stable (programmatic selections apply at the end of a frame
+    /// in which the runs paint).
     pub fn settle(&mut self) {
         for _ in 0..3 {
-            self.draw();
+            self.redraw();
         }
     }
 

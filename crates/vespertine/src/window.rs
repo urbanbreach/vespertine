@@ -28,6 +28,9 @@ use crate::{
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
 use crate::interactive::TouchEvent;
+#[cfg(any(test, feature = "test-support"))]
+use crate::taffy::LayoutStats;
+use crate::taffy::{LayoutKeyContext, LayoutMeasure, OwnedLayoutNodes};
 use crate::{EdgeFade, ImageAlphaMask, ImageEffects, ScopeParams};
 use anyhow::{Context as _, Result, anyhow};
 use derive_more::{Deref, DerefMut};
@@ -67,6 +70,11 @@ use vespertine_util::post_inc;
 use vespertine_util::{ResultExt, measure};
 
 pub(crate) mod a11y;
+pub(crate) mod read_tracker;
+pub(crate) mod retained;
+#[cfg(test)]
+mod retained_tests;
+pub use retained::{RetentionStats, retained_frames_disabled, set_retained_frames_disabled};
 #[cfg(test)]
 mod glyph_blur_tests;
 mod prompts;
@@ -135,7 +143,7 @@ struct WindowInvalidatorInner {
     pub update_count: usize,
     #[cfg(feature = "profiler")]
     pub frame_dirty: FrameDirtyAccumulator,
-    pub platform_waker: Option<Rc<dyn Fn()>>,
+    pub frame_requester: Option<Rc<dyn Fn()>>,
 }
 
 /// Per-frame invalidation bookkeeping, drained at draw time and emitted to the
@@ -176,7 +184,7 @@ impl WindowInvalidator {
                 update_count: 0,
                 #[cfg(feature = "profiler")]
                 frame_dirty: FrameDirtyAccumulator::default(),
-                platform_waker: None,
+                frame_requester: None,
             })),
         }
     }
@@ -188,9 +196,10 @@ impl WindowInvalidator {
         if inner.draw_phase == DrawPhase::None {
             #[cfg(feature = "profiler")]
             let dirty_at = Self::record_frame_dirty(&mut inner);
+            #[cfg(feature = "profiler")]
             let became_dirty = !inner.dirty;
             inner.dirty = true;
-            let waker = became_dirty.then(|| inner.platform_waker.clone()).flatten();
+            let requester = inner.frame_requester.clone();
             #[cfg(feature = "profiler")]
             let window_id = inner.window_id;
             drop(inner);
@@ -199,8 +208,10 @@ impl WindowInvalidator {
                 profiler::journal::record_frame_pending(window_id, dirty_at);
             }
             cx.push_effect(Effect::Notify { emitter: entity });
-            if let Some(waker) = waker {
-                waker();
+            // Arm even when already dirty: arming is idempotent, and a
+            // previously failed frame source start retries on invalidation.
+            if let Some(requester) = requester {
+                requester();
             }
             true
         } else {
@@ -214,6 +225,7 @@ impl WindowInvalidator {
 
     pub fn set_dirty(&self, dirty: bool) {
         let mut inner = self.inner.borrow_mut();
+        #[cfg(feature = "profiler")]
         let became_dirty = dirty && !inner.dirty;
         inner.dirty = dirty;
         if dirty {
@@ -221,7 +233,7 @@ impl WindowInvalidator {
         }
         #[cfg(feature = "profiler")]
         let dirty_at = dirty.then(|| Self::record_frame_dirty(&mut inner));
-        let waker = became_dirty.then(|| inner.platform_waker.clone()).flatten();
+        let requester = dirty.then(|| inner.frame_requester.clone()).flatten();
         #[cfg(feature = "profiler")]
         let window_id = inner.window_id;
         drop(inner);
@@ -229,28 +241,31 @@ impl WindowInvalidator {
         if became_dirty && let Some(dirty_at) = dirty_at {
             profiler::journal::record_frame_pending(window_id, dirty_at);
         }
-        if let Some(waker) = waker {
-            waker();
+        if let Some(requester) = requester {
+            requester();
         }
     }
 
-    pub fn set_platform_waker(&self, waker: Option<Rc<dyn Fn()>>) {
+    /// Installs the platform's frame requester. A window that is already
+    /// dirty (every window starts dirty) arms it immediately, or its first
+    /// frame would never be requested.
+    pub fn set_frame_requester(&self, requester: Option<Rc<dyn Fn()>>) {
         let mut inner = self.inner.borrow_mut();
-        inner.platform_waker = waker;
-        let waker = inner.dirty.then(|| inner.platform_waker.clone()).flatten();
+        inner.frame_requester = requester;
+        let requester = inner.dirty.then(|| inner.frame_requester.clone()).flatten();
         drop(inner);
-        if let Some(waker) = waker {
-            waker();
+        if let Some(requester) = requester {
+            requester();
         }
     }
 
-    /// Wakes the platform's frame-request source so a frame request is
-    /// delivered even if the platform stops requesting frames for idle
-    /// windows. No-op on platforms without a frame waker.
-    pub fn wake_platform(&self) {
-        let waker = self.inner.borrow().platform_waker.clone();
-        if let Some(waker) = waker {
-            waker();
+    /// Arms the platform's frame source so a frame request is delivered even
+    /// if the platform parked it while the window was idle. No-op on
+    /// platforms without a frame requester.
+    pub fn request_frame(&self) {
+        let requester = self.inner.borrow().frame_requester.clone();
+        if let Some(requester) = requester {
+            requester();
         }
     }
 
@@ -1018,7 +1033,7 @@ impl ElementIdStack {
     }
 
     /// The hash of the whole path on the stack.
-    fn hash(&self) -> u64 {
+    pub(crate) fn hash(&self) -> u64 {
         self.hashes
             .last()
             .copied()
@@ -1098,6 +1113,67 @@ pub(crate) struct PaintIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+}
+
+impl PrepaintStateIndex {
+    /// The position in the dispatch tree.
+    pub(crate) fn dispatch_tree_index(&self) -> usize {
+        self.dispatch_tree_index
+    }
+
+    /// A number that grows with every piece of output recorded.
+    pub(crate) fn order_key(&self) -> usize {
+        self.hitboxes_index
+            + self.tooltips_index
+            + self.deferred_draws_index
+            + self.dispatch_tree_index
+            + self.accessed_element_states_index
+    }
+
+    /// Moves an index recorded inside a range that began at `from` to the
+    /// equivalent position inside a copy of that range that began at `to`.
+    pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
+        Self {
+            hitboxes_index: self.hitboxes_index - from.hitboxes_index + to.hitboxes_index,
+            tooltips_index: self.tooltips_index - from.tooltips_index + to.tooltips_index,
+            deferred_draws_index: self.deferred_draws_index - from.deferred_draws_index
+                + to.deferred_draws_index,
+            dispatch_tree_index: self.dispatch_tree_index - from.dispatch_tree_index
+                + to.dispatch_tree_index,
+            accessed_element_states_index: self.accessed_element_states_index
+                - from.accessed_element_states_index
+                + to.accessed_element_states_index,
+            line_layout_index: self
+                .line_layout_index
+                .rebased(&from.line_layout_index, &to.line_layout_index),
+        }
+    }
+}
+
+impl PaintIndex {
+    /// Moves an index recorded inside a range that began at `from` to the
+    /// equivalent position inside a copy of that range that began at `to`.
+    pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
+        Self {
+            scene_index: self.scene_index - from.scene_index + to.scene_index,
+            #[cfg(any(test, feature = "test-support"))]
+            debug_bounds_index: self.debug_bounds_index - from.debug_bounds_index
+                + to.debug_bounds_index,
+            mouse_listeners_index: self.mouse_listeners_index - from.mouse_listeners_index
+                + to.mouse_listeners_index,
+            input_handlers_index: self.input_handlers_index - from.input_handlers_index
+                + to.input_handlers_index,
+            cursor_styles_index: self.cursor_styles_index - from.cursor_styles_index
+                + to.cursor_styles_index,
+            accessed_element_states_index: self.accessed_element_states_index
+                - from.accessed_element_states_index
+                + to.accessed_element_states_index,
+            tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
+            line_layout_index: self
+                .line_layout_index
+                .rebased(&from.line_layout_index, &to.line_layout_index),
+        }
+    }
 }
 
 impl Frame {
@@ -1251,7 +1327,8 @@ pub struct Window {
     /// a given rem size.
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
-    layout_engine: Option<TaffyLayoutEngine>,
+    pub(crate) layout_engine: Option<TaffyLayoutEngine>,
+    pub(crate) layout_keys: crate::taffy::LayoutKeyStack,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: ElementIdStack,
     pub(crate) text_style_stack: TextStyleStack,
@@ -1329,6 +1406,7 @@ pub struct Window {
     #[cfg(feature = "profiler")]
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
     pub(crate) a11y: A11y,
+    pub(crate) retention: retained::RetentionState,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1864,17 +1942,10 @@ impl Window {
                     {
                         // Don't lose a pending forced render to throttling.
                         deferred_force_render |= force_render;
-                        // Deferred by throttling: ask demand-driven platforms to retry.
-                        handle
-                            .update(&mut cx, |_, window, _| {
-                                window.platform_window.schedule_frame();
-                            })
-                            .log_err();
-                        // The demand that entered this branch (a deferred forced
-                        // render or pending next-frame callbacks) is still
-                        // unserved; platforms that stop requesting frames for
-                        // idle windows need a wakeup to deliver the retry.
-                        invalidator.wake_platform();
+                        // Deferred by throttling: the unserved demand (a deferred
+                        // forced render or pending next-frame callbacks) needs
+                        // another delivery, so keep the frame source armed.
+                        invalidator.request_frame();
                         #[cfg(feature = "profiler")]
                         profiler::journal::record_frame_skipped(
                             window_id,
@@ -1942,22 +2013,19 @@ impl Window {
                         if window.invalidator.is_dirty()
                             || !window.next_frame_callbacks.borrow().is_empty()
                         {
-                            window.platform_window.schedule_frame();
-                        } else if should_draw {
-                            // No demand remains after a rendered frame: the window parks.
-                            window.platform_window.trim_renderer_resources();
+                            // Demand remains after this frame (the window was
+                            // re-invalidated mid-draw, or animations scheduled
+                            // next-frame callbacks): keep the frame source armed.
+                            window.request_frame();
+                        } else if window.can_pause_frames() {
+                            window.platform_window.pause_frames();
+                            if should_draw {
+                                // No demand remains after a rendered frame: the window parks.
+                                window.platform_window.trim_renderer_resources();
+                            }
                         }
                     })
                     .log_err();
-
-                // Platforms that stop requesting frames for idle windows only
-                // deliver another request after a wakeup. If demand remains
-                // after this frame (the window was re-invalidated mid-draw, or
-                // animations scheduled next-frame callbacks), re-arm the frame
-                // source explicitly.
-                if invalidator.is_dirty() || !next_frame_callbacks.borrow().is_empty() {
-                    invalidator.wake_platform();
-                }
                 #[cfg(feature = "profiler")]
                 if !should_draw {
                     profiler::journal::record_frame_skipped(
@@ -1968,7 +2036,7 @@ impl Window {
                 }
             }
         }));
-        invalidator.set_platform_waker(platform_window.frame_waker());
+        invalidator.set_frame_requester(platform_window.frame_requester());
         platform_window.on_visual_viewport_changed(Box::new({
             let mut cx = cx.to_async();
             move || {
@@ -2160,6 +2228,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            layout_keys: crate::taffy::LayoutKeyStack::new(),
             root: None,
             element_id_stack: ElementIdStack::default(),
             text_style_stack: TextStyleStack::default(),
@@ -2232,6 +2301,7 @@ impl Window {
                 accessibility_force_disabled,
                 initial_window_title,
             ),
+            retention: retained::RetentionState::new(cx.entities.tracker.clone()),
         })
     }
 
@@ -2499,6 +2569,11 @@ impl Window {
         &self.text_system
     }
 
+    /// The current text style, shared with every query at the same stack depth.
+    pub(crate) fn text_style_shared(&self) -> Arc<TextStyle> {
+        self.text_style_stack.resolve_shared()
+    }
+
     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
     pub fn text_style(&self) -> TextStyle {
         self.text_style_stack.resolve()
@@ -2746,10 +2821,28 @@ impl Window {
     /// Schedule the given closure to be run directly after the current frame is rendered.
     pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
         RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
-        self.platform_window.schedule_frame();
         // Next-frame callbacks create frame demand without dirtying the
-        // window, so the platform's frame source must be woken explicitly.
-        self.invalidator.wake_platform();
+        // window, so the platform's frame source must be armed explicitly.
+        self.request_frame();
+    }
+
+    /// Arms the platform's frame source so a frame request is delivered after
+    /// the platform parked it while this window was idle. Cheap and
+    /// idempotent; never runs application code. Every site that creates frame
+    /// demand (invalidation, notification, input, next-frame callbacks,
+    /// platform events) calls this.
+    pub(crate) fn request_frame(&self) {
+        self.invalidator.request_frame();
+    }
+
+    /// Whether the platform's frame source may be parked after a completed
+    /// frame: no dirty state, no pending present, no pending next-frame
+    /// callbacks, and not both active and under high-rate input.
+    pub(crate) fn can_pause_frames(&self) -> bool {
+        !self.invalidator.is_dirty()
+            && !self.needs_present.get()
+            && self.next_frame_callbacks.borrow().is_empty()
+            && !(self.active.get() && self.input_rate_tracker.borrow().is_high_rate())
     }
 
     /// Schedule a frame to be drawn on the next animation frame.
@@ -3416,6 +3509,7 @@ impl Window {
 
     /// The position of the mouse relative to the window.
     pub fn mouse_position(&self) -> Point<Pixels> {
+        self.retention.tracker.read_pointer();
         self.mouse_position
     }
 
@@ -3455,6 +3549,7 @@ impl Window {
 
     /// The current state of the keyboard's modifiers
     pub fn modifiers(&self) -> Modifiers {
+        self.retention.tracker.read_modifiers();
         self.modifiers
     }
 
@@ -3494,6 +3589,7 @@ impl Window {
 
     /// The current state of the keyboard's capslock
     pub fn capslock(&self) -> Capslock {
+        self.retention.tracker.read_capslock();
         self.capslock
     }
 
@@ -3524,6 +3620,7 @@ impl Window {
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.invalidator.set_dirty(false);
         self.requested_autoscroll = None;
+        self.retention.blocked = self.retention_blocked(cx);
 
         // Restore the previously-used input handler.
         // Place it back into a None slot (left by a previous .take()) so that
@@ -3543,7 +3640,10 @@ impl Window {
             }
         }
         if !cx.mode.skip_drawing() {
+            self.retention.tracker.set_drawing(true);
             self.draw_roots(cx);
+            self.retention.tracker.set_drawing(false);
+            self.finish_retained_frame();
             #[cfg(feature = "profiler")]
             {
                 let viewport_size = self.viewport_size;
@@ -3587,7 +3687,7 @@ impl Window {
                 });
         }
 
-        self.layout_engine.as_mut().unwrap().clear();
+        self.layout_end_frame();
         self.text_system().finish_frame();
         self.next_frame.finish(&mut self.rendered_frame);
 
@@ -3596,6 +3696,9 @@ impl Window {
         let previous_window_active = self.rendered_frame.window_active;
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
+        self.next_frame
+            .scene
+            .adopt_order_baseline(&self.rendered_frame.scene);
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
         let mut focus_before_listeners = self.focus;
@@ -3668,9 +3771,20 @@ impl Window {
         arena_scope.exit(&cx.element_arena)
     }
 
+    /// Applies the writes made while drawing and drops the records of views
+    /// that were neither built nor replayed in this frame.
+    fn finish_retained_frame(&mut self) {
+        let tracker = self.retention.tracker.clone();
+        self.retention.views.flush_draw_writes(&tracker);
+        self.retention.adopted.clear();
+        self.retention.views.sweep();
+        debug_assert!(self.retention.stack.is_empty());
+    }
+
     fn record_entities_accessed(&mut self, cx: &mut App) {
         let mut entities_ref = cx.entities.accessed_entities.get_mut();
         let mut entities = mem::take(entities_ref.deref_mut());
+        entities.extend(self.retention.views.tracked_entities());
         let handle = self.handle;
         cx.record_entities_accessed(
             handle,
@@ -3684,6 +3798,12 @@ impl Window {
 
     fn invalidate_entities(&mut self) {
         let mut views = self.invalidator.take_views();
+        if !views.is_empty() {
+            self.request_frame();
+        }
+        let inputs = self.take_input_changes();
+        let tracker = self.retention.tracker.clone();
+        self.retention.views.begin_frame(&tracker, &views, &inputs);
         for entity in views.drain() {
             self.mark_view_dirty(entity);
         }
@@ -3713,6 +3833,40 @@ impl Window {
         self.platform_window
             .content_size()
             .to_device_pixels(self.platform_window.scale_factor())
+    }
+
+    /// Compares the pointer, modifiers and caps lock with their values at the
+    /// preceding frame.
+    fn take_input_changes(&mut self) -> retained::InputChanges {
+        let current = (self.mouse_position, self.modifiers, self.capslock);
+        let changes = match self.retention.last_inputs {
+            Some((position, modifiers, capslock)) => retained::InputChanges {
+                pointer: position != current.0,
+                modifiers: modifiers != current.1,
+                capslock: capslock != current.2,
+            },
+            None => retained::InputChanges::default(),
+        };
+        self.retention.last_inputs = Some(current);
+        changes
+    }
+
+    /// Whether the frame being drawn must construct every view (PRF-001 R7).
+    fn retention_blocked(&mut self, cx: &App) -> bool {
+        // Replayed views do not yet contribute their accessibility nodes (the operation log
+        // of A11Y-002 is not implemented), so every frame on which accessibility is active
+        // constructs every view; the first such frame is the forced reconstruction of
+        // PRF-001 R7.
+        let a11y_active = self.a11y.activation_pending();
+        let a11y_first_frame = a11y_active && !self.retention.a11y_was_active;
+        self.retention.a11y_was_active = a11y_active;
+        self.refreshing
+            || a11y_first_frame
+            || a11y_active
+            || retained::retained_frames_disabled()
+            || self.retention.window_disabled
+            || cx.active_drag.is_some()
+            || self.is_inspector_picking(cx)
     }
 
     #[profiling::function]
@@ -3764,6 +3918,18 @@ impl Window {
     pub fn set_debug_frame_overlay_mode(&mut self, mode: DebugFrameOverlayMode) {
         self.debug_frame_overlay.set_mode(mode);
         self.refresh();
+    }
+
+    /// Returns a snapshot of the frame-time statistics the debug frame overlay shows:
+    /// the current, 90th-percentile, 99th-percentile and maximum draw durations of the
+    /// retained history (the latest 1000 frames), the total number of frames recorded and
+    /// the number of retained samples.
+    ///
+    /// Reading the snapshot does not record a frame or change the history, the counts or
+    /// the overlay mode.
+    #[cfg(feature = "profiler")]
+    pub fn debug_frame_overlay_stats(&self) -> crate::DebugFrameOverlayStats {
+        self.debug_frame_overlay.stats()
     }
 
     /// Advances the debug frame overlay through its hidden, frame-time-only,
@@ -4110,6 +4276,18 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        self.reuse_prepaint_mapped(range, None);
+    }
+
+    /// Copies the prepaint output in `range` from the previous frame. With a
+    /// [`retained::SpliceMap`] the range is one stretch of a view whose output
+    /// is copied around rebuilt children: dispatch parents outside the stretch
+    /// are resolved through the map.
+    pub(crate) fn reuse_prepaint_mapped(
+        &mut self,
+        range: Range<PrepaintStateIndex>,
+        map: Option<&retained::SpliceMap>,
+    ) {
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -4130,11 +4308,20 @@ impl Window {
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
 
-        let reused_subtree = self.next_frame.dispatch_tree.reuse_subtree(
-            range.start.dispatch_tree_index..range.end.dispatch_tree_index,
-            &mut self.rendered_frame.dispatch_tree,
-            self.focus,
-        );
+        let open_node = self.next_frame.dispatch_tree.active_node_id();
+        let reused_subtree = match map {
+            None => self.next_frame.dispatch_tree.reuse_subtree(
+                range.start.dispatch_tree_index..range.end.dispatch_tree_index,
+                &mut self.rendered_frame.dispatch_tree,
+                self.focus,
+            ),
+            Some(map) => self.next_frame.dispatch_tree.reuse_subtree_with(
+                range.start.dispatch_tree_index..range.end.dispatch_tree_index,
+                &mut self.rendered_frame.dispatch_tree,
+                self.focus,
+                &mut |old_parent| map.resolve(old_parent).or(open_node),
+            ),
+        };
 
         if reused_subtree.contains_focus() {
             self.next_frame.focus = self.focus;
@@ -4146,7 +4333,14 @@ impl Window {
                 .iter()
                 .map(|deferred_draw| DeferredDraw {
                     current_view: deferred_draw.current_view,
-                    parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                    parent_node: match map {
+                        None => reused_subtree.refresh_node_id(deferred_draw.parent_node),
+                        Some(map) => reused_subtree
+                            .try_refresh_node_id(deferred_draw.parent_node)
+                            .or_else(|| map.resolve(deferred_draw.parent_node))
+                            .or(open_node)
+                            .expect("a deferred draw has a parent node"),
+                    },
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
                     content_mask: deferred_draw.content_mask,
@@ -5861,9 +6055,11 @@ impl Window {
         cx.layout_id_buffer.extend(children);
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+        let key = self.layout_keys.claim_key();
 
         self.layout_engine.as_mut().unwrap().request_layout(
-            style,
+            key,
+            &style,
             rem_size,
             scale_factor,
             &cx.layout_id_buffer,
@@ -5887,10 +6083,43 @@ impl Window {
 
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+        let key = self.layout_keys.claim_key();
         self.layout_engine
             .as_mut()
             .unwrap()
-            .request_measured_layout(style, rem_size, scale_factor, measure)
+            .request_measured_closure(key, &style, rem_size, scale_factor, measure)
+    }
+
+    /// Like [`Window::request_measured_layout`], for a measuring function that has an
+    /// identity/replay contract (see [`LayoutMeasure`]): the measurement installed at the
+    /// persistent node of the current key is carried, replayed or replaced as the contract
+    /// decides.
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn request_measured_layout_with<M: LayoutMeasure>(
+        &mut self,
+        style: Style,
+        measure: M,
+        cx: &mut App,
+    ) -> LayoutId {
+        self.invalidator.debug_assert_prepaint();
+
+        let rem_size = self.rem_size();
+        let scale_factor = self.scale_factor();
+        let key = self.layout_keys.claim_key();
+        let mut layout_engine = self.layout_engine.take().unwrap();
+        let layout_id = layout_engine.request_measured_layout(
+            key,
+            &style,
+            rem_size,
+            scale_factor,
+            measure,
+            Some((self, cx)),
+        );
+        self.layout_engine = Some(layout_engine);
+        layout_id
     }
 
     /// Compute the layout for the given id within the given available space.
@@ -5911,6 +6140,26 @@ impl Window {
         self.layout_engine = Some(layout_engine);
     }
 
+    /// Recomputes the layout of the subtree rooted at `layout_id` with that node's size fixed
+    /// to `size`, without moving the node within its parent. Used after a node's inputs were
+    /// rewritten in place (see [`Window::layout_write_count`]) so its measured leaves are
+    /// measured again.
+    ///
+    /// This method should only be called as part of the prepaint phase of element drawing.
+    #[allow(dead_code, reason = "consumed by the retained-frame work (PRF-001)")]
+    pub(crate) fn relayout_subtree_in_place(
+        &mut self,
+        layout_id: LayoutId,
+        size: Size<Pixels>,
+        cx: &mut App,
+    ) {
+        self.invalidator.debug_assert_prepaint();
+
+        let mut layout_engine = self.layout_engine.take().unwrap();
+        layout_engine.relayout_subtree_in_place(layout_id, size, self, cx);
+        self.layout_engine = Some(layout_engine);
+    }
+
     /// Obtain the bounds computed for the given LayoutId relative to the window. This method will usually be invoked by
     /// VESPERTINE itself automatically in order to pass your element its `Bounds` automatically.
     ///
@@ -5928,6 +6177,144 @@ impl Window {
         let snapped_offset = self.pixel_snap_point(self.element_offset());
         bounds.origin += snapped_offset;
         bounds
+    }
+
+    /// Ends the layout frame: persistent layout nodes nothing claimed or kept alive are
+    /// released, temporary nodes are released, and the layout key path starts over.
+    pub(crate) fn layout_end_frame(&mut self) {
+        self.layout_engine.as_mut().unwrap().end_frame();
+        self.layout_keys.reset();
+    }
+
+    /// Enters the request-layout scope of an element for layout keying.
+    pub(crate) fn layout_enter_element(&mut self, id: Option<&ElementId>) {
+        self.layout_keys.enter_element(id);
+    }
+
+    /// Leaves the scope entered with [`Window::layout_enter_element`].
+    pub(crate) fn layout_exit_element(&mut self) {
+        self.layout_keys.exit_element();
+    }
+
+    /// Enters a layout root created during prepaint, keyed in its own namespace under the
+    /// current element id path.
+    pub(crate) fn layout_begin_root(&mut self) {
+        let path_hash = self.element_id_stack.hash();
+        self.layout_keys.begin_root(path_hash);
+    }
+
+    /// Leaves the root entered with [`Window::layout_begin_root`].
+    pub(crate) fn layout_end_root(&mut self) {
+        self.layout_keys.end_root();
+    }
+
+    /// Runs `f`, in which the next element that requests layout and has no explicit
+    /// identity is keyed by `index` (the row of a virtual list) instead of its position
+    /// among its siblings.
+    pub(crate) fn with_layout_item_index<R>(
+        &mut self,
+        index: usize,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.layout_keys.set_item_index(Some(index as u32));
+        let result = f(self);
+        self.layout_keys.set_item_index(None);
+        result
+    }
+
+    /// The position in the layout key path at which the next element that requests layout
+    /// would be keyed: its namespace, the key of the innermost frame, and how many anonymous
+    /// siblings that frame has already keyed.
+    #[allow(dead_code, reason = "consumed by the retained-frame work (PRF-001)")]
+    pub(crate) fn layout_key_context(&self) -> LayoutKeyContext {
+        self.layout_keys.context()
+    }
+
+    /// Runs `f` with the layout key path positioned at `context`, so the next element that
+    /// requests layout is keyed exactly as it was when the context was captured.
+    #[allow(dead_code, reason = "consumed by the retained-frame work (PRF-001)")]
+    pub(crate) fn with_layout_key_context<R>(
+        &mut self,
+        context: LayoutKeyContext,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.layout_keys.push_context(context);
+        let result = f(self);
+        self.layout_keys.pop_context();
+        result
+    }
+
+    /// Starts a layout owner: persistent layout nodes claimed while it is the innermost
+    /// owner belong to it. Owners nest; a nested owner's nodes are not its parent's.
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn begin_layout_owner(&mut self) {
+        self.layout_engine.as_mut().unwrap().begin_owner();
+    }
+
+    /// Ends the innermost layout owner and returns the nodes it claimed.
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn end_layout_owner(&mut self) -> OwnedLayoutNodes {
+        self.layout_engine.as_mut().unwrap().end_owner()
+    }
+
+    /// Keeps the nodes alive through the current frame without traversing any element
+    /// and without any layout write; used for views and rows that are replayed.
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn mark_layout_nodes_live(&mut self, nodes: &OwnedLayoutNodes) {
+        self.layout_engine.as_mut().unwrap().mark_live(nodes);
+    }
+
+    /// Keeps the nodes alive for `frames` frames after the current one even when
+    /// nothing claims them (virtual-list rows that left the viewport).
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn retain_layout_nodes(&mut self, nodes: &OwnedLayoutNodes, frames: u32) {
+        self.layout_engine.as_mut().unwrap().retain(nodes, frames);
+    }
+
+    /// A monotonic count of style, children and measure-context writes and created layout
+    /// nodes; a difference between two readings says whether layout inputs changed.
+    #[allow(
+        dead_code,
+        reason = "consumed by the retained-frame and text measurement carry/replay work (PRF-001, PRF-005, PRF-011)"
+    )]
+    pub(crate) fn layout_write_count(&self) -> u64 {
+        self.layout_engine.as_ref().unwrap().write_count()
+    }
+
+    /// Whether the node's layout is out of date.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn layout_node_is_dirty(&self, layout_id: LayoutId) -> bool {
+        self.layout_engine.as_ref().unwrap().is_dirty(layout_id)
+    }
+
+    /// Whether `layout_id` still names a live layout node.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn layout_node_is_live(&self, layout_id: LayoutId) -> bool {
+        self.layout_engine.as_ref().unwrap().is_live(layout_id)
+    }
+
+    /// Counters of the layout engine's work.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn layout_stats(&self) -> LayoutStats {
+        self.layout_engine.as_ref().unwrap().stats()
+    }
+
+    /// Resets the layout engine counters (the live node count is a gauge and stays).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_layout_stats(&mut self) {
+        self.layout_engine.as_mut().unwrap().reset_stats();
     }
 
     /// The size Taffy solved for the layout node, in logical pixels, before any
@@ -6433,6 +6820,7 @@ impl Window {
         let caused_invalidation = self.invalidator.update_count() > update_count_before;
         if caused_invalidation {
             self.input_rate_tracker.borrow_mut().record_input();
+            self.request_frame();
         }
         #[cfg(feature = "profiler")]
         self.window_profiler.end_input(caused_invalidation);
@@ -8032,6 +8420,9 @@ impl Window {
         state_type: TypeId,
     ) -> ((GlobalElementId, TypeId), Option<ElementStateBox>) {
         let key = (global_id.clone(), state_type);
+        if let Some(sink) = self.retention.layout_state_sink.last_mut() {
+            sink.push(key.clone());
+        }
         self.next_frame.accessed_element_states.push(key.clone());
         let state = self
             .next_frame
@@ -8873,6 +9264,9 @@ mod tests {
             })
             .unwrap();
         let test_window = cx.test_window(window.into());
+        // Present the frame that is still pending from opening the window, so
+        // that nothing is owed when the baseline is taken.
+        while test_window.simulate_display_tick() {}
         let frame_wake_count = test_window.frame_wake_count();
 
         test_window.simulate_visibility_change(WindowVisibility::Hidden);
@@ -9192,12 +9586,12 @@ mod tests {
         }
     }
 
-    /// Platforms that stop requesting frames for idle windows (currently web)
-    /// rely on the frame waker firing whenever frame demand arises; a demand
-    /// source that skips the waker shows up there as a window that silently
-    /// stops repainting until unrelated activity wakes it.
+    /// Platforms that stop requesting frames for idle windows rely on the
+    /// frame requester firing whenever frame demand arises; a demand source
+    /// that skips it shows up there as a window that silently stops
+    /// repainting until unrelated activity wakes it.
     #[vespertine::test]
-    fn test_frame_waker_fires_on_frame_demand(cx: &mut TestAppContext) {
+    fn test_frame_requester_fires_on_frame_demand(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| EmptyView);
         let test_window = cx.test_window(window.into());
 
@@ -9330,41 +9724,287 @@ mod tests {
         assert_eq!(observed_appearance.get(), Some(WindowAppearance::Dark));
     }
 
-    #[vespertine::test]
-    fn queued_frame_callback_wakes_a_parked_render_loop(cx: &mut TestAppContext) {
-        let window = cx.add_window(|_, _| Empty);
-        let test_window = cx.test_window(window.into());
-
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(!test_window.frame_scheduled());
-
-        cx.update_window(window.into(), |_, window, _| {
-            window.active.set(true);
-            window.on_next_frame(|_, _| {});
-        })
-        .unwrap();
-        assert!(
-            test_window.frame_scheduled(),
-            "queuing work on a parked window must wake the render loop"
-        );
-
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(
-            test_window.frame_scheduled(),
-            "presenting the frame must await one compositor callback"
-        );
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(!test_window.frame_scheduled());
+    /// Delivers display ticks until the window parks, returning how many it took.
+    fn settle_display_ticks(test_window: &crate::TestWindow) -> usize {
+        let mut ticks = 0;
+        while test_window.simulate_display_tick() {
+            ticks += 1;
+            assert!(ticks < 16, "window never parked");
+        }
+        ticks
     }
 
+    /// ANM-001 A1: the first tick succeeds, a clean window is then parked, a
+    /// notify wakes exactly one tick, and the clean frame parks it again.
+    #[vespertine::test]
+    fn display_tick_parks_clean_window_and_notify_wakes_one_tick(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+
+        assert!(test_window.simulate_display_tick(), "first tick succeeds");
+        assert!(
+            !test_window.simulate_display_tick(),
+            "a second tick on a clean window is parked"
+        );
+        assert_eq!(test_window.display_ticks(), 1);
+
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        assert!(test_window.simulate_display_tick(), "notify wakes a tick");
+        assert!(
+            !test_window.simulate_display_tick(),
+            "the clean frame parks the window again"
+        );
+        assert_eq!(test_window.display_ticks(), 2);
+    }
+
+    /// ANM-001 A2: a next-frame callback that registers itself again receives
+    /// an uninterrupted series of ticks, each callback runs exactly once, and
+    /// the window parks after the last one.
+    #[vespertine::test]
+    fn self_refreshing_next_frame_chain_gets_three_ticks_then_parks(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+        let baseline = test_window.display_ticks();
+
+        let runs = Rc::new(RefCell::new(Vec::new()));
+        fn step(window: &mut Window, runs: Rc<RefCell<Vec<usize>>>, index: usize) {
+            window.on_next_frame(move |window, _| {
+                runs.borrow_mut().push(index);
+                window.refresh();
+                if index < 3 {
+                    step(window, runs, index + 1);
+                }
+            });
+        }
+        window
+            .update(cx, {
+                let runs = runs.clone();
+                move |_, window, _| {
+                    // Inactive windows are frame-rate throttled, which would
+                    // defer the ticks this test drives manually.
+                    window.active.set(true);
+                    step(window, runs, 1);
+                }
+            })
+            .unwrap();
+
+        for expected in 1..=3 {
+            assert!(test_window.simulate_display_tick(), "tick {expected}");
+            assert_eq!(runs.borrow().len(), expected);
+        }
+        assert!(!test_window.simulate_display_tick(), "parked after chain");
+        assert_eq!(*runs.borrow(), [1, 2, 3]);
+        assert_eq!(test_window.display_ticks() - baseline, 3);
+    }
+
+    /// ANM-001 A3: a resize on a parked window wakes exactly one redraw.
+    #[vespertine::test]
+    fn resize_on_parked_window_wakes_one_redraw(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let mut test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+        assert!(!test_window.frame_scheduled());
+
+        test_window.simulate_resize(size(px(333.), px(222.)));
+        assert!(
+            test_window.frame_scheduled(),
+            "resize arms the frame source"
+        );
+        assert!(test_window.simulate_display_tick());
+        window
+            .update(cx, |_, window, _| {
+                assert_eq!(window.viewport_size(), size(px(333.), px(222.)));
+                assert!(!window.invalidator.is_dirty());
+                assert!(!window.needs_present.get());
+            })
+            .unwrap();
+        assert!(!test_window.simulate_display_tick(), "one redraw only");
+    }
+
+    /// ANM-001 A4: arming is idempotent and valid from inside a frame
+    /// callback; a pending delivery is not multiplied.
+    #[vespertine::test]
+    fn recursive_arming_during_a_callback_yields_one_delivery(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+        let baseline = test_window.display_ticks();
+        let wakes = test_window.frame_wake_count();
+
+        window
+            .update(cx, |_, window, _| {
+                window.active.set(true);
+                window.on_next_frame(|window, _| {
+                    for _ in 0..4 {
+                        window.request_frame();
+                    }
+                });
+            })
+            .unwrap();
+        assert!(test_window.simulate_display_tick());
+        assert!(!test_window.simulate_display_tick());
+        assert_eq!(test_window.display_ticks() - baseline, 1);
+        assert!(test_window.frame_wake_count() >= wakes + 5);
+    }
+
+    /// ANM-001 A4 / R7: a failed source start leaves the window parked, and
+    /// the next invalidation retries it.
+    #[vespertine::test]
+    fn failed_frame_source_start_retries_on_next_invalidation(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+
+        test_window.fail_next_frame_source_start();
+        window
+            .update(cx, |_, window, _| window.request_frame())
+            .unwrap();
+        assert_eq!(test_window.frame_source_start_failures(), 1);
+        assert!(
+            !test_window.simulate_display_tick(),
+            "source failed to start"
+        );
+
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        assert_eq!(test_window.frame_source_start_failures(), 1);
+        assert!(
+            test_window.simulate_display_tick(),
+            "retry started the source"
+        );
+        assert!(!test_window.simulate_display_tick());
+    }
+
+    /// ANM-001 A4 / R2: arming never needs the platform window's own state,
+    /// so it works while that state is locked.
+    #[vespertine::test]
+    fn arming_while_platform_state_is_locked_takes_effect(cx: &mut TestAppContext) {
+        use crate::PlatformWindow as _;
+
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+        let requester = test_window.frame_requester().expect("test frame requester");
+
+        let state = test_window.0.lock();
+        requester();
+        requester();
+        drop(state);
+
+        assert!(test_window.simulate_display_tick());
+        assert!(!test_window.simulate_display_tick());
+    }
+
+    /// ANM-001 A4 / R9: a destroyed window ignores later arming requests.
+    #[vespertine::test]
+    fn destroyed_window_ignores_later_arming(cx: &mut TestAppContext) {
+        use crate::PlatformWindow as _;
+
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        let requester = test_window.frame_requester().expect("test frame requester");
+        let wakes = test_window.frame_wake_counter();
+        requester();
+        assert!(wakes.get() >= 1);
+
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        drop(test_window);
+        cx.update(|_| {});
+
+        let before = wakes.get();
+        requester();
+        assert_eq!(wakes.get(), before, "destroyed window must ignore arming");
+    }
+
+    /// ANM-001 A5 / R4: pausing is skipped while the window is active and
+    /// under high-rate input, and happens once the one second sustain elapses.
+    #[vespertine::test]
+    fn pausing_waits_for_high_rate_input_sustain(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+
+        window
+            .update(cx, |_, window, _| {
+                window.active.set(true);
+                for _ in 0..6 {
+                    window.input_rate_tracker.borrow_mut().record_input();
+                }
+                window.request_frame();
+            })
+            .unwrap();
+
+        for _ in 0..3 {
+            assert!(
+                test_window.simulate_display_tick(),
+                "active window under high-rate input stays armed"
+            );
+        }
+
+        std::thread::sleep(Duration::from_millis(1050));
+        assert!(test_window.simulate_display_tick());
+        assert!(
+            !test_window.simulate_display_tick(),
+            "paused after the sustain elapsed"
+        );
+    }
+
+    /// ANM-001 R4: high-rate input alone does not hold an inactive window.
+    #[vespertine::test]
+    fn inactive_window_pauses_despite_high_rate_input(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+
+        window
+            .update(cx, |_, window, _| {
+                window.active.set(false);
+                for _ in 0..6 {
+                    window.input_rate_tracker.borrow_mut().record_input();
+                }
+                window.request_frame();
+            })
+            .unwrap();
+        assert!(test_window.simulate_display_tick());
+        assert!(!test_window.simulate_display_tick());
+    }
+
+    struct HoverView;
+
+    impl Render for HoverView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_mouse_move(cx.listener(|_, _, _, cx| cx.notify()))
+        }
+    }
+
+    /// ANM-001 R3: input that changes state arms the frame source.
+    #[vespertine::test]
+    fn input_that_changes_state_arms_the_frame_source(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| HoverView);
+        let mut test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
+
+        test_window.simulate_input(crate::PlatformInput::MouseMove(crate::MouseMoveEvent {
+            position: point(px(10.), px(10.)),
+            pressed_button: None,
+            modifiers: Default::default(),
+        }));
+        assert!(test_window.frame_scheduled());
+        assert!(test_window.simulate_display_tick());
+        assert!(!test_window.simulate_display_tick());
+    }
+
+    /// A pending presentation wakes a parked window.
     #[vespertine::test]
     fn pending_presentation_wakes_a_parked_render_loop(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| Empty);
         let test_window = cx.test_window(window.into());
-
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(test_window.simulate_scheduled_frame());
+        settle_display_ticks(&test_window);
         assert!(!test_window.frame_scheduled());
 
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
@@ -9374,34 +10014,39 @@ mod tests {
             test_window.frame_scheduled(),
             "a rendered scene awaiting presentation must wake the render loop"
         );
+        assert!(test_window.simulate_display_tick());
+        assert!(!test_window.simulate_display_tick());
     }
 
+    /// ANM-001 R11: a tick skipped by frame-rate throttling leaves demand
+    /// armed so the retry is delivered.
     #[vespertine::test]
-    fn callback_queued_during_a_frame_requests_a_follow_up(cx: &mut TestAppContext) {
+    fn throttled_tick_keeps_the_window_armed(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| Empty);
         let test_window = cx.test_window(window.into());
+        settle_display_ticks(&test_window);
 
-        let callback_ran = Rc::new(Cell::new(false));
-        cx.update_window(window.into(), |_, window, _| {
-            // Inactive windows are frame-rate throttled, which would defer the
-            // ticks this test drives manually.
-            window.active.set(true);
-            let callback_ran = callback_ran.clone();
-            window.on_next_frame(move |window, _| {
-                window.on_next_frame(move |_, _| callback_ran.set(true));
-            });
+        let ran = Rc::new(Cell::new(0));
+        cx.update_window(window.into(), {
+            let ran = ran.clone();
+            move |_, window, _| {
+                window.on_next_frame(move |_, _| ran.set(ran.get() + 1));
+            }
         })
         .unwrap();
-
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(!callback_ran.get());
-        assert!(
-            test_window.frame_scheduled(),
-            "a callback queued mid-frame must schedule a follow-up before the loop parks"
-        );
-
-        assert!(test_window.simulate_scheduled_frame());
-        assert!(callback_ran.get());
+        // The window is inactive, so ticks closer together than the inactive
+        // frame interval are throttled; either the callback ran, or the tick
+        // was skipped and the window must still be armed for the retry.
+        assert!(test_window.simulate_display_tick());
+        assert!(ran.get() == 1 || test_window.frame_scheduled());
+        let mut ticks = 0;
+        while ran.get() == 0 {
+            assert!(test_window.simulate_display_tick(), "stranded callback");
+            std::thread::sleep(Duration::from_millis(5));
+            ticks += 1;
+            assert!(ticks < 200);
+        }
+        assert_eq!(ran.get(), 1);
     }
 
     struct RootView {
@@ -10950,9 +11595,12 @@ mod image_update_tests {
         fixture.with(|window, _| assert!(!window.update_image(&resized).unwrap()));
 
         // The scene still holds the old geometry; the caller redraws normally.
+        // The refresh forces reconstruction (PRF-001 R7). The redraw runs when the update
+        // ends; a further draw of the now-clean window replays the retained output, so
+        // the render count is compared against the value before the refresh.
         *fixture.current.borrow_mut() = resized.clone();
-        fixture.with(|window, _| window.refresh());
         let renders = fixture.counters.renders.get();
+        fixture.with(|window, _| window.refresh());
         fixture.draw();
         assert!(fixture.counters.renders.get() > renders);
         let after = fixture.with(|window, _| sprite_tiles(window));

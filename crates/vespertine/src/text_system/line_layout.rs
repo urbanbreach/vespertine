@@ -493,6 +493,34 @@ pub(crate) struct LineLayoutIndex {
 }
 
 impl LineLayoutIndex {
+    /// Whether `self` lies within `start..=end`.
+    pub(crate) fn within(&self, start: &Self, end: &Self) -> bool {
+        self.lines_index >= start.lines_index
+            && self.lines_index <= end.lines_index
+            && self.wrapped_lines_index >= start.wrapped_lines_index
+            && self.wrapped_lines_index <= end.wrapped_lines_index
+            && self.lines_by_hash_index >= start.lines_by_hash_index
+            && self.lines_by_hash_index <= end.lines_by_hash_index
+            && self.wrapped_lines_by_hash_index >= start.wrapped_lines_by_hash_index
+            && self.wrapped_lines_by_hash_index <= end.wrapped_lines_by_hash_index
+    }
+
+    /// Moves an index recorded inside a range that began at `from` to the
+    /// equivalent position inside a copy of that range that began at `to`.
+    pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
+        Self {
+            font_generation: to.font_generation,
+            lines_index: self.lines_index - from.lines_index + to.lines_index,
+            wrapped_lines_index: self.wrapped_lines_index - from.wrapped_lines_index
+                + to.wrapped_lines_index,
+            lines_by_hash_index: self.lines_by_hash_index - from.lines_by_hash_index
+                + to.lines_by_hash_index,
+            wrapped_lines_by_hash_index: self.wrapped_lines_by_hash_index
+                - from.wrapped_lines_by_hash_index
+                + to.wrapped_lines_by_hash_index,
+        }
+    }
+
     /// Position in the used string-keyed line list.
     #[cfg(test)]
     pub(crate) fn lines_position(&self) -> usize {

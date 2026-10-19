@@ -28,6 +28,27 @@ impl DebugFrameOverlayMode {
     }
 }
 
+/// A snapshot of the frame-time statistics shown by the debug frame overlay,
+/// derived from its history of the most recent draw durations.
+///
+/// Obtain it with [`crate::Window::debug_frame_overlay_stats`].
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct DebugFrameOverlayStats {
+    /// The most recently recorded draw duration, in milliseconds.
+    pub current_ms: Option<f32>,
+    /// The 90th-percentile draw duration over the retained samples, in milliseconds.
+    pub p90_ms: Option<f32>,
+    /// The 99th-percentile draw duration over the retained samples, in milliseconds.
+    pub p99_ms: Option<f32>,
+    /// The largest retained draw duration, in milliseconds.
+    pub max_ms: Option<f32>,
+    /// The total number of frames recorded, including those whose samples were evicted
+    /// or cleared by a reset. This is never capped.
+    pub frames: u64,
+    /// The number of draw durations currently retained.
+    pub samples: usize,
+}
+
 /// The number of most recent draw durations retained for percentile statistics.
 const MAX_SAMPLES: usize = 1000;
 
@@ -160,31 +181,49 @@ impl DebugFrameOverlay {
         }
     }
 
+    /// The snapshot every statistic of the overlay is derived from: the
+    /// overlay text and [`crate::Window::debug_frame_overlay_stats`] both read
+    /// it, so there is a single source of truth for the history.
+    pub(crate) fn stats(&self) -> DebugFrameOverlayStats {
+        let mut sorted: Vec<Duration> = self.draw_durations.iter().copied().collect();
+        sorted.sort_unstable();
+        let percentile = |percent: usize| {
+            (!sorted.is_empty()).then(|| duration_ms(sorted[(sorted.len() - 1) * percent / 100]))
+        };
+        DebugFrameOverlayStats {
+            current_ms: self.draw_durations.back().copied().map(duration_ms),
+            p90_ms: percentile(90),
+            p99_ms: percentile(99),
+            max_ms: sorted.last().copied().map(duration_ms),
+            frames: self.total_frame_count,
+            samples: sorted.len(),
+        }
+    }
+
     fn lines(&self) -> Vec<String> {
-        let current = self.draw_durations.back().copied();
         match self.mode {
             DebugFrameOverlayMode::Hidden => Vec::new(),
-            DebugFrameOverlayMode::Minimal => vec![format_ms(current)],
+            DebugFrameOverlayMode::Minimal => {
+                vec![format_ms(
+                    self.draw_durations.back().copied().map(duration_ms),
+                )]
+            }
             DebugFrameOverlayMode::Full => {
-                let mut sorted: Vec<Duration> = self.draw_durations.iter().copied().collect();
-                sorted.sort_unstable();
-                let percentile = |numerator: usize| {
-                    (!sorted.is_empty()).then(|| sorted[(sorted.len() - 1) * numerator / 100])
-                };
+                let stats = self.stats();
                 // Past five digits the count would break the column
                 // alignment, so it saturates instead.
-                let frame_count = if self.total_frame_count > 99_999 {
+                let frame_count = if stats.frames > 99_999 {
                     "LOTS".to_string()
                 } else {
-                    self.total_frame_count.to_string()
+                    stats.frames.to_string()
                 };
                 // Labels are padded to a uniform width so the fixed-width
                 // durations start in the same column on every line.
                 vec![
-                    format!("CUR {}", format_ms(current)),
-                    format!("1%  {}", format_ms(percentile(99))),
-                    format!("10% {}", format_ms(percentile(90))),
-                    format!("MAX {}", format_ms(sorted.last().copied())),
+                    format!("CUR {}", format_ms(stats.current_ms)),
+                    format!("1%  {}", format_ms(stats.p99_ms)),
+                    format!("10% {}", format_ms(stats.p90_ms)),
+                    format!("MAX {}", format_ms(stats.max_ms)),
                     format!("FRAMES {frame_count:>5}"),
                 ]
             }
@@ -194,14 +233,16 @@ impl DebugFrameOverlay {
 
 /// Formats as `abc.d MS`, right-aligned in room for three integer digits and
 /// one decimal (padded with spaces, not zeroes), so stacked readouts align.
-fn format_ms(duration: Option<Duration>) -> String {
-    match duration {
-        Some(duration) => {
-            let ms = duration.as_secs_f32() * 1000.0;
-            format!("{ms:>5.1} MS")
-        }
+fn format_ms(milliseconds: Option<f32>) -> String {
+    match milliseconds {
+        Some(ms) => format!("{ms:>5.1} MS"),
         None => "   -- MS".into(),
     }
+}
+
+/// Seconds multiplied by 1000 into single-precision milliseconds.
+fn duration_ms(duration: Duration) -> f32 {
+    duration.as_secs_f32() * 1000.0
 }
 
 fn scaled_bounds(left: f32, top: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
@@ -425,5 +466,129 @@ mod tests {
         overlay.record_frame(Duration::from_millis(10));
         overlay.set_mode(DebugFrameOverlayMode::Minimal);
         assert_eq!(overlay.lines(), vec![" 10.0 MS".to_string()]);
+    }
+
+    fn record_millis(overlay: &mut DebugFrameOverlay, milliseconds: impl IntoIterator<Item = u64>) {
+        for ms in milliseconds {
+            overlay.record_frame(Duration::from_millis(ms));
+        }
+    }
+
+    fn assert_close(actual: Option<f32>, expected: f32) {
+        let actual = actual.expect("value is present");
+        assert!(
+            (actual - expected).abs() < 1e-3,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn stats_select_floor_indexed_percentiles() {
+        let mut overlay = DebugFrameOverlay::new();
+        record_millis(&mut overlay, 1..=100);
+        let stats = overlay.stats();
+        assert_close(stats.current_ms, 100.0);
+        assert_close(stats.p90_ms, 90.0);
+        assert_close(stats.p99_ms, 99.0);
+        assert_close(stats.max_ms, 100.0);
+        assert_eq!(stats.frames, 100);
+        assert_eq!(stats.samples, 100);
+    }
+
+    #[test]
+    fn stats_current_is_latest_sample_not_maximum() {
+        let mut overlay = DebugFrameOverlay::new();
+        record_millis(&mut overlay, [50, 10]);
+        let stats = overlay.stats();
+        assert_close(stats.current_ms, 10.0);
+        assert_close(stats.max_ms, 50.0);
+    }
+
+    #[test]
+    fn history_keeps_latest_thousand_samples_and_counts_every_frame() {
+        let mut overlay = DebugFrameOverlay::new();
+        record_millis(&mut overlay, 1..=1001);
+        let stats = overlay.stats();
+        assert_eq!(stats.samples, 1000);
+        assert_eq!(stats.frames, 1001);
+        // The oldest sample (1 ms) was evicted, so the smallest retained is 2 ms
+        // and the newest (1001 ms) is still present.
+        assert_close(stats.current_ms, 1001.0);
+        assert_close(stats.max_ms, 1001.0);
+        let retained: Vec<Duration> = overlay.draw_durations.iter().copied().collect();
+        assert_eq!(retained.first(), Some(&Duration::from_millis(2)));
+        assert_eq!(retained.last(), Some(&Duration::from_millis(1001)));
+        // Index floor(999 * 90 / 100) = 899 of the sorted 2..=1001 range.
+        assert_close(stats.p90_ms, 901.0);
+        assert_close(stats.p99_ms, 991.0);
+    }
+
+    #[test]
+    fn empty_stats_have_no_timings() {
+        let stats = DebugFrameOverlay::new().stats();
+        assert_eq!(stats.current_ms, None);
+        assert_eq!(stats.p90_ms, None);
+        assert_eq!(stats.p99_ms, None);
+        assert_eq!(stats.max_ms, None);
+        assert_eq!(stats.frames, 0);
+        assert_eq!(stats.samples, 0);
+    }
+
+    #[test]
+    fn single_sample_stats_all_equal_the_sample() {
+        let mut overlay = DebugFrameOverlay::new();
+        record_millis(&mut overlay, [7]);
+        let stats = overlay.stats();
+        for value in [stats.current_ms, stats.p90_ms, stats.p99_ms, stats.max_ms] {
+            assert_close(value, 7.0);
+        }
+        assert_eq!(stats.frames, 1);
+        assert_eq!(stats.samples, 1);
+    }
+
+    /// The overlay text is formatted from the same snapshot the programmatic
+    /// API returns, and polling the snapshot changes nothing.
+    #[test]
+    fn overlay_text_matches_snapshot_and_polling_is_pure() {
+        let mut overlay = DebugFrameOverlay::new();
+        overlay.set_mode(DebugFrameOverlayMode::Full);
+        record_millis(&mut overlay, (1..=100).map(|ms| ms * 3 / 2 + 1));
+
+        let before = overlay.stats();
+        let lines = overlay.lines();
+        let expected = |value: Option<f32>| format!("{:>5.1} MS", value.unwrap());
+        assert_eq!(lines[0], format!("CUR {}", expected(before.current_ms)));
+        assert_eq!(lines[1], format!("1%  {}", expected(before.p99_ms)));
+        assert_eq!(lines[2], format!("10% {}", expected(before.p90_ms)));
+        assert_eq!(lines[3], format!("MAX {}", expected(before.max_ms)));
+        assert_eq!(lines[4], format!("FRAMES {:>5}", before.frames));
+
+        for _ in 0..5 {
+            assert_eq!(overlay.stats(), before);
+        }
+        assert_eq!(overlay.mode(), DebugFrameOverlayMode::Full);
+        assert_eq!(overlay.lines(), lines);
+
+        overlay.total_frame_count = 100_000;
+        assert_eq!(overlay.lines()[4], "FRAMES  LOTS");
+        assert_eq!(overlay.stats().frames, 100_000);
+        overlay.total_frame_count = 123_456_789;
+        assert_eq!(overlay.stats().frames, 123_456_789);
+    }
+
+    #[test]
+    fn reset_clears_samples_in_stats_and_keeps_frames() {
+        let mut overlay = DebugFrameOverlay::new();
+        record_millis(&mut overlay, [5, 6, 7]);
+        overlay.reset_stats();
+        let stats = overlay.stats();
+        assert_eq!(stats.samples, 0);
+        assert_eq!(stats.frames, 3);
+        assert_eq!(stats.current_ms, None);
+        assert_eq!(stats.max_ms, None);
+        record_millis(&mut overlay, [9]);
+        let stats = overlay.stats();
+        assert_eq!(stats.samples, 1);
+        assert_eq!(stats.frames, 4);
     }
 }

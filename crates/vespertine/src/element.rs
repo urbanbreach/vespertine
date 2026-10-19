@@ -359,10 +359,9 @@ impl<E: Element> Drawable<E> {
     fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
         match mem::take(&mut self.phase) {
             ElementDrawPhase::Start => {
-                let global_id = self
-                    .element
-                    .id()
-                    .map(|element_id| prepare_element_id(element_id, window));
+                let element_id = self.element.id();
+                window.layout_enter_element(element_id.as_ref());
+                let global_id = element_id.map(|element_id| prepare_element_id(element_id, window));
 
                 let inspector_id;
                 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -390,6 +389,7 @@ impl<E: Element> Drawable<E> {
                 if global_id.is_some() {
                     window.element_id_stack.pop();
                 }
+                window.layout_exit_element();
 
                 self.phase = ElementDrawPhase::RequestLayout {
                     layout_id,
@@ -564,7 +564,10 @@ impl<E: Element> Drawable<E> {
         cx: &mut App,
     ) -> Size<Pixels> {
         if matches!(&self.phase, ElementDrawPhase::Start) {
+            // A layout root created during prepaint: its nodes live in their own key space.
+            window.layout_begin_root();
             self.request_layout(window, cx);
+            window.layout_end_root();
         }
 
         let layout_id = match mem::take(&mut self.phase) {

@@ -1255,9 +1255,26 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;
-    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+    /// The function that arms delivery of the next frame request for this
+    /// window, or `None` for platforms whose frame source runs continuously
+    /// (the default, which preserves legacy behavior).
+    ///
+    /// The returned callable is cheap and idempotent, may be invoked from any
+    /// invalidation site during application callbacks, and never runs
+    /// application code or accesses window state synchronously. If the
+    /// platform window's own state is locked or borrowed, the restart is
+    /// deferred (for example to the next event-loop turn) instead of failing.
+    /// Arming while a delivery is pending is a no-op, and arming a destroyed
+    /// window is ignored. Frames resulting from arming are delivered through
+    /// [`Self::on_request_frame`].
+    fn frame_requester(&self) -> Option<Rc<dyn Fn()>> {
         None
     }
+    /// Stops idle frame requests until the callable returned by
+    /// [`Self::frame_requester`] is invoked again. Called after a completed
+    /// frame when the window has no outstanding demand. The default does
+    /// nothing, which keeps a continuously running frame source running.
+    fn pause_frames(&self) {}
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
@@ -1278,7 +1295,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
-    fn schedule_frame(&self) {}
     /// Called when the window parks: its demand-gated frame scheduling stopped requesting
     /// frames after the last rendered one. Renderers release transient GPU resources that a
     /// parked window does not need (path intermediates after a path-free frame, backdrop-blur
@@ -2140,8 +2156,11 @@ impl PlatformInputHandler {
     pub fn selected_text_range(&mut self, ignore_disabled_input: bool) -> Option<UTF16Selection> {
         self.cx
             .update(|window, cx| {
-                self.handler
-                    .selected_text_range(ignore_disabled_input, window, cx)
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| {
+                    self.handler
+                        .selected_text_range(ignore_disabled_input, window, cx)
+                })
             })
             .ok()
             .flatten()
@@ -2150,7 +2169,10 @@ impl PlatformInputHandler {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn marked_text_range(&mut self) -> Option<Range<usize>> {
         self.cx
-            .update(|window, cx| self.handler.marked_text_range(window, cx))
+            .update(|window, cx| {
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| self.handler.marked_text_range(window, cx))
+            })
             .ok()
             .flatten()
     }
@@ -2166,8 +2188,11 @@ impl PlatformInputHandler {
     ) -> Option<String> {
         self.cx
             .update(|window, cx| {
-                self.handler
-                    .text_for_range(range_utf16, adjusted, window, cx)
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| {
+                    self.handler
+                        .text_for_range(range_utf16, adjusted, window, cx)
+                })
             })
             .ok()
             .flatten()
@@ -2216,7 +2241,10 @@ impl PlatformInputHandler {
 
     pub fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
         self.cx
-            .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
+            .update(|window, cx| {
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| self.handler.bounds_for_range(range_utf16, window, cx))
+            })
             .ok()
             .flatten()
     }
@@ -2224,8 +2252,11 @@ impl PlatformInputHandler {
     pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
         self.cx
             .update(|window, cx| {
-                self.handler
-                    .selection_bounds_for_range(range_utf16, window, cx)
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| {
+                    self.handler
+                        .selection_bounds_for_range(range_utf16, window, cx)
+                })
             })
             .unwrap_or_default()
     }
@@ -2275,10 +2306,13 @@ impl PlatformInputHandler {
     }
 
     pub fn selected_bounds(&mut self, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
-        let marked_range = self.handler.marked_text_range(window, cx);
-        let selection = self.handler.selected_text_range(true, window, cx)?;
-        Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
-            self.handler.bounds_for_range(range, window, cx)
+        let tracker = cx.entities.tracker.clone();
+        tracker.with_query(|| {
+            let marked_range = self.handler.marked_text_range(window, cx);
+            let selection = self.handler.selected_text_range(true, window, cx)?;
+            Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
+                self.handler.bounds_for_range(range, window, cx)
+            })
         })
     }
 
@@ -2293,7 +2327,10 @@ impl PlatformInputHandler {
     #[allow(unused)]
     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
         self.cx
-            .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
+            .update(|window, cx| {
+                let tracker = cx.entities.tracker.clone();
+                tracker.with_query(|| self.handler.character_index_for_point(point, window, cx))
+            })
             .ok()
             .flatten()
     }

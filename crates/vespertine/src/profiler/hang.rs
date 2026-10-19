@@ -1717,13 +1717,15 @@ mod tests {
             ForegroundEvent::View(timing) if timing.phase == ViewPhase::Paint
         )));
 
+        // The window draws more than once (the opening draw constructs the views; later clean
+        // draws replay retained output, PRF-001), so inspect the draw that built the views.
         let draw = events
             .iter()
-            .rev()
-            .find_map(|event| match event {
+            .filter_map(|event| match event {
                 ForegroundEvent::Draw(timing) => Some(*timing),
                 _ => None,
             })
+            .max_by_key(|timing| timing.phases.request_layout)
             .expect("a draw");
         assert!(draw.phases.request_layout >= SLOW_PARENT_RENDER + SLOW_CHILD_RENDER);
         assert!(

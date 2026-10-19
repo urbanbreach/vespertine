@@ -768,6 +768,102 @@ enum FrameLoop {
     Scheduled,
     RetryScheduled,
     Parked,
+    /// The window is gone: arming requests are ignored.
+    Destroyed,
+}
+
+impl FrameLoop {
+    /// The state after the window asked for a frame, and whether the event
+    /// loop must be woken to deliver it.
+    fn armed(self) -> (Self, bool) {
+        match self {
+            Self::Parked => (Self::Scheduled, true),
+            Self::Ticking => (Self::RescheduleRequested, false),
+            // A wake is already armed: a ping or retry timer is in flight, or a
+            // presented buffer guarantees a compositor frame callback. Before
+            // the first configure the initial frame is delivered by the
+            // configure itself, and a destroyed window takes no more requests.
+            other => (other, false),
+        }
+    }
+
+    /// The state after the window paused at the end of a tick: a re-arm
+    /// requested while the tick ran was served by that tick.
+    fn paused(self) -> Self {
+        match self {
+            Self::RescheduleRequested => Self::Ticking,
+            other => other,
+        }
+    }
+}
+
+fn arm_frame_loop(
+    frame_loop: &Cell<FrameLoop>,
+    scheduled_frame_at: &Cell<Option<Instant>>,
+    frame_ping: &Ping,
+) {
+    let (next, wake) = frame_loop.get().armed();
+    frame_loop.set(next);
+    if wake {
+        scheduled_frame_at.set(PlatformFrameSignal::capture(Instant::now));
+        frame_ping.ping();
+    }
+}
+
+#[cfg(test)]
+mod frame_loop_tests {
+    use super::FrameLoop;
+
+    /// ANM-001 A6: a parked Wayland window holds no outstanding frame request
+    /// and wakes with exactly one ping per request.
+    #[test]
+    fn parked_window_wakes_once_per_request() {
+        let (state, wake) = FrameLoop::Parked.armed();
+        assert_eq!((state, wake), (FrameLoop::Scheduled, true));
+        // Further arming while the wake is pending is a no-op.
+        assert_eq!(state.armed(), (FrameLoop::Scheduled, false));
+    }
+
+    #[test]
+    fn arming_never_disturbs_an_outstanding_delivery() {
+        for state in [
+            FrameLoop::PresentationFailed,
+            FrameLoop::AwaitingCallback,
+            FrameLoop::Scheduled,
+            FrameLoop::RetryScheduled,
+            FrameLoop::Unconfigured,
+        ] {
+            assert_eq!(state.armed(), (state, false));
+        }
+    }
+
+    #[test]
+    fn arming_during_a_tick_requests_one_follow_up_that_pausing_cancels() {
+        let (state, wake) = FrameLoop::Ticking.armed();
+        assert_eq!((state, wake), (FrameLoop::RescheduleRequested, false));
+        assert_eq!(state.armed(), (FrameLoop::RescheduleRequested, false));
+        assert_eq!(state.paused(), FrameLoop::Ticking);
+    }
+
+    #[test]
+    fn pausing_leaves_other_states_alone() {
+        for state in [
+            FrameLoop::Ticking,
+            FrameLoop::Scheduled,
+            FrameLoop::RetryScheduled,
+            FrameLoop::AwaitingCallback,
+            FrameLoop::PresentationFailed,
+            FrameLoop::Parked,
+        ] {
+            assert_eq!(state.paused(), state);
+        }
+    }
+
+    #[test]
+    fn destroyed_window_ignores_arming() {
+        assert_eq!(FrameLoop::Destroyed.armed(), (FrameLoop::Destroyed, false));
+        assert_eq!(FrameLoop::Destroyed.paused(), FrameLoop::Destroyed);
+    }
 }
 
 pub(crate) struct WaylandWindow(pub WaylandWindowStatePtr);
@@ -780,7 +876,7 @@ pub enum ImeInput {
 
 impl Drop for WaylandWindow {
     fn drop(&mut self) {
-        self.0.frame_loop.set(FrameLoop::Parked);
+        self.0.frame_loop.set(FrameLoop::Destroyed);
 
         let mut state = self.0.state.borrow_mut();
         let surface_id = state.surface.id();
@@ -1049,20 +1145,7 @@ impl WaylandWindowStatePtr {
     }
 
     pub fn schedule_frame(&self) {
-        match self.frame_loop.get() {
-            FrameLoop::Parked => {
-                self.frame_loop.set(FrameLoop::Scheduled);
-                self.scheduled_frame_at
-                    .set(PlatformFrameSignal::capture(Instant::now));
-                self.frame_ping.ping();
-            }
-            FrameLoop::Ticking => {
-                self.frame_loop.set(FrameLoop::RescheduleRequested);
-            }
-            // A wake is already armed: a ping or retry timer is in flight, or a
-            // presented buffer guarantees a compositor frame callback.
-            _ => {}
-        }
+        arm_frame_loop(&self.frame_loop, &self.scheduled_frame_at, &self.frame_ping);
     }
 
     fn request_redraw(&self) {
@@ -2067,8 +2150,24 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
-    fn schedule_frame(&self) {
-        self.0.schedule_frame();
+    fn frame_requester(&self) -> Option<Rc<dyn Fn()>> {
+        // Arming only touches the frame-loop cells and the wake-up ping, never
+        // the window state, so it is valid while that state is borrowed. After
+        // the window is destroyed the loop is `Destroyed` and requests are
+        // ignored.
+        let frame_loop = self.0.frame_loop.clone();
+        let scheduled_frame_at = self.0.scheduled_frame_at.clone();
+        let frame_ping = self.0.frame_ping.clone();
+        Some(Rc::new(move || {
+            arm_frame_loop(&frame_loop, &scheduled_frame_at, &frame_ping)
+        }))
+    }
+
+    fn pause_frames(&self) {
+        // The loop parks by itself once a tick completes without demand; a
+        // parked window holds no outstanding frame-callback request. Pausing
+        // only discards a re-arm that the finished tick already served.
+        self.0.frame_loop.set(self.0.frame_loop.get().paused());
     }
 
     fn trim_renderer_resources(&self) {

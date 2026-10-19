@@ -94,6 +94,11 @@ source pin even when resolving the Linux build.
   browser threading/tracing features, and WebGL-specific instance transport.
 - Included only required font fixtures, preserving their original licenses.
 - Preserved macOS/Windows tests, `windows-manifest`, and runtime Metal shaders.
+- Vendored taffy 0.13.0 under `third_party/taffy` (MIT; `[patch.crates-io]`), changed
+  only in `src/tree/cache.rs`: each node retains sixteen measurement results (at least
+  nine, LAY-001 R4) found by key and replaced with a second-chance policy, instead of
+  one result per constraint kind. Layout results are unchanged; taffy 0.14 was not
+  adopted because it changes flex/grid/block results.
 - Removed features `vespertine_platform/multithreaded`,
   `vespertine_scheduler/wasm-threads`, and `vespertine_ztracing/web`.
 - Removed only these browser-transport tests:

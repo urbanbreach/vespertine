@@ -211,6 +211,12 @@ impl A11y {
         self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
     }
 
+    /// Whether accessibility is (still) active at this moment, as the next
+    /// [`Self::sync_active_flag`] would find it.
+    pub(crate) fn activation_pending(&self) -> bool {
+        self.is_enabled() && self.active_flag.load(Ordering::SeqCst)
+    }
+
     /// Simulates the platform adapter activating or deactivating accessibility,
     /// without a connected assistive client. Does nothing when accessibility is
     /// force-disabled.
@@ -226,6 +232,13 @@ impl A11y {
 
     pub(crate) fn is_active(&self) -> bool {
         self.active_this_frame
+    }
+
+    /// Simulates an assistive technology connecting or disconnecting. Takes effect on the
+    /// next frame, like a real activation.
+    #[cfg(test)]
+    pub(crate) fn set_active_for_test(&self, active: bool) {
+        self.active_flag.store(active, Ordering::SeqCst);
     }
 
     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {

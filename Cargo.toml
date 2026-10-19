@@ -110,6 +110,7 @@ syntect = { version = "5.3.0", default-features = false, features = ["parsing", 
 tempfile = "3.20.0"
 minisign-verify = "0.2.5"
 tendril = "0.5"
+thin-vec = "0.2.14"
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
 thiserror = "2.0.12"
 tokio = "1"
@@ -710,6 +711,9 @@ rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
 [patch.crates-io.async-task]
 git = "https://github.com/zed-industries/async-task.git"
 rev = "015845a19fc31752c02367567d3b8900a406f9da"
+
+[patch.crates-io.taffy]
+path = "third_party/taffy"
 
 [patch.crates-io.windows-capture]
 git = "https://github.com/zed-industries/windows-capture.git"

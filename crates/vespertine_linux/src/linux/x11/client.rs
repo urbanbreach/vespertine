@@ -40,6 +40,7 @@ use xim::{AttributeName, Client, InputStyle, x11rb::X11rbClient};
 use xkbc::x11::ffi::{XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION};
 use xkbcommon::xkb::{self as xkbc, STATE_LAYOUT_EFFECTIVE};
 
+use super::refresh::{Defer, RefreshTimer, TimerAction, arm_or_defer};
 use super::{
     ButtonOrScroll, ScrollDirection, X11Display, X11WindowStatePtr, XcbAtoms, XimCallbackEvent,
     XimHandler, button_or_scroll_from_event_detail, check_reply,
@@ -81,7 +82,7 @@ const VESPERTINE_X11_SCALE_FACTOR_ENV: &str = "VESPERTINE_X11_SCALE_FACTOR";
 
 pub(crate) struct WindowRef {
     window: X11WindowStatePtr,
-    refresh_state: Option<RefreshState>,
+    refresh: Option<RefreshTimer<RegistrationToken>>,
     last_visibility: Visibility,
     is_mapped: bool,
 }
@@ -109,16 +110,6 @@ impl Deref for WindowRef {
     fn deref(&self) -> &Self::Target {
         &self.window
     }
-}
-
-enum RefreshState {
-    Hidden {
-        refresh_rate: Duration,
-    },
-    PeriodicRefresh {
-        refresh_rate: Duration,
-        event_loop_token: RegistrationToken,
-    },
 }
 
 #[derive(Debug)]
@@ -249,16 +240,46 @@ impl X11ClientStatePtr {
         self.0.upgrade().map(X11Client)
     }
 
+    /// The function that arms the refresh timer of `x_window` (ANM-001). It
+    /// never runs application code. If the client state is borrowed when it is
+    /// invoked, the restart is deferred to the next event-loop turn; if the
+    /// window was destroyed meanwhile, the restart is ignored.
+    pub(crate) fn frame_requester(&self, x_window: u32) -> Option<Rc<dyn Fn()>> {
+        let loop_handle = self.get_client()?.0.borrow().loop_handle.clone();
+        let defer: Defer = Rc::new(move |job| {
+            loop_handle.insert_idle(move |()| job());
+        });
+        let target = self.0.clone();
+        let arm: Rc<dyn Fn(&mut X11ClientState)> =
+            Rc::new(move |state| state.arm_refresh_loop(x_window));
+        Some(Rc::new(move || arm_or_defer(&target, &defer, &arm)))
+    }
+
+    /// Disarms the refresh timer of `x_window` after a frame completed without
+    /// demand. When the client state is borrowed the window simply stays armed
+    /// and parks after its next clean frame, since deferring a pause could park
+    /// a window that has meanwhile been invalidated.
+    pub(crate) fn pause_frames(&self, x_window: u32) {
+        let Some(client) = self.get_client() else {
+            return;
+        };
+        match client.0.try_borrow_mut() {
+            Ok(mut state) => state.pause_refresh_loop(x_window),
+            Err(_) => log::debug!("x11: client state busy, window {x_window} stays armed"),
+        }
+    }
+
     pub fn drop_window(&self, x_window: u32) {
         let Some(client) = self.get_client() else {
             return;
         };
         let mut state = client.0.borrow_mut();
 
-        if let Some(window_ref) = state.windows.remove(&x_window)
-            && let Some(RefreshState::PeriodicRefresh {
-                event_loop_token, ..
-            }) = window_ref.refresh_state
+        if let Some(mut window_ref) = state.windows.remove(&x_window)
+            && let Some(event_loop_token) = window_ref
+                .refresh
+                .as_mut()
+                .and_then(RefreshTimer::take_running)
         {
             state.loop_handle.remove(event_loop_token);
         }
@@ -343,12 +364,7 @@ impl Drop for X11Connection {
         let refresh_tokens = state
             .windows
             .values_mut()
-            .filter_map(|window| match window.refresh_state.take() {
-                Some(RefreshState::PeriodicRefresh {
-                    event_loop_token, ..
-                }) => Some(event_loop_token),
-                _ => None,
-            })
+            .filter_map(|window| window.refresh.as_mut()?.take_running())
             .collect::<Vec<_>>();
         for token in refresh_tokens {
             state.loop_handle.remove(token);
@@ -1743,7 +1759,7 @@ impl X11Client {
 
         let window_ref = WindowRef {
             window: window.0.clone(),
-            refresh_state: None,
+            refresh: None,
             last_visibility: Visibility::UNOBSCURED,
             is_mapped: false,
         };
@@ -1965,92 +1981,111 @@ impl X11ClientState {
         self.xim_handler = Some(xim_handler);
     }
 
+    /// Applies a mapped/obscured change to the window's refresh timer: a shown
+    /// window needs a frame, so its timer starts; a hidden window's stops.
     fn update_refresh_loop(&mut self, x_window: xproto::Window) {
-        let Some(window_ref) = self.windows.get_mut(&x_window) else {
+        let Some(window_ref) = self.windows.get(&x_window) else {
             return;
         };
         let is_visible = window_ref.visibility().is_visible();
-        match (is_visible, window_ref.refresh_state.take()) {
-            (false, refresh_state @ Some(RefreshState::Hidden { .. }))
-            | (false, refresh_state @ None)
-            | (true, refresh_state @ Some(RefreshState::PeriodicRefresh { .. })) => {
-                window_ref.refresh_state = refresh_state;
+        if window_ref.refresh.is_none() {
+            if !is_visible {
+                return;
             }
-            (
-                false,
-                Some(RefreshState::PeriodicRefresh {
-                    refresh_rate,
-                    event_loop_token,
-                }),
-            ) => {
-                self.loop_handle.remove(event_loop_token);
-                window_ref.refresh_state = Some(RefreshState::Hidden { refresh_rate });
-            }
-            (true, Some(RefreshState::Hidden { refresh_rate })) => {
-                let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
-                let Some(window_ref) = self.windows.get_mut(&x_window) else {
-                    return;
-                };
-                window_ref.refresh_state = Some(RefreshState::PeriodicRefresh {
-                    refresh_rate,
-                    event_loop_token,
-                });
-            }
-            (true, None) => {
-                let Some(screen_resources) = get_reply(
-                    || "Failed to get screen resources",
-                    self.xcb_connection
-                        .randr_get_screen_resources_current(x_window),
-                )
-                .log_err() else {
-                    return;
-                };
+            let Some(screen_resources) = get_reply(
+                || "Failed to get screen resources",
+                self.xcb_connection
+                    .randr_get_screen_resources_current(x_window),
+            )
+            .log_err() else {
+                return;
+            };
 
-                // Ideally this would be re-queried when the window changes screens, but there
-                // doesn't seem to be an efficient / straightforward way to do this. Should also be
-                // updated when screen configurations change.
-                let mode_info = screen_resources.crtcs.iter().find_map(|crtc| {
-                    let crtc_info = self
-                        .xcb_connection
-                        .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
-                        .ok()?
-                        .reply()
-                        .ok()?;
+            // Ideally this would be re-queried when the window changes screens, but there
+            // doesn't seem to be an efficient / straightforward way to do this. Should also be
+            // updated when screen configurations change.
+            let mode_info = screen_resources.crtcs.iter().find_map(|crtc| {
+                let crtc_info = self
+                    .xcb_connection
+                    .randr_get_crtc_info(*crtc, x11rb::CURRENT_TIME)
+                    .ok()?
+                    .reply()
+                    .ok()?;
 
-                    screen_resources
-                        .modes
-                        .iter()
-                        .find(|m| m.id == crtc_info.mode)
-                });
-                let refresh_rate = match mode_info {
-                    Some(mode_info) => mode_refresh_rate(mode_info),
-                    None => {
-                        log::error!(
-                            "Failed to get screen mode info from xrandr, \
-                            defaulting to 60hz refresh rate."
-                        );
-                        Duration::from_micros(1_000_000 / 60)
+                screen_resources
+                    .modes
+                    .iter()
+                    .find(|m| m.id == crtc_info.mode)
+            });
+            let refresh_rate = match mode_info {
+                Some(mode_info) => mode_refresh_rate(mode_info),
+                None => {
+                    log::error!(
+                        "Failed to get screen mode info from xrandr, \
+                        defaulting to 60hz refresh rate."
+                    );
+                    Duration::from_micros(1_000_000 / 60)
+                }
+            };
+            let Some(window_ref) = self.windows.get_mut(&x_window) else {
+                return;
+            };
+            window_ref.refresh = Some(RefreshTimer::hidden(refresh_rate));
+        }
+        self.apply_refresh_timer(x_window, |timer| timer.set_visible(is_visible));
+    }
+
+    /// Arms the window's refresh timer after demand arose. Ignored for windows
+    /// that were destroyed or have not been shown yet (showing starts the
+    /// timer). A source that failed to start is retried here.
+    fn arm_refresh_loop(&mut self, x_window: xproto::Window) {
+        self.apply_refresh_timer(x_window, RefreshTimer::arm);
+    }
+
+    /// Disarms the window's refresh timer after a frame completed without
+    /// demand.
+    fn pause_refresh_loop(&mut self, x_window: xproto::Window) {
+        self.apply_refresh_timer(x_window, RefreshTimer::pause);
+    }
+
+    fn apply_refresh_timer(
+        &mut self,
+        x_window: xproto::Window,
+        transition: impl FnOnce(&mut RefreshTimer<RegistrationToken>) -> TimerAction<RegistrationToken>,
+    ) {
+        let Some(timer) = self
+            .windows
+            .get_mut(&x_window)
+            .and_then(|window_ref| window_ref.refresh.as_mut())
+        else {
+            return;
+        };
+        match transition(timer) {
+            TimerAction::None => {}
+            TimerAction::Stop(token) => self.loop_handle.remove(token),
+            TimerAction::Start(refresh_rate) => {
+                match self.start_refresh_loop(x_window, refresh_rate) {
+                    Ok(token) => {
+                        if let Some(timer) = self
+                            .windows
+                            .get_mut(&x_window)
+                            .and_then(|window_ref| window_ref.refresh.as_mut())
+                        {
+                            timer.started(token);
+                        }
                     }
-                };
-
-                let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
-                let Some(window_ref) = self.windows.get_mut(&x_window) else {
-                    return;
-                };
-                window_ref.refresh_state = Some(RefreshState::PeriodicRefresh {
-                    refresh_rate,
-                    event_loop_token,
-                });
+                    // Left unrecorded, so the next invalidation retries the start.
+                    Err(err) => log::error!("Failed to start the window refresh timer: {err}"),
+                }
             }
         }
     }
 
-    #[must_use]
     fn start_refresh_loop(
         &self,
         x_window: xproto::Window,
         refresh_rate: Duration,
-    ) -> RegistrationToken {
+    ) -> Result<RegistrationToken, String> {
         self.loop_handle
             .insert_source(calloop::timer::Timer::immediate(), {
                 let this = self.this.clone();
@@ -2075,6 +2110,19 @@ impl X11ClientState {
                     };
                     client.process_x11_events(&xcb_connection).log_err();
 
+                    // The frame may have parked the window (or the window may
+                    // be gone): its pause already removed this source.
+                    let still_running = client
+                        .0
+                        .borrow()
+                        .windows
+                        .get(&x_window)
+                        .and_then(|window_ref| window_ref.refresh.as_ref())
+                        .is_some_and(RefreshTimer::is_running);
+                    if !still_running {
+                        return calloop::timer::TimeoutAction::Drop;
+                    }
+
                     // Take into account that some frames have been skipped
                     let now = Instant::now();
                     while instant < now {
@@ -2083,7 +2131,7 @@ impl X11ClientState {
                     calloop::timer::TimeoutAction::ToInstant(instant)
                 }
             })
-            .expect("Failed to initialize window refresh timer")
+            .map_err(|err| err.to_string())
     }
 
     fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {

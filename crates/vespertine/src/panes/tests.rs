@@ -357,8 +357,14 @@ impl Harness {
         harness
     }
 
+    /// Delivers the next-frame callbacks the platform frame loop would deliver (animating
+    /// views notify themselves from them, and an unchanged view is replayed, PRF-001) and
+    /// draws one frame.
     fn draw(&mut self) {
-        self.vcx.update(|window, cx| window.draw(cx).clear(cx));
+        self.vcx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx)
+        });
     }
 
     fn advance(&mut self, millis: u64) {
@@ -1132,6 +1138,9 @@ impl Harness {
 
     fn set_route(&mut self, route: Point<Pixels>) {
         self.surface(|s| s.route.set(route));
+        // The route is read by the view without notifying it; an unchanged view replays its
+        // retained output (PRF-001), so the next frame must construct it again.
+        self.vcx.update(|window, _| window.refresh());
     }
 }
 

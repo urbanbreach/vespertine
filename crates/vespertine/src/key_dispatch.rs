@@ -61,12 +61,24 @@ use std::{
     ops::Range,
     rc::Rc,
 };
+use thin_vec::ThinVec;
 use vespertine_collections::FxHashMap;
 
 /// ID of a node within `DispatchTree`. Note that these are **not** stable between frames, and so a
 /// `DispatchNodeId` should only be used with the `DispatchTree` that provided it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct DispatchNodeId(usize);
+
+impl DispatchNodeId {
+    /// The position of the node in its tree's node list.
+    pub(crate) fn index(self) -> usize {
+        self.0
+    }
+
+    pub(crate) fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+}
 
 pub(crate) struct DispatchTree {
     node_stack: Vec<DispatchNodeId>,
@@ -81,9 +93,9 @@ pub(crate) struct DispatchTree {
 
 #[derive(Default)]
 pub(crate) struct DispatchNode {
-    pub key_listeners: Vec<KeyListener>,
-    pub action_listeners: Vec<DispatchActionListener>,
-    pub modifiers_changed_listeners: Vec<ModifiersChangedListener>,
+    pub key_listeners: ThinVec<KeyListener>,
+    pub action_listeners: ThinVec<DispatchActionListener>,
+    pub modifiers_changed_listeners: ThinVec<ModifiersChangedListener>,
     pub context: Option<KeyContext>,
     pub focus_id: Option<FocusId>,
     view_id: Option<EntityId>,
@@ -91,8 +103,8 @@ pub(crate) struct DispatchNode {
 }
 
 pub(crate) struct ReusedSubtree {
-    old_range: Range<usize>,
-    new_range: Range<usize>,
+    pub(crate) old_range: Range<usize>,
+    pub(crate) new_range: Range<usize>,
     contains_focus: bool,
 }
 
@@ -105,6 +117,13 @@ impl ReusedSubtree {
             self.old_range
         );
         DispatchNodeId((node_id.0 - self.old_range.start) + self.new_range.start)
+    }
+
+    /// The new id of `node_id` when it was part of the reused range.
+    pub fn try_refresh_node_id(&self, node_id: DispatchNodeId) -> Option<DispatchNodeId> {
+        self.old_range
+            .contains(&node_id.0)
+            .then(|| DispatchNodeId((node_id.0 - self.old_range.start) + self.new_range.start))
     }
 
     pub fn contains_focus(&self) -> bool {
@@ -192,23 +211,7 @@ impl DispatchTree {
             }
         } else {
             debug_assert_eq!(self.node_stack.len(), 0);
-
-            let mut current_node_id = Some(node_id);
-            while let Some(node_id) = current_node_id {
-                let node = &self.nodes[node_id.0];
-                if let Some(context) = node.context.clone() {
-                    self.context_stack.push(context);
-                }
-                if let Some(view_id) = node.view_id {
-                    self.view_stack.push(view_id);
-                }
-                self.node_stack.push(node_id);
-                current_node_id = node.parent;
-            }
-
-            self.context_stack.reverse();
-            self.view_stack.reverse();
-            self.node_stack.reverse();
+            self.rebuild_stacks(Some(node_id));
         }
     }
 
@@ -243,62 +246,102 @@ impl DispatchTree {
         self.node_stack.pop();
     }
 
-    fn move_node(&mut self, source: &mut DispatchNode) {
-        self.push_node();
-        if let Some(context) = source.context.clone() {
-            self.set_key_context(context);
-        }
-        if let Some(focus_id) = source.focus_id {
-            self.set_focus_id(focus_id);
-        }
-        if let Some(view_id) = source.view_id {
-            self.set_view_id(view_id);
+    /// Rebuilds the node, context and view stacks from the path of open nodes that ends at
+    /// `open`. Each stack is the open path's contribution in root-to-leaf order.
+    fn rebuild_stacks(&mut self, open: Option<DispatchNodeId>) {
+        self.node_stack.clear();
+        self.context_stack.clear();
+        self.view_stack.clear();
+
+        let mut current_node_id = open;
+        while let Some(node_id) = current_node_id {
+            let node = &self.nodes[node_id.0];
+            if let Some(context) = node.context.clone() {
+                self.context_stack.push(context);
+            }
+            if let Some(view_id) = node.view_id {
+                self.view_stack.push(view_id);
+            }
+            self.node_stack.push(node_id);
+            current_node_id = node.parent;
         }
 
-        let target = self.active_node();
-        target.key_listeners = mem::take(&mut source.key_listeners);
-        target.action_listeners = mem::take(&mut source.action_listeners);
-        target.modifiers_changed_listeners = mem::take(&mut source.modifiers_changed_listeners);
+        self.context_stack.reverse();
+        self.view_stack.reverse();
+        self.node_stack.reverse();
     }
 
+    /// Copies the contiguous node range `old_range` of `source` to the end of this tree in
+    /// one structural pass.
+    ///
+    /// A copied node whose parent lies inside the range gets that parent remapped by the
+    /// range's index displacement; a node whose parent lies outside the range (a top-level
+    /// node of the range) is attached to the node that is currently open in this tree.
+    /// Listeners are moved out of `source`, preserving their order. The node, context and view
+    /// stacks are rebuilt once from the final open path.
     pub fn reuse_subtree(
         &mut self,
         old_range: Range<usize>,
         source: &mut Self,
         focus: Option<FocusId>,
     ) -> ReusedSubtree {
-        let new_range = self.nodes.len()..self.nodes.len() + old_range.len();
+        let open_node = self.node_stack.last().copied();
+        self.reuse_subtree_with(old_range, source, focus, &mut |_| open_node)
+    }
+
+    /// Like [`Self::reuse_subtree`], but a copied node whose source parent lies outside
+    /// `old_range` is attached to the node `outside_parent` returns for that source parent
+    /// (which must already exist in this tree; `None` leaves the copied node without a parent).
+    /// A copied node that has no source parent at all is attached to the node currently open
+    /// in this tree (or has no parent if none is open).
+    ///
+    /// The copied nodes are left closed: the node, context and view stacks end up exactly as
+    /// they were before the call.
+    pub fn reuse_subtree_with(
+        &mut self,
+        old_range: Range<usize>,
+        source: &mut Self,
+        focus: Option<FocusId>,
+        outside_parent: &mut dyn FnMut(DispatchNodeId) -> Option<DispatchNodeId>,
+    ) -> ReusedSubtree {
+        let new_start = self.nodes.len();
+        let new_range = new_start..new_start + old_range.len();
+        let attachment = self.node_stack.last().copied();
 
         let mut contains_focus = false;
-        let mut source_stack = vec![];
-        for (source_node_id, source_node) in source
-            .nodes
-            .iter_mut()
-            .enumerate()
-            .skip(old_range.start)
-            .take(old_range.len())
-        {
-            let source_node_id = DispatchNodeId(source_node_id);
-            while let Some(source_ancestor) = source_stack.last() {
-                if source_node.parent == Some(*source_ancestor) {
-                    break;
-                } else {
-                    source_stack.pop();
-                    self.pop_node();
+        self.nodes.reserve(old_range.len());
+        for (offset, source_node) in source.nodes[old_range.clone()].iter_mut().enumerate() {
+            let new_id = DispatchNodeId(new_start + offset);
+            let parent = match source_node.parent {
+                Some(parent) if old_range.contains(&parent.0) => {
+                    Some(DispatchNodeId(parent.0 - old_range.start + new_start))
                 }
+                Some(parent) => outside_parent(parent),
+                None => attachment,
+            };
+
+            if let Some(focus_id) = source_node.focus_id {
+                contains_focus |= Some(focus_id) == focus;
+                self.focusable_node_ids.insert(focus_id, new_id);
+            }
+            if let Some(view_id) = source_node.view_id {
+                self.view_node_ids.insert(view_id, new_id);
             }
 
-            source_stack.push(source_node_id);
-            if source_node.focus_id.is_some() && source_node.focus_id == focus {
-                contains_focus = true;
-            }
-            self.move_node(source_node);
+            self.nodes.push(DispatchNode {
+                key_listeners: mem::take(&mut source_node.key_listeners),
+                action_listeners: mem::take(&mut source_node.action_listeners),
+                modifiers_changed_listeners: mem::take(
+                    &mut source_node.modifiers_changed_listeners,
+                ),
+                context: source_node.context.clone(),
+                focus_id: source_node.focus_id,
+                view_id: source_node.view_id,
+                parent,
+            });
         }
 
-        while !source_stack.is_empty() {
-            source_stack.pop();
-            self.pop_node();
-        }
+        self.rebuild_stacks(attachment);
 
         ReusedSubtree {
             old_range,
@@ -615,6 +658,11 @@ impl DispatchTree {
 
     pub fn active_node_id(&self) -> Option<DispatchNodeId> {
         self.node_stack.last().copied()
+    }
+
+    /// The parent of `node_id` in this tree.
+    pub fn parent_of(&self, node_id: DispatchNodeId) -> Option<DispatchNodeId> {
+        self.nodes[node_id.0].parent
     }
 }
 
@@ -2212,5 +2260,655 @@ mod tests {
 
         cx.simulate_keystrokes("ctrl-b [");
         test.update(cx, |test, _| assert_eq!(test.text.borrow().as_str(), "["))
+    }
+
+    mod bulk_replay {
+        use super::super::{
+            DispatchNode, DispatchNodeId, KeyListener, ModifiersChangedListener, ReusedSubtree,
+        };
+        use super::{SecondaryTestAction, TestAction};
+        use crate::{
+            ActionRegistry, App, DispatchPhase, DispatchTree, EntityId, FocusId, KeyContext,
+            Keymap, Window,
+        };
+        use std::{
+            any::{Any, TypeId},
+            cell::RefCell,
+            ops::Range,
+            rc::Rc,
+        };
+
+        type ActionCallback = Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Window, &mut App)>;
+
+        /// Listener handles shared by every tree built by a test, so the trees can be compared
+        /// by listener identity.
+        #[derive(Clone)]
+        struct Listeners {
+            keys: [KeyListener; 3],
+            modifiers: ModifiersChangedListener,
+            actions: [ActionCallback; 2],
+        }
+
+        impl Listeners {
+            fn new() -> Self {
+                let key = || -> KeyListener {
+                    Rc::new(|_: &dyn Any, _: DispatchPhase, _: &mut Window, _: &mut App| {})
+                };
+                let action = || -> ActionCallback {
+                    Rc::new(|_: &dyn Any, _: DispatchPhase, _: &mut Window, _: &mut App| {})
+                };
+                Self {
+                    keys: [key(), key(), key()],
+                    modifiers: Rc::new(|_, _: &mut Window, _: &mut App| {}),
+                    actions: [action(), action()],
+                }
+            }
+        }
+
+        fn focus_id(n: u64) -> FocusId {
+            FocusId::from(slotmap::KeyData::from_ffi((1 << 32) | n))
+        }
+
+        fn context(source: &str) -> KeyContext {
+            KeyContext::parse(source).unwrap()
+        }
+
+        fn new_tree() -> DispatchTree {
+            DispatchTree::new(
+                Rc::new(RefCell::new(Keymap::new(Vec::new()))),
+                Rc::new(ActionRegistry::default()),
+            )
+        }
+
+        /// Source tree (indices): 0 Root > [1 A > [2 B, 3 C], 4 D > [5 E]], all closed.
+        fn source_tree(l: &Listeners) -> DispatchTree {
+            let mut tree = new_tree();
+            tree.push_node();
+            tree.set_key_context(context("Root"));
+            tree.on_action(TypeId::of::<TestAction>(), l.actions[0].clone());
+            tree.push_node();
+            tree.set_key_context(context("A"));
+            tree.set_focus_id(focus_id(1));
+            tree.on_key_event(l.keys[0].clone());
+            tree.on_key_event(l.keys[1].clone());
+            tree.push_node();
+            tree.set_focus_id(focus_id(2));
+            tree.set_view_id(EntityId::from(11));
+            tree.on_modifiers_changed(l.modifiers.clone());
+            tree.pop_node();
+            tree.push_node();
+            tree.set_key_context(context("C"));
+            tree.on_action(TypeId::of::<SecondaryTestAction>(), l.actions[1].clone());
+            tree.on_action(TypeId::of::<TestAction>(), l.actions[0].clone());
+            tree.pop_node();
+            tree.pop_node();
+            tree.push_node();
+            tree.set_key_context(context("D"));
+            tree.push_node();
+            tree.set_view_id(EntityId::from(12));
+            tree.on_key_event(l.keys[2].clone());
+            tree.pop_node();
+            tree.pop_node();
+            tree.pop_node();
+            tree
+        }
+
+        /// Destination tree with the path DestRoot(0) > Open(1) left open, and a closed
+        /// earlier sibling (2); or an empty tree with nothing open.
+        fn destination_tree(with_open_path: bool) -> DispatchTree {
+            let mut tree = new_tree();
+            if with_open_path {
+                tree.push_node();
+                tree.set_key_context(context("DestRoot"));
+                tree.push_node();
+                tree.set_key_context(context("Open"));
+                tree.set_view_id(EntityId::from(7));
+                tree.push_node();
+                tree.pop_node();
+            }
+            tree
+        }
+
+        /// The previous node-by-node algorithm, kept as the oracle for the bulk pass.
+        fn reuse_node_by_node(
+            destination: &mut DispatchTree,
+            old_range: Range<usize>,
+            source: &mut DispatchTree,
+            focus: Option<FocusId>,
+        ) -> (Range<usize>, bool) {
+            let new_range = destination.nodes.len()..destination.nodes.len() + old_range.len();
+            let mut contains_focus = false;
+            let mut source_stack: Vec<DispatchNodeId> = Vec::new();
+            for (source_node_id, source_node) in source
+                .nodes
+                .iter_mut()
+                .enumerate()
+                .skip(old_range.start)
+                .take(old_range.len())
+            {
+                let source_node_id = DispatchNodeId(source_node_id);
+                while let Some(source_ancestor) = source_stack.last() {
+                    if source_node.parent == Some(*source_ancestor) {
+                        break;
+                    }
+                    source_stack.pop();
+                    destination.pop_node();
+                }
+                source_stack.push(source_node_id);
+                if source_node.focus_id.is_some() && source_node.focus_id == focus {
+                    contains_focus = true;
+                }
+                destination.push_node();
+                if let Some(context) = source_node.context.clone() {
+                    destination.set_key_context(context);
+                }
+                if let Some(focus_id) = source_node.focus_id {
+                    destination.set_focus_id(focus_id);
+                }
+                if let Some(view_id) = source_node.view_id {
+                    destination.set_view_id(view_id);
+                }
+                let target = destination.active_node();
+                target.key_listeners = std::mem::take(&mut source_node.key_listeners);
+                target.action_listeners = std::mem::take(&mut source_node.action_listeners);
+                target.modifiers_changed_listeners =
+                    std::mem::take(&mut source_node.modifiers_changed_listeners);
+            }
+            while !source_stack.is_empty() {
+                source_stack.pop();
+                destination.pop_node();
+            }
+            (new_range, contains_focus)
+        }
+
+        fn identity<T: ?Sized>(listener: &Rc<T>) -> usize {
+            Rc::as_ptr(listener) as *const () as usize
+        }
+
+        #[derive(Debug, PartialEq)]
+        struct NodeSignature {
+            parent: Option<usize>,
+            context: Option<String>,
+            focus_id: Option<FocusId>,
+            view_id: Option<EntityId>,
+            key_listeners: Vec<usize>,
+            modifiers_listeners: Vec<usize>,
+            action_listeners: Vec<(TypeId, usize)>,
+        }
+
+        fn node_signature(node: &DispatchNode) -> NodeSignature {
+            NodeSignature {
+                parent: node.parent.map(|parent| parent.0),
+                context: node.context.as_ref().map(|context| format!("{context:?}")),
+                focus_id: node.focus_id,
+                view_id: node.view_id,
+                key_listeners: node.key_listeners.iter().map(identity).collect(),
+                modifiers_listeners: node
+                    .modifiers_changed_listeners
+                    .iter()
+                    .map(identity)
+                    .collect(),
+                action_listeners: node
+                    .action_listeners
+                    .iter()
+                    .map(|l| (l.action_type, identity(&l.listener)))
+                    .collect(),
+            }
+        }
+
+        #[derive(Debug, PartialEq)]
+        struct TreeSignature {
+            nodes: Vec<NodeSignature>,
+            node_stack: Vec<usize>,
+            context_stack: Vec<String>,
+            view_stack: Vec<EntityId>,
+            focusable: Vec<(FocusId, usize)>,
+            views: Vec<(EntityId, usize)>,
+            dispatch_paths: Vec<Vec<usize>>,
+            focus_paths: Vec<Vec<FocusId>>,
+        }
+
+        fn tree_signature(tree: &DispatchTree) -> TreeSignature {
+            let mut focusable: Vec<_> = tree
+                .focusable_node_ids
+                .iter()
+                .map(|(focus_id, node)| (*focus_id, node.0))
+                .collect();
+            focusable.sort_by_key(|(_, node)| *node);
+            let mut views: Vec<_> = tree
+                .view_node_ids
+                .iter()
+                .map(|(view_id, node)| (*view_id, node.0))
+                .collect();
+            views.sort_by_key(|(_, node)| *node);
+            TreeSignature {
+                nodes: tree.nodes.iter().map(node_signature).collect(),
+                node_stack: tree.node_stack.iter().map(|node| node.0).collect(),
+                context_stack: tree
+                    .context_stack
+                    .iter()
+                    .map(|context| format!("{context:?}"))
+                    .collect(),
+                view_stack: tree.view_stack.clone(),
+                dispatch_paths: (0..tree.len())
+                    .map(|ix| {
+                        tree.dispatch_path(DispatchNodeId(ix))
+                            .iter()
+                            .map(|node| node.0)
+                            .collect()
+                    })
+                    .collect(),
+                focus_paths: focusable
+                    .iter()
+                    .map(|(focus_id, _)| tree.focus_path(*focus_id).to_vec())
+                    .collect(),
+                focusable,
+                views,
+            }
+        }
+
+        #[test]
+        fn bulk_replay_matches_node_by_node_replay() {
+            let listeners = Listeners::new();
+            // (range, focused id, whether an ancestor path is open in the destination)
+            let cases: [(Range<usize>, Option<FocusId>, bool); 8] = [
+                // Whole subtree below the root, focus inside the range, open ancestor.
+                (1..6, Some(focus_id(2)), true),
+                (1..6, None, true),
+                // Range starting inside an open ancestor: B and C attach to the open node.
+                (2..4, Some(focus_id(2)), true),
+                (4..6, Some(focus_id(2)), true),
+                // The root itself is part of the range.
+                (0..6, Some(focus_id(1)), true),
+                // Nothing open in the destination.
+                (1..6, Some(focus_id(1)), false),
+                (0..6, None, false),
+                (3..4, Some(focus_id(1)), true),
+            ];
+            for (range, focus, with_open_path) in cases {
+                let mut bulk_source = source_tree(&listeners);
+                let mut bulk = destination_tree(with_open_path);
+                let reused = bulk.reuse_subtree(range.clone(), &mut bulk_source, focus);
+
+                let mut reference_source = source_tree(&listeners);
+                let mut reference = destination_tree(with_open_path);
+                let (reference_range, reference_contains_focus) =
+                    reuse_node_by_node(&mut reference, range.clone(), &mut reference_source, focus);
+
+                assert_eq!(
+                    tree_signature(&bulk),
+                    tree_signature(&reference),
+                    "range {range:?}, open path {with_open_path}"
+                );
+                assert_eq!(reused.new_range, reference_range);
+                assert_eq!(reused.contains_focus(), reference_contains_focus);
+                assert_eq!(
+                    tree_signature(&bulk_source),
+                    tree_signature(&reference_source),
+                    "source trees must be drained identically"
+                );
+            }
+        }
+
+        #[test]
+        fn range_nodes_attach_to_the_open_ancestor_and_keep_order() {
+            let listeners = Listeners::new();
+            let mut source = source_tree(&listeners);
+            let mut destination = destination_tree(true);
+            let reused: ReusedSubtree =
+                destination.reuse_subtree(1..6, &mut source, Some(focus_id(2)));
+
+            // Destination nodes 0..3 existed; the copy occupies 3..8 (A B C D E).
+            assert_eq!(reused.new_range, 3..8);
+            assert!(reused.contains_focus());
+            let parent = |ix: usize| destination.nodes[ix].parent.map(|parent| parent.0);
+            assert_eq!(
+                parent(3),
+                Some(1),
+                "A attaches to the open node, not the source root"
+            );
+            assert_eq!(parent(4), Some(3));
+            assert_eq!(parent(5), Some(3));
+            assert_eq!(
+                parent(6),
+                Some(1),
+                "D is a second top-level node of the range"
+            );
+            assert_eq!(parent(7), Some(6));
+
+            // The open path survives the copy and the stacks were rebuilt from it.
+            assert_eq!(
+                destination.node_stack,
+                [DispatchNodeId(0), DispatchNodeId(1)]
+            );
+            assert_eq!(
+                destination.context_stack,
+                [context("DestRoot"), context("Open")]
+            );
+            assert_eq!(destination.view_stack, [EntityId::from(7)]);
+
+            // Focus membership and view identity map to the new indices.
+            assert_eq!(
+                destination.focusable_node_id(focus_id(1)),
+                Some(DispatchNodeId(3))
+            );
+            assert_eq!(
+                destination.focusable_node_id(focus_id(2)),
+                Some(DispatchNodeId(4))
+            );
+            assert_eq!(
+                destination.view_node_ids.get(&EntityId::from(11)),
+                Some(&DispatchNodeId(4))
+            );
+            assert_eq!(
+                destination.view_node_ids.get(&EntityId::from(12)),
+                Some(&DispatchNodeId(7))
+            );
+            assert_eq!(
+                destination.focus_path(focus_id(2)).to_vec(),
+                [focus_id(1), focus_id(2)]
+            );
+            assert_eq!(
+                destination
+                    .dispatch_path(DispatchNodeId(4))
+                    .iter()
+                    .map(|node| node.0)
+                    .collect::<Vec<_>>(),
+                [0, 1, 3, 4]
+            );
+
+            // Listeners moved with their order intact, none duplicated, source drained.
+            let keys = |ix: usize| -> Vec<usize> {
+                destination.nodes[ix]
+                    .key_listeners
+                    .iter()
+                    .map(identity)
+                    .collect()
+            };
+            assert_eq!(
+                keys(3),
+                [identity(&listeners.keys[0]), identity(&listeners.keys[1])]
+            );
+            assert_eq!(keys(7), [identity(&listeners.keys[2])]);
+            assert_eq!(
+                destination.nodes[5]
+                    .action_listeners
+                    .iter()
+                    .map(|l| l.action_type)
+                    .collect::<Vec<_>>(),
+                [
+                    TypeId::of::<SecondaryTestAction>(),
+                    TypeId::of::<TestAction>()
+                ]
+            );
+            assert_eq!(destination.nodes[4].modifiers_changed_listeners.len(), 1);
+            // Nodes inside the range are drained; the root outside it keeps its listener.
+            assert!(source.nodes[1..6].iter().all(|node| {
+                node.key_listeners.is_empty()
+                    && node.action_listeners.is_empty()
+                    && node.modifiers_changed_listeners.is_empty()
+            }));
+            assert_eq!(source.nodes[0].action_listeners.len(), 1);
+        }
+
+        #[test]
+        fn repeated_reuse_over_many_frames_preserves_the_tree() {
+            let listeners = Listeners::new();
+            let mut previous = source_tree(&listeners);
+            let mut range = 1..6;
+            for frame in 0..150 {
+                let mut next = destination_tree(true);
+                let reused = next.reuse_subtree(range.clone(), &mut previous, Some(focus_id(2)));
+                assert!(reused.contains_focus(), "frame {frame}");
+                range = reused.new_range.clone();
+                previous = next;
+
+                let total = |count: fn(&DispatchNode) -> usize| -> usize {
+                    previous.nodes.iter().map(count).sum()
+                };
+                let counts = (
+                    total(|node| node.key_listeners.len()),
+                    total(|node| node.action_listeners.len()),
+                    total(|node| node.modifiers_changed_listeners.len()),
+                );
+                assert_eq!(
+                    counts,
+                    (3, 2, 1),
+                    "frame {frame}: no listener lost or duplicated"
+                );
+            }
+
+            // After 150 frames the copy still has the structure of the first copy.
+            let mut fresh_source = source_tree(&listeners);
+            let mut fresh = destination_tree(true);
+            fresh.reuse_subtree(1..6, &mut fresh_source, Some(focus_id(2)));
+            let last = tree_signature(&previous);
+            let first = tree_signature(&fresh);
+            assert_eq!(last.nodes, first.nodes);
+            assert_eq!(last.dispatch_paths, first.dispatch_paths);
+            assert_eq!(last.focus_paths, first.focus_paths);
+            assert_eq!(last.focusable, first.focusable);
+            assert_eq!(last.views, first.views);
+        }
+        #[test]
+        fn empty_listener_collections_stay_unallocated_through_replay() {
+            let mut source = new_tree();
+            source.push_node();
+            source.push_node();
+            source.set_key_context(context("Inert"));
+            source.pop_node();
+            source.pop_node();
+            let mut destination = destination_tree(true);
+            destination.reuse_subtree(0..2, &mut source, None);
+            for node in source.nodes.iter().chain(destination.nodes.iter()) {
+                assert_eq!(node.key_listeners.capacity(), 0);
+                assert_eq!(node.action_listeners.capacity(), 0);
+                assert_eq!(node.modifiers_changed_listeners.capacity(), 0);
+            }
+        }
+
+        #[test]
+        fn caller_resolves_parents_outside_the_range_and_open_path_is_untouched() {
+            let listeners = Listeners::new();
+            let mut source = source_tree(&listeners);
+            let mut destination = destination_tree(true);
+            let stacks_before = (
+                destination.node_stack.clone(),
+                destination.context_stack.clone(),
+                destination.view_stack.clone(),
+            );
+            let mut asked = Vec::new();
+            // B and C are children of A (source node 1); attach them to destination node 0.
+            let reused =
+                destination.reuse_subtree_with(2..4, &mut source, None, &mut |old_parent| {
+                    asked.push(old_parent.0);
+                    Some(DispatchNodeId(0))
+                });
+            assert_eq!(asked, [1, 1]);
+            assert_eq!(reused.old_range, 2..4);
+            assert_eq!(reused.new_range, 3..5);
+            assert_eq!(destination.nodes[3].parent, Some(DispatchNodeId(0)));
+            assert_eq!(destination.nodes[4].parent, Some(DispatchNodeId(0)));
+            assert_eq!(
+                (
+                    destination.node_stack.clone(),
+                    destination.context_stack.clone(),
+                    destination.view_stack.clone()
+                ),
+                stacks_before
+            );
+        }
+    }
+
+    mod cached_reuse {
+        use super::TestAction;
+        use crate::{
+            self as vespertine, AppContext as _, Context, Entity, FocusHandle, InteractiveElement,
+            IntoElement, Modifiers, MouseButton, ParentElement, Render, StatefulInteractiveElement,
+            StyleRefinement, Styled, TestAppContext, VisualTestContext, Window, div, point, px,
+        };
+        use std::{cell::Cell, rc::Rc};
+
+        #[derive(Default, Clone)]
+        struct Counters {
+            renders: Rc<Cell<usize>>,
+            actions: Rc<Cell<usize>>,
+            clicks: Rc<Cell<usize>>,
+            a11y_clicks: Rc<Cell<usize>>,
+        }
+
+        struct ReuseRoot {
+            panel: Entity<ReusePanel>,
+        }
+
+        impl Render for ReuseRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.panel
+                    .clone()
+                    .cached(StyleRefinement::default().size(px(100.)))
+            }
+        }
+
+        struct ReusePanel {
+            focus: FocusHandle,
+            counters: Counters,
+        }
+
+        impl Render for ReusePanel {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let Counters {
+                    renders,
+                    actions,
+                    clicks,
+                    a11y_clicks,
+                } = self.counters.clone();
+                renders.set(renders.get() + 1);
+                div()
+                    .id("reuse-panel")
+                    .size_full()
+                    .key_context("ReusePanel")
+                    .track_focus(&self.focus)
+                    .role(accesskit::Role::Button)
+                    .on_action(move |_: &TestAction, _, _| actions.set(actions.get() + 1))
+                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                        clicks.set(clicks.get() + 1)
+                    })
+                    .on_a11y_action(accesskit::Action::Click, move |_, _, _| {
+                        a11y_clicks.set(a11y_clicks.get() + 1)
+                    })
+                    .child(div().size(px(10.)))
+            }
+        }
+
+        fn draw(cx: &mut VisualTestContext) {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        /// Exercises the panel's key, action and mouse listeners once each, and its a11y
+        /// listener when accessibility is active, and checks that each fired exactly once.
+        fn exercise(cx: &mut VisualTestContext, counters: &Counters, with_a11y: bool) {
+            let before = (
+                counters.clicks.get(),
+                counters.actions.get(),
+                counters.a11y_clicks.get(),
+            );
+            cx.simulate_click(point(px(50.), px(50.)), Modifiers::none());
+            cx.dispatch_action(TestAction);
+            if with_a11y {
+                cx.update(|window, cx| {
+                    let mut targets = window.a11y.action_listeners.keys().copied();
+                    let target_node = targets
+                        .next()
+                        .expect("the panel's a11y listener is registered");
+                    assert!(targets.next().is_none());
+                    window.handle_a11y_action(
+                        accesskit::ActionRequest {
+                            action: accesskit::Action::Click,
+                            target_tree: accesskit::TreeId::ROOT,
+                            target_node,
+                            data: None,
+                        },
+                        cx,
+                    );
+                });
+            }
+            assert_eq!(
+                (
+                    counters.clicks.get(),
+                    counters.actions.get(),
+                    counters.a11y_clicks.get()
+                ),
+                (
+                    before.0 + 1,
+                    before.1 + 1,
+                    before.2 + usize::from(with_a11y)
+                )
+            );
+        }
+
+        #[vespertine::test]
+        fn listeners_stay_reachable_across_repeated_cached_reuse(cx: &mut TestAppContext) {
+            let counters = Counters::default();
+            let panel_counters = counters.clone();
+            let (_root, cx) = cx.add_window_view(|_, cx| ReuseRoot {
+                panel: cx.new(|cx| ReusePanel {
+                    focus: cx.focus_handle(),
+                    counters: panel_counters,
+                }),
+            });
+
+            draw(cx);
+            let warm_renders = counters.renders.get();
+            assert!(warm_renders >= 1);
+
+            let mut reused_frames = 0;
+            let mut interactions = 0;
+            for frame in 0..130 {
+                let renders_before = counters.renders.get();
+                draw(cx);
+                if counters.renders.get() == renders_before {
+                    reused_frames += 1;
+                }
+                if frame % 26 == 0 {
+                    exercise(cx, &counters, false);
+                    interactions += 1;
+                    // The next frame may rebuild after input; the loop keeps reusing after it.
+                    draw(cx);
+                }
+            }
+            assert!(
+                reused_frames >= 100,
+                "the panel's dispatch range was reused in {reused_frames} of 130 frames"
+            );
+            exercise(cx, &counters, false);
+            assert_eq!(counters.clicks.get(), interactions + 1);
+            assert_eq!(counters.actions.get(), interactions + 1);
+            assert_eq!(counters.a11y_clicks.get(), 0);
+        }
+
+        #[vespertine::test]
+        fn a11y_listener_stays_reachable_while_accessibility_is_active(cx: &mut TestAppContext) {
+            let counters = Counters::default();
+            let panel_counters = counters.clone();
+            let (_root, cx) = cx.add_window_view(|_, cx| ReuseRoot {
+                panel: cx.new(|cx| ReusePanel {
+                    focus: cx.focus_handle(),
+                    counters: panel_counters,
+                }),
+            });
+            draw(cx);
+
+            // While accessibility is active every frame constructs every view (replayed views
+            // would not contribute their accessibility nodes until A11Y-002 records them), so
+            // the listeners are registered afresh by each frame.
+            cx.update(|window, _| window.a11y.set_active_for_test(true));
+            cx.update(|window, _| window.refresh());
+            draw(cx);
+            for _ in 0..30 {
+                draw(cx);
+                exercise(cx, &counters, true);
+            }
+            assert_eq!(counters.a11y_clicks.get(), 30);
+        }
     }
 }

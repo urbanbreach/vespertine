@@ -102,6 +102,7 @@ slotmap.workspace = true
 smallvec.workspace = true
 stacksafe = { workspace = true, optional = true }
 strum.workspace = true
+thin-vec.workspace = true
 vespertine_sum_tree.workspace = true
 taffy = { workspace = true, features = [
     "std",
@@ -158,8 +159,9 @@ windows = { workspace = true, features = [
 
 
 [dev-dependencies]
-# Integration tests (tests/*.rs) need the test support that `cfg(test)` provides to unit tests.
-vespertine = { path = ".", features = ["test-support"] }
+# Enables the profiler-gated frame overlay and hang-detector tests under plain `cargo test -p vespertine`,
+# and the test support that integration tests (tests/*.rs) need (`cfg(test)` provides it to unit tests).
+vespertine = { path = ".", features = ["profiler", "test-support"] }
 backtrace.workspace = true
 vespertine_bench_metrics = { workspace = true, features = ["test-support"] }
 vespertine_collections = { workspace = true, features = ["test-support"] }
@@ -197,6 +199,11 @@ ignored-paths = ["src/_ownership_and_data_flow.rs", "benches/focus_cleanup.rs"]
 [[example]]
 name = "hello_world"
 path = "examples/hello_world.rs"
+
+[[example]]
+name = "inert_elements"
+path = "examples/inert_elements.rs"
+required-features = ["test-support"]
 
 [[example]]
 name = "move_entity_between_windows"

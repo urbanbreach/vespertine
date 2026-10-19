@@ -236,10 +236,10 @@ impl Interactivity {
         match AriaRoleToken::parse(token) {
             Some(AriaRoleToken::Role(role)) => {
                 self.override_role = Some(role);
-                self.aria.suppress_node = false;
+                self.clear_aria_suppression();
             }
             Some(AriaRoleToken::Presentation | AriaRoleToken::NoNode) => {
-                self.aria.suppress_node = true
+                self.aria_mut().suppress_node = true
             }
             None => return false,
         }
@@ -254,7 +254,7 @@ impl Interactivity {
     /// Passing `aria-label` always marks the label attribute as present, even
     /// when its value is rejected, which still blocks the `alt` fallback.
     pub fn apply_aria_attribute(&mut self, name: &str, value: &AriaValue) -> AriaOutcome {
-        let aria = &mut self.aria;
+        let aria = self.aria_mut();
         let applied = match name {
             "aria-id" => value
                 .as_nonempty_string()
@@ -290,7 +290,7 @@ impl Interactivity {
     /// Removes a property previously set through [`Self::apply_aria_attribute`]
     /// (the attribute is no longer present). Returns false for unknown names.
     pub fn remove_aria_attribute(&mut self, name: &str) -> bool {
-        let aria = &mut self.aria;
+        let aria = self.aria_mut();
         match name {
             "aria-id" => aria.author_id = None,
             "aria-label" => {
@@ -311,7 +311,7 @@ impl Interactivity {
     /// none. `GenericContainer` never forces a node, so assigning it behaves
     /// like assigning no role.
     pub(crate) fn a11y_role(&self) -> Option<Role> {
-        if self.aria.suppress_node {
+        if self.aria().suppress_node {
             return None;
         }
         self.override_role
@@ -322,7 +322,7 @@ impl Interactivity {
     /// the `alt` is used only if `aria-label` is absent (not even present with an
     /// invalid value) and `alt` is nonempty.
     pub(crate) fn write_alt_fallback(&self, node: &mut accesskit::Node) {
-        let aria = &self.aria;
+        let aria = self.aria();
         if aria.label.is_none() && !aria.label_attribute_present {
             if let Some(alt) = aria.alt.as_ref().filter(|alt| !alt.is_empty()) {
                 node.set_label(alt.to_string());
@@ -373,7 +373,7 @@ macro_rules! list_aria_builders {
     ($($(#[$meta:meta])* $name:ident => $($field:ident).+: $ty:ty;)*) => {$(
         $(#[$meta])*
         pub fn $name(mut self, value: $ty) -> Self {
-            self.a11y.$($field).+ = Some(value);
+            self.a11y.aria_mut().$($field).+ = Some(value);
             self
         }
     )*};
@@ -383,7 +383,7 @@ macro_rules! list_aria_string_builders {
     ($($(#[$meta:meta])* $name:ident => $($field:ident).+;)*) => {$(
         $(#[$meta])*
         pub fn $name(mut self, value: impl Into<SharedString>) -> Self {
-            self.a11y.$($field).+ = Some(value.into());
+            self.a11y.aria_mut().$($field).+ = Some(value.into());
             self
         }
     )*};
@@ -402,56 +402,56 @@ impl List {
     /// Sets the accessible role. `Role::GenericContainer` behaves like no role.
     pub fn role(mut self, role: Role) -> Self {
         self.a11y.override_role = Some(role);
-        self.a11y.aria.suppress_node = false;
+        self.a11y.clear_aria_suppression();
         self
     }
 
     list_aria_string_builders! {
         /// Sets the author-provided identifier exposed to accessibility clients.
-        accessibility_id => aria.author_id;
+        accessibility_id => author_id;
         /// Sets the accessible label.
-        aria_label => aria.label;
+        aria_label => label;
         /// Sets the accessible description.
-        aria_description => aria.description;
+        aria_description => description;
         /// Sets the accessible keyboard shortcut text.
-        aria_keyshortcuts => aria.keyshortcuts;
+        aria_keyshortcuts => keyshortcuts;
         /// Sets the textual value.
-        aria_value => aria.value;
+        aria_value => value;
         /// Sets the placeholder.
-        aria_placeholder => aria.placeholder;
+        aria_placeholder => placeholder;
     }
 
     list_aria_builders! {
         /// Sets the selected state.
-        aria_selected => aria.selected: bool;
+        aria_selected => selected: bool;
         /// Sets the expanded state.
-        aria_expanded => aria.expanded: bool;
+        aria_expanded => expanded: bool;
         /// Sets the toggled state.
-        aria_toggled => aria.toggled: accesskit::Toggled;
+        aria_toggled => toggled: accesskit::Toggled;
         /// Sets the numeric value.
-        aria_numeric_value => aria.numeric_value: f64;
+        aria_numeric_value => numeric_value: f64;
         /// Sets the numeric value step.
-        aria_numeric_value_step => aria.numeric_value_step: f64;
+        aria_numeric_value_step => numeric_value_step: f64;
         /// Sets the minimum numeric value.
-        aria_min_numeric_value => aria.min_numeric_value: f64;
+        aria_min_numeric_value => min_numeric_value: f64;
         /// Sets the maximum numeric value.
-        aria_max_numeric_value => aria.max_numeric_value: f64;
+        aria_max_numeric_value => max_numeric_value: f64;
         /// Sets the orientation.
-        aria_orientation => aria.orientation: accesskit::Orientation;
+        aria_orientation => orientation: accesskit::Orientation;
         /// Sets the hierarchical level.
-        aria_level => aria.level: usize;
+        aria_level => level: usize;
         /// Sets the position in the containing set.
-        aria_position_in_set => aria.position_in_set: usize;
+        aria_position_in_set => position_in_set: usize;
         /// Sets the size of the containing set.
-        aria_size_of_set => aria.size_of_set: usize;
+        aria_size_of_set => size_of_set: usize;
         /// Sets the row index.
-        aria_row_index => aria.row_index: usize;
+        aria_row_index => row_index: usize;
         /// Sets the column index.
-        aria_column_index => aria.column_index: usize;
+        aria_column_index => column_index: usize;
         /// Sets the row count.
-        aria_row_count => aria.row_count: usize;
+        aria_row_count => row_count: usize;
         /// Sets the column count.
-        aria_column_count => aria.column_count: usize;
+        aria_column_count => column_count: usize;
     }
 }
 
@@ -548,7 +548,7 @@ pub fn apply_aria_properties<E: AriaTarget>(
         interactivity.apply_role_token(token);
     }
     if let Some(serde_json::Value::String(alt)) = props.get("alt") {
-        interactivity.aria.alt = Some(alt.clone().into());
+        interactivity.aria_mut().alt = Some(alt.clone().into());
     }
     for (name, value) in props {
         if name.starts_with("aria-") {
@@ -829,7 +829,7 @@ mod tests {
         );
 
         // Nothing was set by any invalid value.
-        let aria = &interactivity.aria;
+        let aria = interactivity.aria();
         assert!(aria.author_id.is_none() && aria.label.is_none() && aria.description.is_none());
         assert!(aria.value.is_none() && aria.expanded.is_none() && aria.selected.is_none());
         assert!(aria.level.is_none());
@@ -869,7 +869,7 @@ mod tests {
             apply("aria-level", AriaValue::Int(usize::MAX as i128)),
             AriaOutcome::Applied
         );
-        let aria = &interactivity.aria;
+        let aria = interactivity.aria();
         assert_eq!(aria.level, Some(usize::MAX));
         assert_eq!(aria.expanded, Some(false));
         assert_eq!(aria.selected, Some(true));
@@ -893,10 +893,10 @@ mod tests {
         let element = apply_aria_properties(div().id("h"), props.as_object().unwrap());
         let interactivity = &element.element_interactivity_for_tests();
         assert_eq!(interactivity.a11y_role(), Some(Role::Heading));
-        assert_eq!(interactivity.aria.level, Some(3));
-        assert_eq!(interactivity.aria.label.as_deref(), Some("Title"));
-        assert_eq!(interactivity.aria.expanded, None);
-        assert_eq!(interactivity.aria.selected, None);
+        assert_eq!(interactivity.aria().level, Some(3));
+        assert_eq!(interactivity.aria().label.as_deref(), Some("Title"));
+        assert_eq!(interactivity.aria().expanded, None);
+        assert_eq!(interactivity.aria().selected, None);
 
         // A non-string role keeps the default role; an overflowing u64 is a valid level.
         let props = json!({"role": 7, "aria-level": u64::MAX});
@@ -904,7 +904,7 @@ mod tests {
             apply_aria_properties(div().id("h").role(Role::Group), props.as_object().unwrap());
         let interactivity = element.element_interactivity_for_tests();
         assert_eq!(interactivity.a11y_role(), Some(Role::Group));
-        assert_eq!(interactivity.aria.level, Some(u64::MAX as usize));
+        assert_eq!(interactivity.aria().level, Some(u64::MAX as usize));
     }
 
     trait InteractivityForTests {

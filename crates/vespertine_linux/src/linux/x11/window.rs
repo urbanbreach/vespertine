@@ -1701,6 +1701,27 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().request_frame = Some(callback);
     }
 
+    fn frame_requester(&self) -> Option<Rc<dyn Fn()>> {
+        let client = self.0.state.borrow().client.clone();
+        client.frame_requester(self.0.x_window)
+    }
+
+    fn pause_frames(&self) {
+        let (client, redraw_pending) = {
+            let state = self.0.state.borrow();
+            (state.client.clone(), state.force_render_after_recovery)
+        };
+        if redraw_pending {
+            // GPU recovery or a failed present left a redraw owed by the
+            // platform: demand remains, so the window stays armed (R11).
+            if let Some(arm) = client.frame_requester(self.0.x_window) {
+                arm();
+            }
+            return;
+        }
+        client.pause_frames(self.0.x_window);
+    }
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> vespertine::DispatchEventResult>) {
         self.0.callbacks.borrow_mut().input = Some(callback);
     }

@@ -452,7 +452,11 @@ mod tests {
             })
             .unwrap();
         assert!(!installed_handler.query_accepts_focused_text_input());
-        test_window.set_input_handler(installed_handler);
+        // The handler taken above belongs to the frame drawn before the focus moved. The
+        // update that moved focus already drew the new frame, which registered the handler
+        // for the second focus; retained frames (PRF-001) do not prepaint the unchanged
+        // view again to replace a handler the test puts back, so the stale one is dropped.
+        drop(installed_handler);
         cx.update_window(window, |_, window, cx| {
             window.draw(cx).clear(cx);
             window.notify_text_input_changed(&first_focus);

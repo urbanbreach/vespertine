@@ -233,7 +233,7 @@ impl Img {
     /// when no `aria-label` was supplied (not even an invalid or empty one) and
     /// the text is nonempty.
     pub fn alt(mut self, alt: impl Into<SharedString>) -> Self {
-        self.interactivity.aria.alt = Some(alt.into());
+        self.interactivity.aria_mut().alt = Some(alt.into());
         self
     }
 
@@ -258,7 +258,7 @@ impl Img {
 impl Stateful<Img> {
     /// Sets the image alternative text; see [`Img::alt`].
     pub fn alt(mut self, alt: impl Into<SharedString>) -> Self {
-        self.element.interactivity.aria.alt = Some(alt.into());
+        self.element.interactivity.aria_mut().alt = Some(alt.into());
         self
     }
 }

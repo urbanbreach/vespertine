@@ -1220,8 +1220,13 @@ mod window_tests {
             }))
         });
         for _ in 0..2 {
-            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
-                .unwrap();
+            // An unchanged view replays its retained output (PRF-001); a refresh makes the
+            // next frame construct and paint the view again.
+            cx.update_window(window.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx)
+            })
+            .unwrap();
         }
         let seen = seen.borrow();
         let [.., previous, last] = seen.as_slice() else {

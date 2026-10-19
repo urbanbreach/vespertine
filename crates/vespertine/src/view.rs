@@ -1,18 +1,20 @@
+use crate::key_dispatch::DispatchNodeId;
+use crate::window::read_tracker::ViewKey;
+use crate::window::retained::{AmbientPhase, SpliceMap};
+use crate::window::retained::{RetainedViews, ViewKind};
 use crate::{
-    AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
-    Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
-    StyleRefinement, TextStyle, WeakEntity,
+    AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, Context, Element, ElementId,
+    Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
+    Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style, StyleRefinement, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
 use std::mem;
+use std::ops::Range;
 use std::{
     any::{TypeId, type_name},
     fmt,
-    ops::Range,
 };
-use vespertine_collections::FxHashSet;
 use vespertine_refineable::Refineable;
 
 /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
@@ -94,6 +96,10 @@ impl Eq for AnyView {}
 impl View for AnyView {
     fn entity_id(&self) -> Option<EntityId> {
         Some(self.entity.entity_id())
+    }
+
+    fn erased(&self) -> Option<AnyView> {
+        Some(self.clone())
     }
 
     #[cfg(not(vespertine_hot_reload))]
@@ -216,6 +222,12 @@ pub trait View: 'static + Sized {
     /// fine — the id is scoped by the parent path.
     fn entity_id(&self) -> Option<EntityId>;
 
+    /// A type-erased handle with which the framework can render this view again
+    /// without the element that embedded it (for views that are entity-backed).
+    fn erased(&self) -> Option<AnyView> {
+        None
+    }
+
     /// Render this view into an element tree, consuming `self`.
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement;
 }
@@ -236,6 +248,10 @@ impl<T: RenderOnce> View for T {
 impl<T: Render> View for Entity<T> {
     fn entity_id(&self) -> Option<EntityId> {
         Some(Entity::entity_id(self))
+    }
+
+    fn erased(&self) -> Option<AnyView> {
+        Some(AnyView::from(self.clone()))
     }
 
     #[inline]
@@ -320,17 +336,35 @@ impl<V: View> IntoElement for ViewElement<V> {
     }
 }
 
-struct ViewElementState {
-    prepaint_range: Range<PrepaintStateIndex>,
-    paint_range: Range<PaintIndex>,
-    cache_key: ViewElementCacheKey,
-    accessed_entities: FxHashSet<EntityId>,
+/// Opaque, framework-owned per-frame state of a view element (PRF-001).
+///
+/// It carries either the element built for this frame or the identity of the
+/// retained record whose previous output may be replayed.
+#[doc(hidden)]
+pub struct ViewState(ViewStateInner);
+
+enum ViewStateInner {
+    /// A stateless component, or a view drawn without retention: the element
+    /// of this frame, if it was already built.
+    Plain(Option<AnyElement>),
+    /// A tracked view. `element` is `Some` when the view was built in this
+    /// frame and `None` when the previous output may be replayed.
+    Tracked {
+        key: ViewKey,
+        element: Option<AnyElement>,
+        /// Nested views rebuilt in this frame inside a clean view that is
+        /// replayed around them (splice).
+        splice: Vec<SplicedChild>,
+    },
 }
 
-struct ViewElementCacheKey {
-    bounds: Bounds<Pixels>,
-    content_mask: ContentMask<Pixels>,
-    text_style: TextStyle,
+/// A view nested in a replayed view that was built again in this frame.
+struct SplicedChild {
+    key: ViewKey,
+    layout_id: LayoutId,
+    element: Option<AnyElement>,
+    wrapper_node: Option<DispatchNodeId>,
+    state: Option<ViewState>,
 }
 
 #[cfg(not(vespertine_hot_reload))]
@@ -352,8 +386,8 @@ fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElemen
 }
 
 impl<V: View> Element for ViewElement<V> {
-    type RequestLayoutState = Option<AnyElement>;
-    type PrepaintState = Option<AnyElement>;
+    type RequestLayoutState = ViewState;
+    type PrepaintState = ViewState;
 
     fn id(&self) -> Option<ElementId> {
         self.entity_id.map(ElementId::View)
@@ -369,7 +403,7 @@ impl<V: View> Element for ViewElement<V> {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
+        id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
@@ -378,9 +412,12 @@ impl<V: View> Element for ViewElement<V> {
             // Stateful path: create a reactive boundary.
             #[cfg(feature = "profiler")]
             let start = window.window_profiler.begin_view();
+            let erased = self.view.as_ref().and_then(View::erased);
             let view = &mut self.view;
             let layout = request_layout_view(
                 entity_id,
+                erased,
+                id.expect("views have element ids"),
                 self.cached_style.as_ref(),
                 window,
                 cx,
@@ -395,9 +432,11 @@ impl<V: View> Element for ViewElement<V> {
             layout
         } else {
             // Stateless path: isolate subtree via type name (no entity identity).
-            request_layout_component(type_name::<V>(), window, cx, &mut |window, cx| {
-                render_view(self.view.take().unwrap(), window, cx)
-            })
+            let (layout_id, element) =
+                request_layout_component(type_name::<V>(), window, cx, &mut |window, cx| {
+                    render_view(self.view.take().unwrap(), window, cx)
+                });
+            (layout_id, ViewState(ViewStateInner::Plain(element)))
         }
     }
 
@@ -406,19 +445,19 @@ impl<V: View> Element for ViewElement<V> {
         global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        element: &mut Self::RequestLayoutState,
+        state: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<AnyElement> {
+    ) -> ViewState {
         if let Some(entity_id) = self.entity_id {
             // Stateful path.
             #[cfg(feature = "profiler")]
             let start = window.window_profiler.begin_view();
             let prepainted = prepaint_view(
                 entity_id,
-                global_id,
+                global_id.expect("views have element ids"),
                 bounds,
-                element,
+                state,
                 window,
                 cx,
                 &mut |window, cx| render_view(self.view.take().unwrap(), window, cx),
@@ -432,17 +471,17 @@ impl<V: View> Element for ViewElement<V> {
             prepainted
         } else {
             // Stateless path: just prepaint the element.
-            prepaint_component(type_name::<V>(), element, window, cx)
+            prepaint_component(type_name::<V>(), state, window, cx)
         }
     }
 
     fn paint(
         &mut self,
-        global_id: Option<&GlobalElementId>,
+        _global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        element: &mut Self::PrepaintState,
+        state: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -450,14 +489,7 @@ impl<V: View> Element for ViewElement<V> {
             // Stateful path.
             #[cfg(feature = "profiler")]
             let start = window.window_profiler.begin_view();
-            paint_view(
-                entity_id,
-                self.cached_style.is_some(),
-                global_id,
-                element,
-                window,
-                cx,
-            );
+            paint_view(entity_id, state, window, cx);
             #[cfg(feature = "profiler")]
             window.window_profiler.end_view(
                 start,
@@ -466,7 +498,7 @@ impl<V: View> Element for ViewElement<V> {
             );
         } else {
             // Stateless path: just paint the element.
-            paint_component(std::any::type_name::<V>(), element, window, cx);
+            paint_component(std::any::type_name::<V>(), state, window, cx);
         }
     }
 }
@@ -480,30 +512,283 @@ impl Render for EmptyView {
     }
 }
 
+/// How much of a view's previous output a frame may keep.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// Everything is replayed.
+    Clean,
+    /// The view itself is clean but views nested in it are not: it is replayed
+    /// around freshly built children.
+    Splice,
+    /// The view is built again.
+    Rebuild,
+}
+
+fn verdict(window: &Window, key: ViewKey, kind: ViewKind) -> Verdict {
+    let Some(record) = window.retention.views.get(key) else {
+        return Verdict::Rebuild;
+    };
+    if record.dirty || record.prepaint.is_none() || record.paint.is_none() {
+        return Verdict::Rebuild;
+    }
+    // Ordinary descendants of a notified ancestor re-evaluate updates that were
+    // never notified; explicitly cached views keep the upstream rule.
+    if kind == ViewKind::Retained
+        && window.retention.notified_ancestors > 0
+        && RetainedViews::reads_stale(&window.retention.tracker, record)
+    {
+        return Verdict::Rebuild;
+    }
+    if record.dirty_descendants {
+        // Explicitly cached views are rebuilt when anything inside them changed.
+        if kind == ViewKind::Retained {
+            Verdict::Splice
+        } else {
+            Verdict::Rebuild
+        }
+    } else {
+        Verdict::Clean
+    }
+}
+
 #[inline(never)]
 fn request_layout_view(
     entity_id: EntityId,
+    erased: Option<AnyView>,
+    path: &GlobalElementId,
     cached_style: Option<&StyleRefinement>,
     window: &mut Window,
     cx: &mut App,
     render: &mut dyn FnMut(&mut Window, &mut App) -> AnyElement,
-) -> (LayoutId, Option<AnyElement>) {
+) -> (LayoutId, ViewState) {
     window.with_rendered_view(entity_id, |window| {
-        let caching_disabled = window.is_inspector_picking(cx);
+        let picking = window.is_inspector_picking(cx);
+        let tracking = window.retention_tracking();
         match cached_style {
-            Some(style) if !caching_disabled => {
+            Some(style) if !picking => {
                 let mut root_style = Style::default();
                 root_style.refine(style);
                 let layout_id = window.request_layout(root_style, None, cx);
-                (layout_id, None)
+                let state = if tracking {
+                    let key = tracked_record(window, entity_id, path, ViewKind::Cached);
+                    ViewStateInner::Tracked {
+                        key,
+                        element: None,
+                        splice: Vec::new(),
+                    }
+                } else {
+                    ViewStateInner::Plain(None)
+                };
+                (layout_id, ViewState(state))
+            }
+            _ if !tracking => {
+                let mut element = render(window, cx);
+                window.retention.views.stats.views_rendered += 1;
+                let layout_id = element.request_layout(window, cx);
+                (layout_id, ViewState(ViewStateInner::Plain(Some(element))))
             }
             _ => {
-                let mut element = render(window, cx);
-                let layout_id = element.request_layout(window, cx);
-                (layout_id, Some(element))
+                let key = tracked_record(window, entity_id, path, ViewKind::Retained);
+                if window.retention_reuse_allowed()
+                    && let Some(layout_id) = window
+                        .retention
+                        .views
+                        .get(key)
+                        .and_then(|record| record.layout_root)
+                {
+                    if let Some((layout_id, element)) = window.retention.adopted.remove(&key) {
+                        // Built already for a splice that had to be abandoned.
+                        let parent = window.retention.stack.last().copied();
+                        window.retention.views.adopt(key, parent);
+                        return (
+                            layout_id,
+                            ViewState(ViewStateInner::Tracked {
+                                key,
+                                element: Some(element),
+                                splice: Vec::new(),
+                            }),
+                        );
+                    }
+                    match verdict(window, key, ViewKind::Retained) {
+                        Verdict::Clean => {
+                            let parent = window.retention.stack.last().copied();
+                            window.retention.views.adopt(key, parent);
+                            window.touch_layout_subtree(key);
+                            return (
+                                layout_id,
+                                ViewState(ViewStateInner::Tracked {
+                                    key,
+                                    element: None,
+                                    splice: Vec::new(),
+                                }),
+                            );
+                        }
+                        Verdict::Splice => {
+                            if let Some(splice) = splice_layout(window, cx, key) {
+                                let parent = window.retention.stack.last().copied();
+                                window.retention.views.adopt(key, parent);
+                                window.touch_layout_subtree(key);
+                                return (
+                                    layout_id,
+                                    ViewState(ViewStateInner::Tracked {
+                                        key,
+                                        element: None,
+                                        splice,
+                                    }),
+                                );
+                            }
+                        }
+                        Verdict::Rebuild => {}
+                    }
+                } else if let Some((layout_id, element)) = window.retention.adopted.remove(&key) {
+                    let parent = window.retention.stack.last().copied();
+                    window.retention.views.adopt(key, parent);
+                    return (
+                        layout_id,
+                        ViewState(ViewStateInner::Tracked {
+                            key,
+                            element: Some(element),
+                            splice: Vec::new(),
+                        }),
+                    );
+                }
+                let parent = window.retention.stack.last().copied();
+                let (layout_id, element) = build_view(window, cx, key, parent, erased, render);
+                (
+                    layout_id,
+                    ViewState(ViewStateInner::Tracked {
+                        key,
+                        element: Some(element),
+                        splice: Vec::new(),
+                    }),
+                )
             }
         }
     })
+}
+
+/// Finds or creates the record of the view at `path`.
+fn tracked_record(
+    window: &mut Window,
+    entity_id: EntityId,
+    path: &GlobalElementId,
+    kind: ViewKind,
+) -> ViewKey {
+    match window.retention.views.lookup(path) {
+        Some(key) => key,
+        None => window.retention.views.create(path.clone(), entity_id, kind),
+    }
+}
+
+/// Renders the view and requests layout for it as part of the enclosing
+/// layout; returns the layout root and the element.
+fn build_view(
+    window: &mut Window,
+    cx: &mut App,
+    key: ViewKey,
+    parent: Option<ViewKey>,
+    erased: Option<AnyView>,
+    render: &mut dyn FnMut(&mut Window, &mut App) -> AnyElement,
+) -> (LayoutId, AnyElement) {
+    window.retention.views.begin_rebuild(key, parent);
+    window.retention.views.reset_reads(key);
+    let layout_key = window.layout_key_context();
+    let mut ambient = window.capture_ambient();
+    // The prepaint-phase context of an earlier build stays valid until the view is
+    // prepainted again; a view built out of band for a splice is prepainted in it.
+    ambient.prepaint = window
+        .retention
+        .views
+        .get(key)
+        .and_then(|record| record.ambient.as_ref())
+        .and_then(|ambient| ambient.prepaint.clone());
+    window.begin_view_phase(key);
+    window.begin_layout_owner();
+    window.retention.layout_state_sink.push(Vec::new());
+    let mut element = render(window, cx);
+    window.retention.views.stats.views_rendered += 1;
+    let layout_id = element.request_layout(window, cx);
+    let layout_states = window.retention.layout_state_sink.pop().unwrap_or_default();
+    let owned = window.end_layout_owner();
+    window.end_view_phase(key);
+    if let Some(record) = window.retention.views.get_mut(key) {
+        record.layout = owned;
+        record.layout_states = layout_states;
+        record.layout_root = Some(layout_id);
+        record.layout_key = Some(layout_key);
+        if erased.is_some() {
+            record.view = erased;
+        }
+        record.ambient = Some(std::rc::Rc::new(ambient));
+    }
+    (layout_id, element)
+}
+
+/// Builds the views nested in the clean view `key` that are dirty, out of band,
+/// so that the view can be replayed around them. Returns `None` (after handing
+/// the built children over for adoption) if building them changed layout.
+fn splice_layout(window: &mut Window, cx: &mut App, key: ViewKey) -> Option<Vec<SplicedChild>> {
+    // A view nested here was built for a splice that had to be abandoned because it changed
+    // layout: this view is affected as well and builds again to adopt it.
+    if window
+        .retention
+        .adopted
+        .keys()
+        .any(|adopted| window.retention.views.is_nested_in(*adopted, key))
+    {
+        return None;
+    }
+    let frontier = window.retention.views.dirty_frontier(key)?;
+    if frontier.is_empty() {
+        window.retention.views.clear_dirty_descendants(key);
+        return Some(Vec::new());
+    }
+    let writes_before = window.layout_write_count();
+    let mut built = Vec::with_capacity(frontier.len());
+    for child in frontier {
+        let record = window.retention.views.get(child)?;
+        let (ambient, view, layout_key, parent) = (
+            record.ambient.clone()?,
+            record.view.clone()?,
+            record.layout_key?,
+            record.parent,
+        );
+        let (layout_id, element) = window.with_ambient(&ambient, AmbientPhase::Layout, |window| {
+            window.with_layout_key_context(layout_key, |window| {
+                build_view(
+                    window,
+                    cx,
+                    child,
+                    parent,
+                    Some(view.clone()),
+                    &mut |window, cx| render_view(view.clone(), window, cx),
+                )
+            })
+        });
+        built.push(SplicedChild {
+            key: child,
+            layout_id,
+            element: Some(element),
+            wrapper_node: None,
+            state: None,
+        });
+    }
+    if window.layout_write_count() != writes_before {
+        // A child changed what its parent's layout depends on: the parent is
+        // built again and adopts the children built here.
+        window.retention.views.stats.splice_failures += 1;
+        for child in built {
+            if let Some(element) = child.element {
+                window
+                    .retention
+                    .adopted
+                    .insert(child.key, (child.layout_id, element));
+            }
+        }
+        return None;
+    }
+    window.retention.views.clear_dirty_descendants(key);
+    Some(built)
 }
 
 #[inline(never)]
@@ -523,139 +808,424 @@ fn request_layout_component(
 #[inline(never)]
 fn prepaint_view(
     entity_id: EntityId,
-    global_id: Option<&GlobalElementId>,
+    path: &GlobalElementId,
     bounds: Bounds<Pixels>,
-    element: &mut Option<AnyElement>,
+    state: &mut ViewState,
     window: &mut Window,
     cx: &mut App,
     render: &mut dyn FnMut(&mut Window, &mut App) -> AnyElement,
-) -> Option<AnyElement> {
+) -> ViewState {
     window.set_view_id(entity_id);
     window.with_rendered_view(entity_id, |window| {
-        if let Some(mut element) = element.take() {
-            element.prepaint(window, cx);
-            return Some(element);
-        }
-
-        window.with_element_state::<ViewElementState, _>(
-            global_id.unwrap(),
-            |element_state, window| {
-                let content_mask = window.content_mask();
-                let text_style = window.text_style();
-
-                if let Some(mut element_state) = element_state
-                    && element_state.cache_key.bounds == bounds
-                    && element_state.cache_key.content_mask == content_mask
-                    && element_state.cache_key.text_style == text_style
-                    && !window.dirty_views.contains(&entity_id)
-                    // A cached view also re-renders when an entity it read during its last
-                    // render was notified, not only when the view's own entity was.
-                    && !window
-                        .dirty_views
-                        .iter()
-                        .any(|dirty| element_state.accessed_entities.contains(dirty))
-                    && !window.refreshing
+        match mem::replace(&mut state.0, ViewStateInner::Plain(None)) {
+            ViewStateInner::Plain(Some(mut element)) => {
+                element.prepaint(window, cx);
+                ViewState(ViewStateInner::Plain(Some(element)))
+            }
+            ViewStateInner::Plain(None) => {
+                // A cached view drawn without retention: build it here.
+                let mut element = render(window, cx);
+                window.retention.views.stats.views_rendered += 1;
+                element.layout_as_root(Size::<AvailableSpace>::from(bounds.size), window, cx);
+                element.prepaint_at(bounds.origin, window, cx);
+                ViewState(ViewStateInner::Plain(Some(element)))
+            }
+            ViewStateInner::Tracked {
+                key,
+                element: Some(mut element),
+                ..
+            } => {
+                let prepaint_ambient = window.capture_prepaint_ambient();
+                window.begin_view_phase(key);
+                let start = window.prepaint_index();
+                element.prepaint(window, cx);
+                let end = window.prepaint_index();
+                window.end_view_phase(key);
+                let cache_key = window.ambient_cache_key(bounds);
+                if let Some(record) = window.retention.views.get_mut(key) {
+                    record.prepaint = Some(start..end);
+                    record.cache_key = Some(cache_key);
+                    if let Some(ambient) = record.ambient.as_mut() {
+                        std::rc::Rc::make_mut(ambient).prepaint = Some(prepaint_ambient);
+                    }
+                }
+                ViewState(ViewStateInner::Tracked {
+                    key,
+                    element: Some(element),
+                    splice: Vec::new(),
+                })
+            }
+            ViewStateInner::Tracked {
+                key,
+                element: None,
+                mut splice,
+            } => {
+                let kind = window
+                    .retention
+                    .views
+                    .get(key)
+                    .map_or(ViewKind::Retained, |record| record.kind);
+                let cache_key = window.ambient_cache_key(bounds);
+                let ambient_matches = window.retention_reuse_allowed()
+                    && window
+                        .retention
+                        .views
+                        .get(key)
+                        .is_some_and(|record| record.cache_key.as_ref() == Some(&cache_key));
+                if ambient_matches
+                    && splice.is_empty()
+                    && verdict(window, key, kind) == Verdict::Clean
                 {
-                    let prepaint_start = window.prepaint_index();
-                    window.reuse_prepaint(element_state.prepaint_range.clone());
-                    cx.entities
-                        .extend_accessed(&element_state.accessed_entities);
-                    let prepaint_end = window.prepaint_index();
-                    element_state.prepaint_range = prepaint_start..prepaint_end;
-
-                    return (None, element_state);
+                    let old = window
+                        .retention
+                        .views
+                        .get(key)
+                        .and_then(|record| record.prepaint.clone())
+                        .expect("replayable views have prepaint output");
+                    let parent = window.retention.stack.last().copied();
+                    window.retention.views.adopt(key, parent);
+                    let start = window.prepaint_index();
+                    window.reuse_prepaint(old.clone());
+                    let end = window.prepaint_index();
+                    window.rebase_prepaint_subtree(key, old, start..end);
+                    if kind == ViewKind::Cached {
+                        window.touch_layout_subtree(key);
+                    }
+                    window.retention.views.stats.views_reused += 1;
+                    return ViewState(ViewStateInner::Tracked {
+                        key,
+                        element: None,
+                        splice: Vec::new(),
+                    });
+                }
+                if ambient_matches && !splice.is_empty() {
+                    let spliceable = window
+                        .retention
+                        .views
+                        .get(key)
+                        .is_some_and(|record| !record.dirty && record.prepaint.is_some());
+                    if spliceable {
+                        prepaint_spliced(window, cx, key, &mut splice);
+                        window.retention.views.stats.splice_successes += 1;
+                        window.retention.views.stats.views_reused += 1;
+                        return ViewState(ViewStateInner::Tracked {
+                            key,
+                            element: None,
+                            splice,
+                        });
+                    }
+                }
+                if !splice.is_empty() {
+                    // The clean view cannot be replayed after all (it moved or its
+                    // inputs changed): it is built again below, and adopts the
+                    // children that were built for the splice instead of rendering
+                    // them a second time.
+                    window.retention.views.stats.splice_failures += 1;
+                    for child in splice {
+                        if let Some(element) = child.element {
+                            window
+                                .retention
+                                .adopted
+                                .insert(child.key, (child.layout_id, element));
+                        }
+                    }
                 }
 
-                let refreshing = mem::replace(&mut window.refreshing, true);
-                let prepaint_start = window.prepaint_index();
-                let (element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                    let mut element = render(window, cx);
+                // The view moved, changed size or became invalid after its layout
+                // was requested: build it again here.
+                let parent = window.retention.stack.last().copied();
+                window.retention.views.begin_rebuild(key, parent);
+                window.retention.views.reset_reads(key);
+                let layout_key = window
+                    .retention
+                    .views
+                    .get(key)
+                    .and_then(|record| record.layout_key)
+                    .filter(|_| kind == ViewKind::Retained);
+                let prepaint_ambient = window.capture_prepaint_ambient();
+                window.begin_view_phase(key);
+                window.begin_layout_owner();
+                let start = window.prepaint_index();
+                let mut element = render(window, cx);
+                window.retention.views.stats.views_rendered += 1;
+                if let Some(layout_key) = layout_key {
+                    // Request layout again in place: the view claims the very nodes the
+                    // enclosing layout already computed, so nothing is laid out again
+                    // and the view is prepainted where its layout node sits.
+                    let writes = window.layout_write_count();
+                    let layout_id = window.with_layout_key_context(layout_key, |window| {
+                        element.request_layout(window, cx)
+                    });
+                    if window.layout_write_count() != writes {
+                        // Something the layout depends on changed (for example a
+                        // measured leaf that could not keep its measurement).
+                        window.relayout_subtree_in_place(layout_id, bounds.size, cx);
+                    }
+                    element.prepaint(window, cx);
+                } else {
                     element.layout_as_root(Size::<AvailableSpace>::from(bounds.size), window, cx);
                     element.prepaint_at(bounds.origin, window, cx);
-                    element
-                });
-
-                let prepaint_end = window.prepaint_index();
-                window.refreshing = refreshing;
-
-                (
-                    Some(element),
-                    ViewElementState {
-                        accessed_entities,
-                        prepaint_range: prepaint_start..prepaint_end,
-                        paint_range: PaintIndex::default()..PaintIndex::default(),
-                        cache_key: ViewElementCacheKey {
-                            bounds,
-                            content_mask,
-                            text_style,
-                        },
-                    },
-                )
-            },
-        )
+                }
+                let end = window.prepaint_index();
+                let owned = window.end_layout_owner();
+                window.end_view_phase(key);
+                if let Some(record) = window.retention.views.get_mut(key) {
+                    if layout_key.is_some() {
+                        record.layout = owned;
+                    } else {
+                        record.layout.extend(&owned);
+                    }
+                    record.prepaint = Some(start..end);
+                    record.cache_key = Some(cache_key);
+                    if let Some(ambient) = record.ambient.as_mut() {
+                        std::rc::Rc::make_mut(ambient).prepaint = Some(prepaint_ambient);
+                    }
+                }
+                let _ = path;
+                ViewState(ViewStateInner::Tracked {
+                    key,
+                    element: Some(element),
+                    splice: Vec::new(),
+                })
+            }
+        }
     })
+}
+
+/// Replays the prepaint output of the clean view `key` in stretches around the
+/// views nested in it that were built again, and prepaints those in place.
+fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [SplicedChild]) {
+    let old = window
+        .retention
+        .views
+        .get(key)
+        .and_then(|record| record.prepaint.clone())
+        .expect("spliced views have prepaint output");
+    // Gaps in the order their output appears.
+    splice.sort_by_key(|child| {
+        window
+            .retention
+            .views
+            .get(child.key)
+            .and_then(|record| record.prepaint.as_ref())
+            .map_or(0, |range| range.start.order_key())
+    });
+    let gaps: Vec<Range<PrepaintStateIndex>> = splice
+        .iter()
+        .map(|child| {
+            window
+                .retention
+                .views
+                .get(child.key)
+                .and_then(|record| record.prepaint.clone())
+                .expect("rebuilt children have prepaint output")
+        })
+        .collect();
+    let parent = window.retention.stack.last().copied();
+    window.retention.views.adopt(key, parent);
+
+    let attachment = window.next_frame.dispatch_tree.active_node_id();
+    let whole_start = window.prepaint_index();
+    let mut map = SpliceMap::default();
+    let mut stretches: Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)> = Vec::new();
+    let mut cursor = old.start.clone();
+    for ix in 0..=splice.len() {
+        let stretch_end = gaps
+            .get(ix)
+            .map_or_else(|| old.end.clone(), |gap| gap.start.clone());
+        let stretch = cursor.clone()..stretch_end;
+        let new_start = window.prepaint_index();
+        window.reuse_prepaint_mapped(stretch.clone(), Some(&map));
+        map.push(
+            stretch.start.dispatch_tree_index()..stretch.end.dispatch_tree_index(),
+            new_start.dispatch_tree_index(),
+        );
+        stretches.push((stretch, new_start));
+        let Some(child) = splice.get_mut(ix) else {
+            break;
+        };
+        cursor = gaps[ix].end.clone();
+
+        let record = window
+            .retention
+            .views
+            .get(child.key)
+            .expect("rebuilt children have records");
+        let (ambient, path, entity_id, view) = (
+            record
+                .ambient
+                .clone()
+                .expect("rebuilt children have ambient state"),
+            record.path.clone(),
+            record.entity_id,
+            record
+                .view
+                .clone()
+                .expect("rebuilt children have view handles"),
+        );
+        let old_parent = ambient
+            .prepaint
+            .as_ref()
+            .and_then(|prepaint| prepaint.dispatch_parent)
+            .map(DispatchNodeId::from_index);
+        let new_parent = old_parent.and_then(|old| map.resolve(old)).or(attachment);
+        let layout_id = child.layout_id;
+        let element = child.element.take();
+        let (node, state) = window.with_ambient(&ambient, AmbientPhase::Prepaint, |window| {
+            if let Some(new_parent) = new_parent {
+                window.next_frame.dispatch_tree.set_active_node(new_parent);
+            }
+            let bounds = window.layout_bounds(layout_id);
+            let node = window.next_frame.dispatch_tree.push_node();
+            let mut state = ViewState(ViewStateInner::Tracked {
+                key: child.key,
+                element,
+                splice: Vec::new(),
+            });
+            let state = prepaint_view(
+                entity_id,
+                &path,
+                bounds,
+                &mut state,
+                window,
+                cx,
+                &mut |window, cx| render_view(view.clone(), window, cx),
+            );
+            window.next_frame.dispatch_tree.pop_node();
+            (node, state)
+        });
+        if let Some(attachment) = attachment {
+            window.next_frame.dispatch_tree.set_active_node(attachment);
+        }
+        child.wrapper_node = Some(node);
+        child.state = Some(state);
+    }
+    let whole_end = window.prepaint_index();
+    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
+    window.rebase_spliced_prepaint(key, whole_start..whole_end, &stretches, &rebuilt);
 }
 
 #[inline(never)]
 fn prepaint_component(
     name: &'static str,
-    element: &mut Option<AnyElement>,
+    state: &mut ViewState,
     window: &mut Window,
     cx: &mut App,
-) -> Option<AnyElement> {
+) -> ViewState {
+    let ViewStateInner::Plain(element) = mem::replace(&mut state.0, ViewStateInner::Plain(None))
+    else {
+        unreachable!("components are never tracked");
+    };
+    let mut element = element.unwrap();
     window.with_id(ElementId::from(name), |window| {
-        element.as_mut().unwrap().prepaint(window, cx);
+        element.prepaint(window, cx);
     });
-    Some(element.take().unwrap())
+    ViewState(ViewStateInner::Plain(Some(element)))
 }
 
 #[inline(never)]
-fn paint_view(
-    entity_id: EntityId,
-    cached: bool,
-    global_id: Option<&GlobalElementId>,
-    element: &mut Option<AnyElement>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    window.with_rendered_view(entity_id, |window| {
-        let caching_disabled = window.is_inspector_picking(cx);
-        if cached && !caching_disabled {
-            window.with_element_state::<ViewElementState, _>(
-                global_id.unwrap(),
-                |element_state, window| {
-                    let mut element_state = element_state.unwrap();
-
-                    let paint_start = window.paint_index();
-
-                    if let Some(element) = element {
-                        let refreshing = mem::replace(&mut window.refreshing, true);
-                        element.paint(window, cx);
-                        window.refreshing = refreshing;
-                    } else {
-                        window.reuse_paint(element_state.paint_range.clone());
-                    }
-
-                    let paint_end = window.paint_index();
-                    element_state.paint_range = paint_start..paint_end;
-
-                    ((), element_state)
-                },
-            )
-        } else {
-            element.as_mut().unwrap().paint(window, cx);
+fn paint_view(entity_id: EntityId, state: &mut ViewState, window: &mut Window, cx: &mut App) {
+    window.with_rendered_view(entity_id, |window| match &mut state.0 {
+        ViewStateInner::Plain(element) => element.as_mut().unwrap().paint(window, cx),
+        ViewStateInner::Tracked {
+            key,
+            element,
+            splice,
+        } => {
+            let key = *key;
+            let start = window.paint_index();
+            if let Some(element) = element {
+                window.begin_view_phase(key);
+                element.paint(window, cx);
+                window.end_view_phase(key);
+            } else if !splice.is_empty() {
+                paint_spliced(window, cx, key, splice);
+                return;
+            } else {
+                let old = window
+                    .retention
+                    .views
+                    .get(key)
+                    .and_then(|record| record.paint.clone())
+                    .expect("replayed views have paint output");
+                window.reuse_paint(old.clone());
+                let end = window.paint_index();
+                window.rebase_paint_subtree(key, old, start..end);
+                return;
+            }
+            let end = window.paint_index();
+            if let Some(record) = window.retention.views.get_mut(key) {
+                record.paint = Some(start..end);
+            }
         }
     });
 }
 
+/// Replays the paint output of the clean view `key` in stretches around the
+/// views nested in it that were built again, and paints those in place.
+fn paint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [SplicedChild]) {
+    let old = window
+        .retention
+        .views
+        .get(key)
+        .and_then(|record| record.paint.clone())
+        .expect("spliced views have paint output");
+    let gaps: Vec<Range<PaintIndex>> = splice
+        .iter()
+        .map(|child| {
+            window
+                .retention
+                .views
+                .get(child.key)
+                .and_then(|record| record.paint.clone())
+                .expect("rebuilt children have paint output")
+        })
+        .collect();
+    let whole_start = window.paint_index();
+    let mut stretches: Vec<(Range<PaintIndex>, PaintIndex)> = Vec::new();
+    let mut cursor = old.start.clone();
+    for ix in 0..=splice.len() {
+        let stretch_end = gaps
+            .get(ix)
+            .map_or_else(|| old.end.clone(), |gap| gap.start.clone());
+        let stretch = cursor.clone()..stretch_end;
+        let new_start = window.paint_index();
+        window.reuse_paint(stretch.clone());
+        stretches.push((stretch, new_start));
+        let Some(child) = splice.get_mut(ix) else {
+            break;
+        };
+        cursor = gaps[ix].end.clone();
+        let record = window
+            .retention
+            .views
+            .get(child.key)
+            .expect("rebuilt children have records");
+        let ambient = record
+            .ambient
+            .clone()
+            .expect("rebuilt children have ambient state");
+        let entity_id = record.entity_id;
+        let (Some(node), Some(mut child_state)) = (child.wrapper_node, child.state.take()) else {
+            continue;
+        };
+        window.with_ambient(&ambient, AmbientPhase::Prepaint, |window| {
+            window.next_frame.dispatch_tree.set_active_node(node);
+            paint_view(entity_id, &mut child_state, window, cx);
+        });
+        child.state = Some(child_state);
+    }
+    let whole_end = window.paint_index();
+    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
+    window.rebase_spliced_paint(key, whole_start..whole_end, &stretches, &rebuilt);
+}
+
 #[inline(never)]
-fn paint_component(
-    name: &'static str,
-    element: &mut Option<AnyElement>,
-    window: &mut Window,
-    cx: &mut App,
-) {
+fn paint_component(name: &'static str, state: &mut ViewState, window: &mut Window, cx: &mut App) {
+    let ViewStateInner::Plain(Some(element)) = &mut state.0 else {
+        unreachable!("components are always built");
+    };
     window.with_id(ElementId::Name(name.into()), |window| {
-        element.as_mut().unwrap().paint(window, cx);
+        element.paint(window, cx);
     });
 }

@@ -56,6 +56,8 @@ impl Display for EntityId {
 pub(crate) struct EntityMap {
     entities: SecondaryMap<EntityId, Box<dyn Any>>,
     pub accessed_entities: RefCell<FxHashSet<EntityId>>,
+    /// Per-view dependency tracking shared with the windows (PRF-001).
+    pub tracker: std::rc::Rc<crate::window::read_tracker::ReadTracker>,
     ref_counts: Arc<RwLock<EntityRefCounts>>,
 }
 
@@ -76,6 +78,7 @@ impl EntityMap {
         Self {
             entities: SecondaryMap::new(),
             accessed_entities: RefCell::new(FxHashSet::default()),
+            tracker: crate::window::read_tracker::ReadTracker::new(),
             ref_counts: Arc::new(RwLock::new(EntityRefCounts {
                 counts: SlotMap::with_key(),
                 dropped_entity_ids: Vec::new(),
@@ -127,6 +130,7 @@ impl EntityMap {
     {
         let mut accessed_entities = self.accessed_entities.get_mut();
         accessed_entities.insert(slot.entity_id);
+        self.tracker.read_entity(slot.entity_id);
 
         let handle = slot.0;
         self.entities.insert(handle.entity_id, Box::new(entity));
@@ -177,12 +181,6 @@ impl EntityMap {
         );
     }
 
-    pub fn extend_accessed(&mut self, entities: &FxHashSet<EntityId>) {
-        self.accessed_entities
-            .get_mut()
-            .extend(entities.iter().copied());
-    }
-
     pub fn clear_accessed(&mut self) {
         self.accessed_entities.get_mut().clear();
     }
@@ -201,6 +199,7 @@ impl EntityMap {
                     "dropped an entity that was referenced"
                 );
                 accessed_entities.remove(&entity_id);
+                self.tracker.forget_entity(entity_id);
                 // If the EntityId was allocated with `Context::reserve`,
                 // the entity may not have been inserted.
                 Some((entity_id, self.entities.remove(entity_id)?))
@@ -212,18 +211,21 @@ impl EntityMap {
     fn read_inner(&self, entity_id: EntityId) -> Option<&dyn Any> {
         let mut accessed_entities = self.accessed_entities.borrow_mut();
         accessed_entities.insert(entity_id);
+        self.tracker.read_entity(entity_id);
         self.entities.get(entity_id).map(Box::as_ref)
     }
 
     #[inline(never)]
     fn lease_inner(&mut self, entity_id: EntityId) -> Option<Box<dyn Any>> {
         self.accessed_entities.get_mut().insert(entity_id);
+        self.tracker.read_entity(entity_id);
         self.entities.remove(entity_id)
     }
 
     #[inline(never)]
     fn end_lease_inner(&mut self, entity_id: EntityId, entity: Box<dyn Any>) {
         self.entities.insert(entity_id, entity);
+        self.tracker.entity_updated(entity_id);
     }
 }
 

@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, CurvedClipId,
-    CurvedClipShape, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, ScopeParams, Size,
-    bounds_tree::BoundsTree, point,
+    CurvedClipShape, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, ScopeParams, Size, point,
+    scene_order::{OrderIndex, SceneOrderStats},
+    scene_sort::{SortScratch, sort_records},
 };
 use std::{
     fmt::Debug,
@@ -41,7 +42,8 @@ impl From<bool> for PaddedBool32 {
 #[expect(missing_docs)]
 pub struct Scene {
     pub(crate) paint_operations: Vec<PaintOperation>,
-    primitive_bounds: BoundsTree<ScaledPixels>,
+    order_index: OrderIndex,
+    sort_scratch: SortScratch,
     layer_stack: Vec<DrawOrder>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
@@ -64,7 +66,7 @@ pub struct Scene {
 impl Scene {
     pub fn clear(&mut self) {
         self.paint_operations.clear();
-        self.primitive_bounds.clear();
+        self.order_index.begin_frame();
         self.layer_stack.clear();
         self.paths.clear();
         self.shadows.clear();
@@ -85,7 +87,7 @@ impl Scene {
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
-        let order = self.primitive_bounds.insert(bounds);
+        let order = self.order_index.insert(bounds);
         self.layer_stack.push(order);
         self.paint_operations
             .push(PaintOperation::StartLayer(bounds));
@@ -108,11 +110,7 @@ impl Scene {
             return;
         }
 
-        let order = self
-            .layer_stack
-            .last()
-            .copied()
-            .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds));
+        let order = self.next_order(clipped_bounds);
         match &mut primitive {
             Primitive::Shadow(shadow) => {
                 shadow.order = order;
@@ -164,11 +162,7 @@ impl Scene {
         if clipped_bounds.is_empty() || blur.blur_radius.0.is_nan() || blur.blur_radius.0 <= 0.0 {
             return;
         }
-        blur.order = self
-            .layer_stack
-            .last()
-            .copied()
-            .unwrap_or_else(|| self.primitive_bounds.insert(clipped_bounds));
+        blur.order = self.next_order(clipped_bounds);
         self.shadows.push(Shadow {
             order: blur.order,
             blur_radius: ScaledPixels(0.0),
@@ -218,6 +212,31 @@ impl Scene {
         }
     }
 
+    /// The order of the next primitive with the given (nonempty, clipped) bounds: the order of
+    /// the innermost explicit layer, otherwise one above every earlier overlapping bounds.
+    fn next_order(&mut self, clipped_bounds: Bounds<ScaledPixels>) -> DrawOrder {
+        match self.layer_stack.last() {
+            Some(order) => *order,
+            None => self.order_index.insert(clipped_bounds),
+        }
+    }
+
+    /// Uses the order stream of `previous_frame` as the baseline for replaying orders in this
+    /// scene. Call right after [`Scene::clear`] when two scenes alternate between frames.
+    pub fn adopt_order_baseline(&mut self, previous_frame: &Scene) {
+        self.order_index.adopt_baseline(&previous_frame.order_index);
+    }
+
+    /// Counters describing how the orders of the current frame were assigned.
+    pub fn order_stats(&self) -> SceneOrderStats {
+        self.order_index.stats()
+    }
+
+    /// Number of times sort scratch storage had to grow since this scene was created.
+    pub fn sort_scratch_allocations(&self) -> u64 {
+        self.sort_scratch.index.allocations()
+    }
+
     /// Opens a curved overflow clip shape: every primitive inserted until the matching
     /// [`Self::pop_curved_clip`] is cut by it, together with every enclosing shape.
     /// Shapes enter the GPU data only when a primitive is painted under them.
@@ -259,17 +278,27 @@ impl Scene {
     }
 
     pub fn finish(&mut self) {
-        self.shadows.sort_by_key(|shadow| shadow.order);
-        self.quads.sort_by_key(|quad| quad.order);
-        self.paths.sort_by_key(|path| path.order);
-        self.underlines.sort_by_key(|underline| underline.order);
-        self.monochrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.subpixel_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.polychrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.surfaces.sort_by_key(|surface| surface.order);
+        let SortScratch { index, gather } = &mut self.sort_scratch;
+        sort_records(&mut self.shadows, &mut gather.shadows, index);
+        sort_records(&mut self.quads, &mut gather.quads, index);
+        sort_records(&mut self.paths, &mut gather.paths, index);
+        sort_records(&mut self.underlines, &mut gather.underlines, index);
+        sort_records(
+            &mut self.monochrome_sprites,
+            &mut gather.monochrome_sprites,
+            index,
+        );
+        sort_records(
+            &mut self.subpixel_sprites,
+            &mut gather.subpixel_sprites,
+            index,
+        );
+        sort_records(
+            &mut self.polychrome_sprites,
+            &mut gather.polychrome_sprites,
+            index,
+        );
+        sort_records(&mut self.surfaces, &mut gather.surfaces, index);
         // Stable: effects with equal order are processed in insertion order.
         self.backdrop_blurs.sort_by_key(|blur| blur.order);
     }

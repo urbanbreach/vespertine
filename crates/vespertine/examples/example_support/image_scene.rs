@@ -153,11 +153,14 @@ impl<V: Render + 'static> HeadlessScene<V> {
         }
     }
 
-    /// Draws the window once without capturing it.
+    /// Draws the window once without capturing it. The refresh makes the frame construct and
+    /// paint the scene again instead of replaying the retained output of the previous one
+    /// (PRF-001).
     pub fn draw(&mut self) {
         self.cx.run_until_parked();
         self.cx
             .update_window(self.window.into(), |_, window, cx| {
+                window.refresh();
                 window.draw(cx).clear(cx)
             })
             .expect("window draws");

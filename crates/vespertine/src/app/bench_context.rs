@@ -994,7 +994,7 @@ impl<'a, 'measurement> BenchAppContext<'a, 'measurement> {
                 .and_then(Option::as_deref)
                 .is_some();
             if is_open {
-                dispatched |= window.simulate_scheduled_frame();
+                dispatched |= window.simulate_display_tick();
             }
         }
         dispatched

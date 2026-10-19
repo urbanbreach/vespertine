@@ -18,6 +18,38 @@ use std::{
 };
 use vespertine_util::ResultExt as _;
 
+/// The simulated display frame source of a test window. Arming and pausing
+/// only touch these cells, so they are valid whether or not the window state
+/// is locked.
+#[derive(Default)]
+struct TestFrameSource {
+    /// A display tick is delivered while armed; parked when not.
+    armed: Cell<bool>,
+    /// Invocations of the frame requester, including no-op ones.
+    arm_calls: Rc<Cell<usize>>,
+    ticks: Cell<usize>,
+    fail_next_start: Cell<bool>,
+    start_failures: Cell<usize>,
+}
+
+impl TestFrameSource {
+    fn arm(&self) {
+        self.arm_calls.set(self.arm_calls.get() + 1);
+        if self.armed.get() {
+            return;
+        }
+        if self.fail_next_start.take() {
+            self.start_failures.set(self.start_failures.get() + 1);
+            return;
+        }
+        self.armed.set(true);
+    }
+
+    fn pause(&self) {
+        self.armed.set(false);
+    }
+}
+
 pub(crate) struct TestWindowState {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) handle: AnyWindowHandle,
@@ -47,9 +79,7 @@ pub(crate) struct TestWindowState {
     display_changed_callback: Option<Box<dyn FnMut()>>,
     appearance_change_callback: Option<Box<dyn FnMut()>>,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
-    frame_wake_count: Rc<Cell<usize>>,
-    frame_scheduled: bool,
-    frame_callback_pending: bool,
+    frame_source: Rc<TestFrameSource>,
     input_handler: Option<PlatformInputHandler>,
     text_input_configurations: Vec<TextInputConfiguration>,
     text_input_state_changes: Vec<TextInputStateChange>,
@@ -126,9 +156,7 @@ impl TestWindow {
             display_changed_callback: None,
             appearance_change_callback: None,
             request_frame_callback: None,
-            frame_wake_count: Rc::new(Cell::new(0)),
-            frame_scheduled: false,
-            frame_callback_pending: false,
+            frame_source: Rc::new(TestFrameSource::default()),
             input_handler: None,
             text_input_configurations: Vec::new(),
             text_input_state_changes: Vec::new(),
@@ -145,27 +173,41 @@ impl TestWindow {
             last_a11y_tree_update: None,
         })))
     }
-    pub fn simulate_scheduled_frame(&self) -> bool {
-        let callback = {
+
+    /// One tick of the simulated display clock: delivers a frame request to
+    /// the window and returns true, or returns false without delivering when
+    /// the window is parked (its frame source disarmed). The source stays
+    /// armed after a tick until the window pauses it, like a running display
+    /// clock.
+    pub fn simulate_display_tick(&self) -> bool {
+        let (source, callback) = {
             let mut state = self.0.lock();
-            if !std::mem::take(&mut state.frame_scheduled) {
+            if !state.frame_source.armed.get() {
                 return false;
             }
-            state.frame_callback_pending = false;
-            state.request_frame_callback.take()
+            (
+                state.frame_source.clone(),
+                state.request_frame_callback.take(),
+            )
         };
         let Some(mut callback) = callback else {
-            self.0.lock().frame_scheduled = true;
             return false;
         };
 
+        source.ticks.set(source.ticks.get() + 1);
         callback(RequestFrameOptions::default());
         self.0.lock().request_frame_callback = Some(callback);
         true
     }
 
+    /// Whether the frame source is armed: a display tick would be delivered.
     pub fn frame_scheduled(&self) -> bool {
-        self.0.lock().frame_scheduled
+        self.0.lock().frame_source.armed.get()
+    }
+
+    /// How many display ticks were delivered to the window.
+    pub fn display_ticks(&self) -> usize {
+        self.0.lock().frame_source.ticks.get()
     }
 
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
@@ -283,9 +325,26 @@ impl TestWindow {
         self.0.lock().background_appearance_sets
     }
 
-    /// Returns how many times this window's frame waker has been invoked.
+    /// Returns how many times this window's frame requester has been invoked.
     pub fn frame_wake_count(&self) -> usize {
-        self.0.lock().frame_wake_count.get()
+        self.0.lock().frame_source.arm_calls.get()
+    }
+
+    /// A handle on the counter behind [`Self::frame_wake_count`] that stays
+    /// readable after the window is destroyed.
+    pub fn frame_wake_counter(&self) -> Rc<Cell<usize>> {
+        self.0.lock().frame_source.arm_calls.clone()
+    }
+
+    /// Makes the next arming of the frame source fail to start it, as when a
+    /// display source cannot be created. A later arming retries.
+    pub fn fail_next_frame_source_start(&self) {
+        self.0.lock().frame_source.fail_next_start.set(true);
+    }
+
+    /// How many times starting the frame source failed.
+    pub fn frame_source_start_failures(&self) -> usize {
+        self.0.lock().frame_source.start_failures.get()
     }
 
     /// Delivers a frame request to the window, as the platform's frame source
@@ -523,29 +582,24 @@ impl PlatformWindow for TestWindow {
         self.0.lock().is_fullscreen
     }
 
-    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
-        // Tests can inspect wakes without delivering a frame synchronously.
-        let frame_wake_count = self.0.lock().frame_wake_count.clone();
-        #[cfg(feature = "bench-support")]
-        let window = Rc::downgrade(&self.0);
+    fn frame_requester(&self) -> Option<Rc<dyn Fn()>> {
+        // Arming only touches the shared frame source, never the window state
+        // lock, so it is valid at any point of an application callback. A
+        // destroyed window drops its source and later requests are ignored.
+        let source = Rc::downgrade(&self.0.lock().frame_source);
         Some(Rc::new(move || {
-            frame_wake_count.set(frame_wake_count.get() + 1);
-            #[cfg(feature = "bench-support")]
-            if let Some(window) = window.upgrade() {
-                TestWindow(window).schedule_frame();
+            if let Some(source) = source.upgrade() {
+                source.arm();
             }
         }))
     }
 
-    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
-        self.0.lock().request_frame_callback = Some(callback);
+    fn pause_frames(&self) {
+        self.0.lock().frame_source.pause();
     }
 
-    fn schedule_frame(&self) {
-        let mut state = self.0.lock();
-        if !state.frame_callback_pending {
-            state.frame_scheduled = true;
-        }
+    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+        self.0.lock().request_frame_callback = Some(callback);
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>) {
@@ -593,8 +647,6 @@ impl PlatformWindow for TestWindow {
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
-        state.frame_callback_pending = true;
-        state.frame_scheduled = true;
         let device_size: Size<DevicePixels> = state.bounds.size.to_device_pixels(scale_factor);
         if let Some(renderer) = &mut state.renderer {
             renderer.render_scene(scene, device_size).warn_on_err();
