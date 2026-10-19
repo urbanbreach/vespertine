@@ -102,6 +102,11 @@ mod rounded_clip_tests;
 mod scene;
 mod scene_order;
 mod scene_sort;
+mod scroll_layer;
+#[cfg(test)]
+mod scroll_layer_policy_tests;
+#[cfg(test)]
+mod scroll_layer_tests;
 mod scrollbar;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
@@ -290,6 +295,7 @@ pub use profiler::*;
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use scene::*;
 pub use scene_order::SceneOrderStats;
+pub use scroll_layer::*;
 pub use scrollbar::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};

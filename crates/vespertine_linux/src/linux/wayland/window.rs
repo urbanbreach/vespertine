@@ -2257,6 +2257,24 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().button_layout_changed = Some(callback);
     }
 
+    fn supports_scroll_layers(&self) -> bool {
+        true
+    }
+
+    fn tiles_rasterized(&self) -> u64 {
+        self.0
+            .state
+            .try_borrow()
+            .ok()
+            .and_then(|state| {
+                state
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.tile_stats().rasterized)
+            })
+            .unwrap_or(0)
+    }
+
     fn draw(&self, scene: &Scene) {
         self.draw_frame(scene, None);
     }

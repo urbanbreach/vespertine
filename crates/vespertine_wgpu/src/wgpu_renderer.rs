@@ -18,7 +18,9 @@ use vespertine::{
 use vespertine_collections::FxHashMap;
 
 mod recording;
+mod tiles;
 pub use recording::{FillClass, FillRecord, RecordStats};
+pub use tiles::TileStats;
 
 /// Counters of the curved overflow clip data (RND-002 A12). Plain increments; production
 /// code never depends on them.
@@ -212,6 +214,8 @@ struct WgpuRendererCore {
     uniforms: UniformCache,
     /// Atlas texture generations referenced by the frame being recorded.
     atlas_generations: FxHashMap<AtlasTextureId, u64>,
+    /// Scroll-layer tile textures (PRF-004).
+    tiles: tiles::TileState,
     stats: RecordStats,
     clip_stats: ClipStats,
     /// Quad draw sequences of the last frame, recorded when enabled (test-support access).
@@ -1097,6 +1101,11 @@ impl WgpuRenderer {
         self.core().is_some_and(|core| core.dual_source_blending)
     }
 
+    /// Counters of the scroll-layer tile work (PRF-004); zero once the GPU resources are gone.
+    pub fn tile_stats(&self) -> TileStats {
+        self.core().map(|core| core.tiles.stats).unwrap_or_default()
+    }
+
     /// Returns `None` once GPU resources have been released by `destroy` or a pending
     /// device recovery.
     pub fn gpu_specs(&self) -> Option<GpuSpecs> {
@@ -1315,6 +1324,7 @@ impl WgpuRendererCore {
             scratch: FrameScratch::default(),
             uniforms: UniformCache::default(),
             atlas_generations: FxHashMap::default(),
+            tiles: tiles::TileState::default(),
             stats: RecordStats::default(),
             clip_stats: ClipStats::default(),
             fill_log: None,
@@ -1466,6 +1476,7 @@ impl WgpuRendererCore {
         );
 
         self.atlas.before_frame();
+        self.rasterize_tiles(scene, premultiplied_alpha)?;
         let drawable = (size.width.0 as u32, size.height.0 as u32);
         self.resources.blur.drawable_changed(drawable);
         self.upload_globals(size, premultiplied_alpha);
@@ -1479,6 +1490,7 @@ impl WgpuRendererCore {
         } else {
             self.record_frame(scene, target, &target_view, clear_color, None)
         };
+        self.finish_tiles(scene);
         result.inspect_err(|_| {
             // Queue writes are staged before encoding; flush them even if the frame fails.
             self.resources.queue.submit(std::iter::empty());
@@ -1892,6 +1904,21 @@ impl WgpuHeadlessRenderer {
         self.core.clip_stats = ClipStats::default();
     }
 
+    /// Counters of the scroll-layer tile work (PRF-004).
+    pub fn tile_stats(&self) -> TileStats {
+        self.core.tiles.stats
+    }
+
+    /// Tile textures currently cached.
+    pub fn cached_tiles(&self) -> usize {
+        self.core.tiles.cache.len()
+    }
+
+    /// Freed tile textures held for reuse.
+    pub fn pooled_tiles(&self) -> usize {
+        self.core.tiles.cache.pooled()
+    }
+
     /// Starts or stops recording the quad draw sequences of every frame (PRF-008).
     pub fn record_quad_fills(&mut self, enabled: bool) {
         self.core.fill_log = enabled.then(Vec::new);
@@ -2155,6 +2182,14 @@ impl vespertine::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
 
     fn sprite_atlas(&self) -> Arc<dyn vespertine::PlatformAtlas> {
         self.core.atlas.clone()
+    }
+
+    fn supports_scroll_layers(&self) -> bool {
+        true
+    }
+
+    fn tiles_rasterized(&self) -> u64 {
+        self.core.tiles.stats.rasterized
     }
 }
 

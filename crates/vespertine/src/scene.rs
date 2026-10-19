@@ -59,6 +59,8 @@ pub struct Scene {
     pub curved_clips: Vec<CurvedClipShape>,
     /// Parent chain node (`0` for none) of each entry of `curved_clips`.
     pub curved_clip_parents: Vec<CurvedClipId>,
+    /// The scroll layers composited in this scene (PRF-004).
+    pub layers: crate::SceneLayers,
     curved_clip_stack: Vec<CurvedClipScope>,
 }
 
@@ -80,6 +82,7 @@ impl Scene {
         self.paths.clear();
         self.quads.clear();
         self.shadows.clear();
+        self.layers.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -267,6 +270,11 @@ impl Scene {
                 PaintOperation::Primitive(primitive) => primitive.has_active_scope(),
                 _ => false,
             })
+    }
+
+    /// Whether a curved overflow clip is open: every primitive inserted now is cut by it.
+    pub(crate) fn curved_clip_active(&self) -> bool {
+        !self.curved_clip_stack.is_empty()
     }
 
     /// The order of the next primitive with the given (nonempty, clipped) bounds: the order of
@@ -652,7 +660,7 @@ impl ScopeTracker {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[expect(missing_docs)]
 pub enum Primitive {
     Shadow(Shadow),
@@ -803,6 +811,56 @@ impl TransformationMatrix {
     }
 }
 
+/// Subdivisions of a device pixel that path geometry snaps to (PRF-004 R3).
+pub const PATH_GRID_SUBDIVISIONS: f32 = 256.0;
+
+/// Snaps a device-pixel coordinate to the path grid: nearest step of 1/256 device pixel, exact
+/// ties to the even step (PRF-004 R3).
+#[inline]
+pub fn snap_path_coordinate(value: f32) -> f32 {
+    (value * PATH_GRID_SUBDIVISIONS).round_ties_even() / PATH_GRID_SUBDIVISIONS
+}
+
+fn snap_path_bounds(bounds: Bounds<ScaledPixels>) -> Bounds<ScaledPixels> {
+    let left = snap_path_coordinate(bounds.origin.x.0);
+    let top = snap_path_coordinate(bounds.origin.y.0);
+    let right = snap_path_coordinate(bounds.origin.x.0 + bounds.size.width.0);
+    let bottom = snap_path_coordinate(bounds.origin.y.0 + bounds.size.height.0);
+    Bounds {
+        origin: Point {
+            x: ScaledPixels(left),
+            y: ScaledPixels(top),
+        },
+        size: Size {
+            width: ScaledPixels(right - left),
+            height: ScaledPixels(bottom - top),
+        },
+    }
+}
+
+fn snap_path_point(point: Point<ScaledPixels>) -> Point<ScaledPixels> {
+    Point {
+        x: ScaledPixels(snap_path_coordinate(point.x.0)),
+        y: ScaledPixels(snap_path_coordinate(point.y.0)),
+    }
+}
+
+impl Path<ScaledPixels> {
+    /// Snaps the vertex positions, the bounds and the content masks of the path to the grid of
+    /// 256 subdivisions per device pixel (PRF-004 R3). Direct and translated drawing of the
+    /// same path then agree, as translating by whole device pixels is exact on the grid.
+    pub fn snap_to_grid(&mut self) {
+        self.bounds = snap_path_bounds(self.bounds);
+        self.content_mask.bounds = snap_path_bounds(self.content_mask.bounds);
+        self.start = snap_path_point(self.start);
+        self.current = snap_path_point(self.current);
+        for vertex in &mut self.vertices {
+            vertex.xy_position = snap_path_point(vertex.xy_position);
+            vertex.content_mask.bounds = snap_path_bounds(vertex.content_mask.bounds);
+        }
+    }
+}
+
 impl Path<ScaledPixels> {
     fn moved(&mut self, offset: Point<ScaledPixels>, clip: Option<Bounds<ScaledPixels>>) {
         self.bounds = moved(self.bounds, offset);
@@ -811,7 +869,10 @@ impl Path<ScaledPixels> {
         self.current = self.current + offset;
         for vertex in &mut self.vertices {
             vertex.xy_position = vertex.xy_position + offset;
-            vertex.content_mask = moved_mask(vertex.content_mask, offset, clip);
+            // Vertex masks are unset (empty) for paths built by the framework: nothing to move.
+            if vertex.content_mask.bounds.size != Default::default() {
+                vertex.content_mask = moved_mask(vertex.content_mask, offset, clip);
+            }
         }
     }
 }
@@ -1091,7 +1152,11 @@ impl<'a> Iterator for BatchIterator<'a> {
                 })
             }
             PrimitiveKind::PolychromeSprite => {
-                let texture_id = self.polychrome_sprites_iter.peek().unwrap().tile.texture_id;
+                let first_tile = self.polychrome_sprites_iter.peek().unwrap().tile;
+                let texture_id = first_tile.texture_id;
+                // The tiles of a scroll layer share a texture identity but are separate
+                // textures: a batch holds sprites of one tile.
+                let tile_batch = crate::is_tile_texture(texture_id);
                 let sprites_start = self.polychrome_sprites_start;
                 let mut sprites_end = sprites_start + 1;
                 self.polychrome_sprites_iter.next();
@@ -1100,6 +1165,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                     .next_if(|sprite| {
                         (sprite.order, batch_kind) < max_order_and_kind
                             && sprite.tile.texture_id == texture_id
+                            && (!tile_batch || sprite.tile.tile_id == first_tile.tile_id)
                     })
                     .is_some()
                 {

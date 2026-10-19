@@ -1397,6 +1397,21 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
 
+    /// Whether the window draws scroll layers (PRF-004): tile sprites whose textures the
+    /// renderer rasterizes from the [`LayerFrame`](crate::LayerFrame)s of the scene. The
+    /// default is `false`: the framework then draws scrolled content directly, exactly as it
+    /// does with scroll layers disabled. The macOS and Windows renderers keep the default,
+    /// since they do not draw tile sprites.
+    fn supports_scroll_layers(&self) -> bool {
+        false
+    }
+
+    /// Scroll-layer tiles the window's renderer has rasterized so far (PRF-004 diagnostics);
+    /// `0` for platforms that do not draw scroll layers.
+    fn tiles_rasterized(&self) -> u64 {
+        0
+    }
+
     /// Enables the two-plane scene overlay (PLT-001): ordinary content renders below native
     /// children and deferred content in a transparent overlay above them. Called at most
     /// once per window by [`Window::enable_scene_overlay`](crate::Window::enable_scene_overlay).
@@ -1667,6 +1682,18 @@ pub trait PlatformHeadlessRenderer {
 
     /// Returns the sprite atlas used by this renderer.
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+
+    /// Whether the renderer draws scroll layers (PRF-004); `false` makes windows drawn through
+    /// it paint scrolled content directly.
+    fn supports_scroll_layers(&self) -> bool {
+        false
+    }
+
+    /// Scroll-layer tiles this renderer has rasterized so far (PRF-004 diagnostics); `0` for
+    /// renderers that do not draw scroll layers.
+    fn tiles_rasterized(&self) -> u64 {
+        0
+    }
 }
 
 /// Type alias for runnables with metadata.

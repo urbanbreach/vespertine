@@ -78,9 +78,11 @@ impl PipelineKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum TextureKey {
+pub(super) enum TextureKey {
     Atlas(AtlasTextureId, u64),
     PathIntermediate(u64),
+    /// A scroll-layer tile texture, by the serial of the texture (PRF-004).
+    Tile(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1253,11 +1255,23 @@ impl WgpuRendererCore {
                 | PrimitiveBatch::PolychromeSprites { texture_id, .. } => *texture_id,
                 _ => continue,
             };
+            if vespertine::is_tile_texture(texture_id) {
+                continue;
+            }
             if !atlas_textures.contains(&texture_id) {
                 atlas_textures.push(texture_id);
             }
         }
         self.atlas_generations.clear();
+        for batch in &scratch.batches {
+            if let PrimitiveBatch::PolychromeSprites { texture_id, range } = batch
+                && vespertine::is_tile_texture(*texture_id)
+                && let Some((serial, view)) = self.tile_texture_view(scene, range.start)
+            {
+                let view = view.clone();
+                self.texture_binding(TextureKey::Tile(serial), &view);
+            }
+        }
         for texture_id in atlas_textures {
             let Some(info) = self.atlas.get_texture_info(texture_id) else {
                 continue;
@@ -1466,7 +1480,12 @@ impl WgpuRendererCore {
                     }
                 }
                 PrimitiveBatch::PolychromeSprites { texture_id, range } => {
-                    if let Some(key) = self.atlas_key(*texture_id) {
+                    let key = if vespertine::is_tile_texture(*texture_id) {
+                        self.tile_texture_key(scene, range.start)
+                    } else {
+                        self.atlas_key(*texture_id)
+                    };
+                    if let Some(key) = key {
                         self.draw_textured(
                             &mut fe,
                             PipelineKind::PolySprites,

@@ -12,9 +12,9 @@ use crate::{
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
     Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent,
-    MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+    MonochromeSprite, MouseButton, MouseDownEvent, MouseEvent, MouseMoveEvent, MouseUpEvent, Path,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+    Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
     SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
@@ -81,6 +81,7 @@ pub(crate) mod retained;
 #[cfg(test)]
 mod retained_tests;
 pub(crate) mod rows;
+pub(crate) mod scroll_layers;
 pub use retained::{retained_frames_disabled, set_retained_frames_disabled};
 mod composition;
 #[cfg(test)]
@@ -1185,6 +1186,8 @@ pub(crate) struct PaintIndex {
     a11y_listeners_index: usize,
     line_layout_index: LineLayoutIndex,
     effects_index: usize,
+    /// Scroll-layer frames pushed into the scene (PRF-004).
+    layer_frames_index: usize,
 }
 
 /// Moves one recorded index from a range that began at `from` to the copy that began at `to`.
@@ -1336,6 +1339,11 @@ impl PaintIndex {
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
             effects_index: shift_index(self.effects_index, from.effects_index, to.effects_index),
+            layer_frames_index: shift_index(
+                self.layer_frames_index,
+                from.layer_frames_index,
+                to.layer_frames_index,
+            ),
         }
     }
 }
@@ -1516,6 +1524,10 @@ pub struct Window {
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
+    /// Elements with a curved overflow clip that enclose the element being prepainted (the clip
+    /// itself is opened while painting). Scroll layers do not translate content under one
+    /// (PRF-004 R8).
+    pub(crate) curved_clip_ancestors: u32,
     /// Scoped edge fade / rounded clip parameters stamped into every primitive.
     pub(crate) paint_scope: ScopeParams,
     /// The active edge fade, for the conservative fade of paths, shadows and decorations.
@@ -1524,6 +1536,14 @@ pub struct Window {
     pub(crate) inert_depth: u32,
     /// Retained list rows, by the element id of their list (PRF-005).
     pub(crate) row_stores: FxHashMap<GlobalElementId, rows::RowStore>,
+    /// Scroll layers of the blocks drawn by this window (PRF-004).
+    pub(crate) scroll_layers: scroll_layers::ScrollLayers,
+    /// Tiles the platform window's renderer had rasterized at the last present.
+    tiles_rasterized_seen: u64,
+    /// Animation frames requested so far, and the views that requested them in the current
+    /// frame (scroll layers drop out for a block whose owner animates, PRF-004 R8).
+    pub(crate) animation_requests: Cell<u64>,
+    pub(crate) animation_views: RefCell<FxHashSet<EntityId>>,
     /// How often hover state was read; a row that reads it is rebuilt when its hover changes.
     pub(crate) hover_reads: Cell<u64>,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
@@ -2438,10 +2458,15 @@ impl Window {
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
+            curved_clip_ancestors: 0,
             paint_scope: ScopeParams::default(),
             edge_fade: None,
             inert_depth: 0,
             row_stores: FxHashMap::default(),
+            scroll_layers: scroll_layers::ScrollLayers::default(),
+            tiles_rasterized_seen: 0,
+            animation_requests: Cell::new(0),
+            animation_views: RefCell::new(FxHashSet::default()),
             hover_reads: Cell::new(0),
             requested_autoscroll: None,
             last_text_input_configuration: None,
@@ -3156,6 +3181,9 @@ impl Window {
     /// and skip the frame request when it is set.
     pub fn request_animation_frame(&self) {
         let entity = self.current_view();
+        self.animation_requests
+            .set(self.animation_requests.get() + 1);
+        self.animation_views.borrow_mut().insert(entity);
         self.on_next_frame(move |window, cx| {
             window.retention.tracker.note_animation_notification();
             cx.notify(entity)
@@ -3972,6 +4000,7 @@ impl Window {
         let keyboard_focus_dim_painted = self.keyboard_focus_dim_active();
         self.begin_pointer_frame(cx);
         self.invalidate_entities();
+        self.begin_scroll_layers_frame();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.invalidator.set_dirty(false);
@@ -4000,6 +4029,7 @@ impl Window {
             self.draw_roots(cx);
             read_tracker::ReadTracker::end_draw(&self.retention.tracker);
             self.finish_retained_frame();
+            self.finish_scroll_layers_frame();
             #[cfg(feature = "profiler")]
             {
                 let viewport_size = self.viewport_size;
@@ -4257,6 +4287,10 @@ impl Window {
             self.present_composition();
         } else {
             self.platform_window.draw(&self.rendered_frame.scene);
+            let rasterized = self.platform_window.tiles_rasterized();
+            self.frame_stats.tiles_rasterized +=
+                rasterized.saturating_sub(self.tiles_rasterized_seen);
+            self.tiles_rasterized_seen = rasterized;
         }
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
@@ -4810,6 +4844,7 @@ impl Window {
             a11y_listeners_index: self.next_frame.a11y_listeners.len(),
             line_layout_index: self.text_system.layout_index(),
             effects_index: self.next_frame.paint_effects.len(),
+            layer_frames_index: self.next_frame.scene.layers.len(),
         }
     }
 
@@ -4890,6 +4925,20 @@ impl Window {
                 &self.rendered_frame.scene,
             );
             self.replay_surface_switches(&range, scene_start);
+            let frames: Vec<crate::LayerFrame> = self
+                .rendered_frame
+                .scene
+                .layers
+                .frames()
+                .get(range.start.layer_frames_index..range.end.layer_frames_index)
+                .unwrap_or_default()
+                .iter()
+                .map(crate::LayerFrame::replayed)
+                .collect();
+            for frame in frames {
+                self.scroll_layers.note_composited(frame.id());
+                self.next_frame.scene.layers.push(frame);
+            }
         }
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
@@ -5046,6 +5095,21 @@ impl Window {
         self.element_offset_stack.push(offset);
         let result = f(self);
         self.element_offset_stack.pop();
+        result
+    }
+
+    /// Runs `f` inside an element that opens a curved overflow clip when it paints (`active`).
+    pub(crate) fn with_curved_clip_ancestor<R>(
+        &mut self,
+        active: bool,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if !active {
+            return f(self);
+        }
+        self.curved_clip_ancestors += 1;
+        let result = f(self);
+        self.curved_clip_ancestors -= 1;
         result
     }
 
@@ -5785,9 +5849,11 @@ impl Window {
         let color: Background = color.into();
         let fade_factor = self.conservative_fade_factor(path.bounds);
         path.color = color.opacity(opacity * fade_factor);
-        self.next_frame
-            .scene
-            .insert_primitive(path.scale(scale_factor));
+        // Path geometry snaps to 1/256 device pixel, so direct and translated drawing agree
+        // (PRF-004 R3).
+        let mut path = path.scale(scale_factor);
+        path.snap_to_grid();
+        self.next_frame.scene.insert_primitive(path);
     }
 
     /// Paint an underline into the scene for the next frame at the current z-index.
@@ -7627,10 +7693,26 @@ impl Window {
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         self.note_pointer_event(event, cx);
-        let hit_test = match self.pointer.absent {
-            true => HitTest::default(),
-            false => self.rendered_frame.hit_test(self.mouse_position()),
+        let pointer_hit_test = |window: &Window| {
+            if window.pointer.absent {
+                HitTest::default()
+            } else {
+                window.rendered_frame.hit_test(window.mouse_position())
+            }
         };
+        let mut hit_test = pointer_hit_test(self);
+        // Content of scroll layers that moved is painted at current coordinates before input
+        // that could observe its geometry is dispatched (PRF-004 R7).
+        if self.scroll_layers_moved()
+            && (event.is::<MouseDownEvent>()
+                || event.is::<MouseUpEvent>()
+                || (event.is::<MouseMoveEvent>()
+                    && self.captured_hitbox.is_none()
+                    && hit_test != self.mouse_hit_test))
+        {
+            self.repaint_scroll_layers_for_input(cx);
+            hit_test = pointer_hit_test(self);
+        }
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
             self.reset_cursor_style(cx);
@@ -7710,7 +7792,9 @@ impl Window {
     }
 
     fn dispatch_key_event(&mut self, event: &dyn Any, cx: &mut App) {
-        if self.invalidator.is_dirty() {
+        if self.scroll_layers_moved() {
+            self.repaint_scroll_layers_for_input(cx);
+        } else if self.invalidator.is_dirty() {
             self.draw(cx).clear(cx);
         }
 

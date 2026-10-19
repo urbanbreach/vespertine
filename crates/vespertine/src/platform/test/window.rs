@@ -852,6 +852,22 @@ impl PlatformWindow for TestWindow {
         self.0.lock().appearance_change_callback = Some(callback);
     }
 
+    fn supports_scroll_layers(&self) -> bool {
+        self.0
+            .lock()
+            .renderer
+            .as_ref()
+            .is_none_or(|renderer| renderer.supports_scroll_layers())
+    }
+
+    fn tiles_rasterized(&self) -> u64 {
+        self.0
+            .lock()
+            .renderer
+            .as_ref()
+            .map_or(0, |renderer| renderer.tiles_rasterized())
+    }
+
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();

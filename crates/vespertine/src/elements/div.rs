@@ -2153,6 +2153,8 @@ impl Element for Div {
             scroll_handle.scroll_to_active_item();
         }
 
+        let scroll_state = self.interactivity.scroll_offset.clone();
+        let layer_candidate = self.prepaint_listener.is_some();
         self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -2167,20 +2169,78 @@ impl Element for Div {
                 }
 
                 window.with_image_cache(image_cache, |window| {
-                    window.with_element_offset(scroll_offset, |window| {
-                        if let Some(order_fn) = &self.prepaint_order_fn {
-                            let order = order_fn(window, cx);
-                            for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
+                    // Scroll offsets place content on the device pixel grid (PRF-004 R3); the
+                    // stored offset keeps its sub-pixel motion.
+                    let placed_offset = point(
+                        window.pixel_snap(scroll_offset.x),
+                        window.pixel_snap(scroll_offset.y),
+                    );
+                    let mut prepaint_children = |window: &mut Window, cx: &mut App| {
+                        window.with_element_offset(placed_offset, |window| {
+                            if let Some(order_fn) = &self.prepaint_order_fn {
+                                let order = order_fn(window, cx);
+                                for idx in order {
+                                    if let Some(child) = self.children.get_mut(idx) {
+                                        child.prepaint(window, cx);
+                                    }
+                                }
+                            } else {
+                                for child in &mut self.children {
                                     child.prepaint(window, cx);
                                 }
                             }
-                        } else {
-                            for child in &mut self.children {
-                                child.prepaint(window, cx);
-                            }
+                        });
+                    };
+
+                    // A scrolling block reuses its content while it only scrolls (PRF-004).
+                    let layer_mode = match (global_id, scroll_state.as_ref()) {
+                        (Some(id), Some(offset)) => {
+                            window.scroll_layer_note_nested(offset);
+                            let viewport = style
+                                .overflow_mask(bounds, window.rem_size())
+                                .map(|mask| mask.bounds);
+                            let background = style.background.as_ref().and_then(|fill| {
+                                let crate::Fill::Color(background) = fill;
+                                background
+                                    .as_solid()
+                                    .filter(|color| color.a >= 1.0)
+                                    .map(|_| *background)
+                            });
+                            let plain = style.corner_radii == Default::default()
+                                && style.opacity.is_none_or(|opacity| opacity >= 1.0);
+                            viewport.map(|viewport| {
+                                let params = crate::window::scroll_layers::LayerParams {
+                                    id,
+                                    bounds,
+                                    viewport,
+                                    extent: bounds.size
+                                        + scroll_extent(content_size, bounds, style, window).into(),
+                                    scroll_max: scroll_extent(content_size, bounds, style, window),
+                                    offset: offset.clone(),
+                                    scrollable: (
+                                        style.overflow.x == Overflow::Scroll,
+                                        style.overflow.y == Overflow::Scroll,
+                                    ),
+                                    background: background.filter(|_| plain),
+                                    style,
+                                    prepaint_listener: layer_candidate,
+                                };
+                                window.scroll_layer_begin(&params, placed_offset)
+                            })
                         }
-                    });
+                        _ => None,
+                    };
+                    match (global_id, layer_mode) {
+                        (Some(id), Some(crate::window::scroll_layers::LayerMode::Record(_))) => {
+                            window.scroll_layer_record_prepaint(id, |window| {
+                                prepaint_children(window, cx)
+                            });
+                        }
+                        (Some(id), Some(crate::window::scroll_layers::LayerMode::Composite)) => {
+                            window.scroll_layer_composite_prepaint(id, cx);
+                        }
+                        _ => prepaint_children(window, cx),
+                    }
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
                         listener(children_bounds, window, cx);
@@ -2224,18 +2284,41 @@ impl Element for Div {
                         return;
                     }
 
-                    for child in &mut self.children {
-                        child.paint(window, cx);
-                    }
-
-                    if let Some(scroll_offset) = scroll_offset.as_ref() {
-                        paint_classic_scrollbars(
-                            style,
-                            bounds,
-                            scroll_max,
-                            *scroll_offset.borrow(),
-                            window,
-                        );
+                    let scrollbars = |window: &mut Window| {
+                        if let Some(scroll_offset) = scroll_offset.as_ref() {
+                            paint_classic_scrollbars(
+                                style,
+                                bounds,
+                                scroll_max,
+                                *scroll_offset.borrow(),
+                                window,
+                            );
+                        }
+                    };
+                    let layer_mode = global_id
+                        .map(|id| window.scroll_layer_mode(id))
+                        .unwrap_or_default();
+                    match (global_id, layer_mode) {
+                        (Some(id), crate::window::scroll_layers::LayerMode::Record(_)) => {
+                            window.scroll_layer_record_paint(
+                                id,
+                                |window| {
+                                    for child in &mut self.children {
+                                        child.paint(window, cx);
+                                    }
+                                },
+                                scrollbars,
+                            );
+                        }
+                        (Some(id), crate::window::scroll_layers::LayerMode::Composite) => {
+                            window.scroll_layer_composite_paint(id, cx, scrollbars);
+                        }
+                        _ => {
+                            for child in &mut self.children {
+                                child.paint(window, cx);
+                            }
+                            scrollbars(window);
+                        }
                     }
                 },
             )
@@ -2243,10 +2326,45 @@ impl Element for Div {
     }
 }
 
+/// The largest scroll offset of a scroll container (a non-negative distance): its padded
+/// content size less its bounds.
+fn scroll_extent(
+    content_size: Size<Pixels>,
+    bounds: Bounds<Pixels>,
+    style: &Style,
+    window: &Window,
+) -> Point<Pixels> {
+    fn round_to_two_decimals(pixels: Pixels) -> Pixels {
+        const ROUNDING_FACTOR: f32 = 100.0;
+        (pixels * ROUNDING_FACTOR).round() / ROUNDING_FACTOR
+    }
+
+    let rem_size = window.rem_size();
+    // Taffy lays the box out with the padding snapped to the device pixel
+    // grid (`to_taffy`); recomputed unsnapped, e.g. py_1 at a fractional
+    // rem size, it exceeds `bounds` and leaves the box scrollable by the
+    // sub-pixel difference.
+    let padding = style
+        .padding
+        .to_pixels(bounds.size.into(), rem_size)
+        .map(|edge| window.pixel_snap(*edge));
+    let padding_size = size(padding.left + padding.right, padding.top + padding.bottom);
+    // The floating point values produced by Taffy and ours often vary
+    // slightly after ~5 decimal places. This can lead to cases where after
+    // subtracting these, the container becomes scrollable for less than
+    // 0.00000x pixels. As we generally don't benefit from a precision that
+    // high for the maximum scroll, we round the scroll max to 2 decimal
+    // places here.
+    let padded_content_size = content_size + padding_size;
+    Point::from(padded_content_size - bounds.size)
+        .map(round_to_two_decimals)
+        .max(&Default::default())
+}
+
 /// Paints the classic scrollbar thumbs of a scroll container after its children (CMP-031 R3-R7):
 /// only when the style names a valid scrollbar color, only on scrollable axes, anchored to the
 /// padding box of the viewport and derived from the offset clamped in this frame's prepaint.
-fn paint_classic_scrollbars(
+pub(crate) fn paint_classic_scrollbars(
     style: &Style,
     bounds: Bounds<Pixels>,
     scroll_max: Point<Pixels>,
@@ -2670,7 +2788,17 @@ impl Interactivity {
 
                                 let scroll_offset =
                                     self.clamp_scroll_position(bounds, &style, window, cx);
-                                let result = f(&style, scroll_offset, hitbox, window, cx);
+                                let curved_clip = style
+                                    .curved_overflow_clip_shape(
+                                        bounds,
+                                        window.rem_size(),
+                                        window.scale_factor(),
+                                    )
+                                    .is_some();
+                                let result = window
+                                    .with_curved_clip_ancestor(curved_clip, |window| {
+                                        f(&style, scroll_offset, hitbox, window, cx)
+                                    });
                                 (result, element_state)
                             },
                         )
@@ -2717,11 +2845,6 @@ impl Interactivity {
         window: &mut Window,
         _cx: &mut App,
     ) -> Point<Pixels> {
-        fn round_to_two_decimals(pixels: Pixels) -> Pixels {
-            const ROUNDING_FACTOR: f32 = 100.0;
-            (pixels * ROUNDING_FACTOR).round() / ROUNDING_FACTOR
-        }
-
         if let Some(scroll_offset) = self.scroll_offset.as_ref() {
             let mut scroll_to_bottom = false;
             let mut tracked_scroll_handle = self
@@ -2733,26 +2856,7 @@ impl Interactivity {
                 scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
             }
 
-            let rem_size = window.rem_size();
-            // Taffy lays the box out with the padding snapped to the device pixel
-            // grid (`to_taffy`); recomputed unsnapped, e.g. py_1 at a fractional
-            // rem size, it exceeds `bounds` and leaves the box scrollable by the
-            // sub-pixel difference.
-            let padding = style
-                .padding
-                .to_pixels(bounds.size.into(), rem_size)
-                .map(|edge| window.pixel_snap(*edge));
-            let padding_size = size(padding.left + padding.right, padding.top + padding.bottom);
-            // The floating point values produced by Taffy and ours often vary
-            // slightly after ~5 decimal places. This can lead to cases where after
-            // subtracting these, the container becomes scrollable for less than
-            // 0.00000x pixels. As we generally don't benefit from a precision that
-            // high for the maximum scroll, we round the scroll max to 2 decimal
-            // places here.
-            let padded_content_size = self.content_size + padding_size;
-            let scroll_max = Point::from(padded_content_size - bounds.size)
-                .map(round_to_two_decimals)
-                .max(&Default::default());
+            let scroll_max = scroll_extent(self.content_size, bounds, style, window);
             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
             // were removed or the bounds became larger).
             let mut scroll_offset = scroll_offset.borrow_mut();
@@ -2897,7 +3001,9 @@ impl Interactivity {
                                                 window,
                                                 cx,
                                             );
-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
+                                            self.paint_scroll_listener(
+                                                global_id, hitbox, &style, window, cx,
+                                            );
                                         }
 
                                         self.paint_keyboard_listeners(window, cx);
@@ -3668,6 +3774,7 @@ impl Interactivity {
 
     fn paint_scroll_listener(
         &self,
+        global_id: Option<&GlobalElementId>,
         hitbox: &Hitbox,
         style: &Style,
         window: &mut Window,
@@ -3681,6 +3788,7 @@ impl Interactivity {
             let line_height = window.line_height();
             let hitbox = hitbox.clone();
             let current_view = window.current_view();
+            let layer_block = global_id.cloned();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3724,8 +3832,15 @@ impl Interactivity {
                     scroll_offset.y += delta_y;
                     scroll_offset.x += delta_x;
                     if *scroll_offset != old_scroll_offset {
-                        window.retention.tracker.note_scroll_notification();
-                        cx.notify(current_view);
+                        // A scroll layer absorbs the scroll: its owner stays clean and the
+                        // content is composited at the new offset (PRF-004 R2).
+                        let absorbed = layer_block
+                            .as_ref()
+                            .is_some_and(|id| window.scroll_layer_absorb_scroll(id));
+                        if !absorbed {
+                            window.retention.tracker.note_scroll_notification();
+                            cx.notify(current_view);
+                        }
                     }
                 }
             });
@@ -4621,7 +4736,9 @@ impl ScrollHandle {
 
     /// Get the current scroll offset.
     pub fn offset(&self) -> Point<Pixels> {
-        *self.0.borrow().offset.borrow()
+        let state = self.0.borrow();
+        crate::window::scroll_layers::note_offset_read(&state.offset);
+        *state.offset.borrow()
     }
 
     /// Get the maximum scroll offset.
@@ -4632,6 +4749,7 @@ impl ScrollHandle {
     /// Get the top child that's scrolled into view.
     pub fn top_item(&self) -> usize {
         let state = self.0.borrow();
+        crate::window::scroll_layers::note_offset_read(&state.offset);
         let top = state.bounds.top() - state.offset.borrow().y;
 
         match state.child_bounds.binary_search_by(|bounds| {
@@ -4651,6 +4769,7 @@ impl ScrollHandle {
     /// Get the bottom child that's scrolled into view.
     pub fn bottom_item(&self) -> usize {
         let state = self.0.borrow();
+        crate::window::scroll_layers::note_offset_read(&state.offset);
         let bottom = state.bounds.bottom() - state.offset.borrow().y;
 
         match state.child_bounds.binary_search_by(|bounds| {

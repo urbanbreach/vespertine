@@ -68,7 +68,10 @@ pub trait FrameCheck {
     fn compare(&mut self, retained: &mut Harness, full: &mut Harness) -> Result<Comparison>;
 }
 
-/// The expanded scene primitives of the last frame, in paint order.
+/// The expanded scene primitives of the last frame. Scroll layers (PRF-004) are expanded into
+/// the primitives their tiles bake; primitives that do not overlap may differ in position
+/// (tiles bake them in another order than direct drawing paints them), every two overlapping
+/// ones keep their paint order.
 pub struct PrimitivesCheck;
 
 impl FrameCheck for PrimitivesCheck {
@@ -77,13 +80,17 @@ impl FrameCheck for PrimitivesCheck {
     }
 
     fn compare(&mut self, retained: &mut Harness, full: &mut Harness) -> Result<Comparison> {
-        let primitives = |harness: &mut Harness| {
-            harness.read_window(|window, _| window.painted_primitives().join("\n"))
-        };
-        Ok(Comparison::of_texts(
-            &primitives(retained)?,
-            &primitives(full)?,
-        ))
+        let content =
+            |harness: &mut Harness| harness.read_window(|window, _| window.painted_content());
+        let (shown, expected) = (content(retained)?, content(full)?);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (text, _) in &expected {
+            text.hash(&mut hasher);
+        }
+        Ok(Comparison {
+            digest: hasher.finish(),
+            mismatch: vespertine::painted_content_agrees(&expected, &shown).err(),
+        })
     }
 }
 

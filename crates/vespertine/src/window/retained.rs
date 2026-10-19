@@ -30,6 +30,9 @@ pub(crate) enum ViewKind {
     /// A retained row of a virtual list (PRF-005): nested in the view that owns the list,
     /// built by the list rather than by a view element.
     Row,
+    /// The content of a scroll block recorded as a layer (PRF-004): nested in the view that
+    /// owns the block, built by the block rather than by a view element.
+    Layer,
 }
 
 /// The ambient inputs a replay requires to be unchanged.
@@ -128,8 +131,11 @@ pub(crate) struct ViewRecord {
     pub live_epoch: u64,
     /// Frame epoch in which the record was last built (not merely replayed).
     pub built_epoch: u64,
-    /// What a row of a virtual list keeps besides the above (rows only).
+    /// What a row of a virtual list keeps besides the above (rows and layers only).
     pub row: Option<Box<RowData>>,
+    /// A scroll layer whose block scrolled while its owner stayed clean: the layer is placed
+    /// at the new offset without being rebuilt (layers only).
+    pub moved: bool,
 }
 
 /// The content-space output of one retained list row apart from the ranges its record
@@ -289,6 +295,7 @@ impl RetainedViews {
             registered_in_parent_epoch: u64::MAX,
             dirty: true,
             dirty_descendants: false,
+            moved: false,
             splice_unsafe: false,
             notified: false,
             rebuilt_dirty: false,
@@ -351,6 +358,43 @@ impl RetainedViews {
 
     /// Replaces the dependency set of a record and keeps the reverse indices
     /// in sync.
+    /// Creates the record of the layer of a scroll block nested in `parent`. Like a row, a
+    /// layer is invalidated by what it read, never by a notification of the owner's entity.
+    pub fn create_layer(
+        &mut self,
+        path: GlobalElementId,
+        owner: EntityId,
+        parent: Option<ViewKey>,
+    ) -> ViewKey {
+        let key = self.create(path, owner, ViewKind::Layer);
+        remove_key(&mut self.by_entity, owner, key);
+        if let Some(record) = self.get_mut(key) {
+            record.parent = parent;
+        }
+        self.register_with_parent(key);
+        key
+    }
+
+    /// Marks the layer `key` as moved: its owner is replayed around it, and the layer is
+    /// placed at the block's new offset (PRF-004 R2).
+    pub fn flag_moved(&mut self, key: ViewKey) {
+        let Some(record) = self.get_mut(key) else {
+            return;
+        };
+        record.moved = true;
+        let mut parent = record.parent;
+        while let Some(parent_key) = parent {
+            let Some(parent_record) = self.get_mut(parent_key) else {
+                break;
+            };
+            if parent_record.dirty_descendants {
+                break;
+            }
+            parent_record.dirty_descendants = true;
+            parent = parent_record.parent;
+        }
+    }
+
     /// Forgets the reads of a record that is about to be built again.
     pub fn reset_reads(&mut self, key: ViewKey) {
         if let Some(record) = self.get_mut(key) {
@@ -619,6 +663,17 @@ impl RetainedViews {
         stack.extend(self.get(root)?.children.iter().copied());
         while let Some(key) = stack.pop() {
             let record = self.get(key)?;
+            if record.kind == ViewKind::Layer {
+                // A layer is placed at its block's new offset when nothing it read changed;
+                // otherwise the view that owns it is built again.
+                if record.dirty {
+                    return None;
+                }
+                if record.moved {
+                    frontier.push(key);
+                }
+                continue;
+            }
             // A view that cannot be replayed around rebuilt views is rebuilt itself when any
             // view nested in it is dirty.
             if record.dirty || (record.splice_unsafe && record.dirty_descendants) {
@@ -682,6 +737,7 @@ impl RetainedViews {
             record.rebuilt_stale = false;
             record.dirty = false;
             record.dirty_descendants = false;
+            record.moved = false;
             record.splice_unsafe = false;
             record.parent = parent;
             record.live_epoch = epoch;
@@ -920,6 +976,8 @@ impl PaintIndex {
             && self.tab_handle_index <= range.end.tab_handle_index
             && self.effects_index >= range.start.effects_index
             && self.effects_index <= range.end.effects_index
+            && self.layer_frames_index >= range.start.layer_frames_index
+            && self.layer_frames_index <= range.end.layer_frames_index
             && self.a11y_listeners_index >= range.start.a11y_listeners_index
             && self.a11y_listeners_index <= range.end.a11y_listeners_index
             && self
@@ -1235,6 +1293,102 @@ impl Window {
                 }),
             })
             .collect()
+    }
+
+    /// What the last frame paints, as comparable text with the clipped bounds of each
+    /// primitive: scroll layers (PRF-004) are expanded into the primitives their tiles bake,
+    /// draw orders are left out, and so is everything that depends on atlas packing. Two frames
+    /// that draw the same pixels list the same primitives; only primitives that do not overlap
+    /// may differ in position (use [`painted_content_agrees`]).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn painted_content(&self) -> Vec<(String, Bounds<crate::ScaledPixels>)> {
+        use crate::scene::{PaintOperation, Primitive};
+        let describe = |primitive: &Primitive| -> (String, Bounds<crate::ScaledPixels>) {
+            let mut primitive = primitive.clone();
+            crate::scroll_layer::strip_identity(&mut primitive);
+            let bounds = primitive
+                .painted_bounds()
+                .intersect(&primitive.content_mask().bounds);
+            let meaning = |tile: &crate::AtlasTile| match self.sprite_atlas.key_for_tile(tile) {
+                Some(key) => format!(" shows={key:?}"),
+                None => format!(
+                    " shows={:?} {:?} padding {}",
+                    tile.texture_id.kind, tile.bounds.size, tile.padding
+                ),
+            };
+            let text = match &mut primitive {
+                Primitive::Shadow(p) => format!("{p:?}"),
+                Primitive::Quad(p) => format!("{p:?}"),
+                Primitive::Path(p) => format!("{p:?}"),
+                Primitive::Underline(p) => format!("{p:?}"),
+                Primitive::MonochromeSprite(p) => {
+                    let shows = meaning(&p.tile);
+                    p.tile = crate::scroll_layer::blank_tile();
+                    format!("{p:?}{shows}")
+                }
+                Primitive::SubpixelSprite(p) => {
+                    let shows = meaning(&p.tile);
+                    p.tile = crate::scroll_layer::blank_tile();
+                    format!("{p:?}{shows}")
+                }
+                Primitive::PolychromeSprite(p) => {
+                    let shows = meaning(&p.tile);
+                    p.tile = crate::scroll_layer::blank_tile();
+                    format!("{p:?}{shows}")
+                }
+                Primitive::Surface(p) => format!("{p:?}"),
+            };
+            (text, bounds)
+        };
+        let frames = self.rendered_frame.scene.layers.frames();
+        let mut expanded: Vec<crate::LayerId> = Vec::new();
+        let mut content = Vec::new();
+        for operation in &self.rendered_frame.scene.paint_operations {
+            let PaintOperation::Primitive(primitive) = operation else {
+                continue;
+            };
+            if let Primitive::PolychromeSprite(sprite) = primitive
+                && let Some((layer, coord)) = crate::tile_identity(&sprite.tile)
+            {
+                if expanded.contains(&layer) {
+                    continue;
+                }
+                expanded.push(layer);
+                let Some(frame) = frames.iter().find(|frame| frame.id() == layer) else {
+                    continue;
+                };
+                // The window position of content space follows from where this tile was drawn.
+                let tile = coord.bounds();
+                let offset = crate::point(
+                    crate::ScaledPixels(sprite.bounds.origin.x.0 - tile.origin.x.0 as f32),
+                    crate::ScaledPixels(sprite.bounds.origin.y.0 - tile.origin.y.0 as f32),
+                );
+                for baked in
+                    frame
+                        .content()
+                        .baked()
+                        .paint_operations
+                        .iter()
+                        .filter_map(|operation| match operation {
+                            PaintOperation::Primitive(primitive) => Some(primitive),
+                            _ => None,
+                        })
+                {
+                    let moved = baked.translated(offset, Some(sprite.content_mask.bounds));
+                    if moved
+                        .painted_bounds()
+                        .intersect(&moved.content_mask().bounds)
+                        .is_empty()
+                    {
+                        continue;
+                    }
+                    content.push(describe(&moved));
+                }
+                continue;
+            }
+            content.push(describe(primitive));
+        }
+        content
     }
 
     /// The atlas identity (texture index, tile id) of every sprite painted by the last frame, in

@@ -361,7 +361,9 @@ enum ViewStateInner {
 /// A view nested in a replayed view that was built again in this frame.
 struct SplicedChild {
     key: ViewKey,
-    layout_id: LayoutId,
+    /// The layout root of a rebuilt view; `None` for a scroll layer (PRF-004), which is placed
+    /// at its block's new offset instead of being built.
+    layout_id: Option<LayoutId>,
     element: Option<AnyElement>,
     wrapper_node: Option<DispatchNodeId>,
     state: Option<ViewState>,
@@ -752,10 +754,27 @@ fn splice_layout(window: &mut Window, cx: &mut App, key: ViewKey) -> Option<Vec<
         window.retention.views.clear_dirty_descendants(key);
         return Some(Vec::new());
     }
+    // Layers move only when every one of them can be placed at its block's new offset.
+    for child in &frontier {
+        let record = window.retention.views.get(*child)?;
+        if record.kind == ViewKind::Layer && !window.scroll_layer_can_splice(*child) {
+            return None;
+        }
+    }
     let writes_before = window.layout_write_count();
     let mut built = Vec::with_capacity(frontier.len());
     for child in frontier {
         let record = window.retention.views.get(child)?;
+        if record.kind == ViewKind::Layer {
+            built.push(SplicedChild {
+                key: child,
+                layout_id: None,
+                element: None,
+                wrapper_node: None,
+                state: None,
+            });
+            continue;
+        }
         let (ambient, view, layout_key, parent) = (
             record.ambient.clone()?,
             record.view.clone()?,
@@ -776,7 +795,7 @@ fn splice_layout(window: &mut Window, cx: &mut App, key: ViewKey) -> Option<Vec<
         });
         built.push(SplicedChild {
             key: child,
-            layout_id,
+            layout_id: Some(layout_id),
             element: Some(element),
             wrapper_node: None,
             state: None,
@@ -787,11 +806,11 @@ fn splice_layout(window: &mut Window, cx: &mut App, key: ViewKey) -> Option<Vec<
         // built again and adopts the children built here.
         window.frame_stats_mut().splice_failures += 1;
         for child in built {
-            if let Some(element) = child.element {
+            if let (Some(layout_id), Some(element)) = (child.layout_id, child.element) {
                 window
                     .retention
                     .adopted
-                    .insert(child.key, (child.layout_id, element));
+                    .insert(child.key, (layout_id, element));
             }
         }
         return None;
@@ -931,11 +950,11 @@ fn prepaint_view(
                     // them a second time.
                     window.frame_stats_mut().splice_failures += 1;
                     for child in splice {
-                        if let Some(element) = child.element {
+                        if let (Some(layout_id), Some(element)) = (child.layout_id, child.element) {
                             window
                                 .retention
                                 .adopted
-                                .insert(child.key, (child.layout_id, element));
+                                .insert(child.key, (layout_id, element));
                         }
                     }
                 }
@@ -1055,6 +1074,12 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
         };
         cursor = gaps[ix].end.clone();
 
+        let Some(layout_id) = child.layout_id else {
+            // A scroll layer: placed at the new offset of its block.
+            let placed = window.scroll_layer_splice_prepaint(key, child.key, &map, attachment, cx);
+            debug_assert!(placed, "layers are checked before the owner is replayed");
+            continue;
+        };
         let record = window
             .retention
             .views
@@ -1078,7 +1103,6 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
             .and_then(|prepaint| prepaint.dispatch_parent)
             .map(DispatchNodeId::from_index);
         let new_parent = old_parent.and_then(|old| map.resolve(old)).or(attachment);
-        let layout_id = child.layout_id;
         let element = child.element.take();
         let (node, state) = window.with_ambient(&ambient, AmbientPhase::Prepaint, |window| {
             if let Some(new_parent) = new_parent {
@@ -1205,6 +1229,10 @@ fn paint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [
             break;
         };
         cursor = gaps[ix].end.clone();
+        if child.layout_id.is_none() {
+            window.scroll_layer_splice_paint(child.key, cx);
+            continue;
+        }
         let record = window
             .retention
             .views

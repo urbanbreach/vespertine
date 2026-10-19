@@ -19,7 +19,8 @@ pub use wgpu_context::*;
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 pub use wgpu_renderer::WgpuHeadlessRenderer;
 pub use wgpu_renderer::{
-    ClipStats, FillClass, FillRecord, GpuContext, RecordStats, WgpuRenderer, WgpuSurfaceConfig,
+    ClipStats, FillClass, FillRecord, GpuContext, RecordStats, TileStats, WgpuRenderer,
+    WgpuSurfaceConfig,
 };
 
 #[cfg(test)]
@@ -60,3 +61,5 @@ mod tests_style_pixels;
 
 #[cfg(test)]
 mod tests_floating;
+#[cfg(test)]
+mod tests_scroll_layers;
