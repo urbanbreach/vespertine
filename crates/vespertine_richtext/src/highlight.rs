@@ -19,6 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use vespertine::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
     IntoElement, LayoutId, Pixels, Window,
@@ -108,6 +109,11 @@ impl HostFrame {
         };
         self.pieces.borrow_mut().insert(run, (group, piece));
         piece
+    }
+
+    /// The piece index a retained run registered in prepaint, if it did.
+    pub fn piece_of(&self, run: RunKey) -> Option<usize> {
+        self.pieces.borrow().get(&run).map(|(_, piece)| *piece)
     }
 
     fn color(&self, spec: &HighlightSpec, active: bool, accent: Hsla) -> Hsla {
@@ -265,13 +271,25 @@ impl IntoElement for Highlight {
     }
 }
 
-/// What the host keeps between layout, prepaint and paint.
-pub struct HighlightPrepaint {
-    frame: Rc<HostFrame>,
+/// What the host keeps between layout and prepaint.
+pub struct HighlightLayout {
+    state: Rc<RefCell<HostState>>,
+    /// Unique to this construction of the host: views nested in it are rebuilt whenever the host
+    /// is (see `Window::with_retention_context`).
+    token: u64,
 }
 
+/// What the host keeps between prepaint and paint: where its effects leave the frame's
+/// declaration, shared by the effects of prepaint and paint (which replay together).
+pub struct HighlightPrepaint {
+    frame: Rc<RefCell<Option<Rc<HostFrame>>>>,
+}
+
+/// Source of the host tokens.
+static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+
 impl Element for Highlight {
-    type RequestLayoutState = Rc<RefCell<HostState>>;
+    type RequestLayoutState = HighlightLayout;
     type PrepaintState = HighlightPrepaint;
 
     fn id(&self) -> Option<ElementId> {
@@ -299,7 +317,16 @@ impl Element for Highlight {
         if let Some(numbering) = &self.numbering {
             state.borrow_mut().numbering = numbering.clone();
         }
-        (self.child.request_layout(window, cx), state)
+        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        let layout_id = if self.declaration.is_empty() {
+            self.child.request_layout(window, cx)
+        } else {
+            // Washes are numbered over everything the host covers in paint order, so the view
+            // holding the host is rebuilt together with every view nested in it.
+            window.require_whole_view_rebuild();
+            window.with_retention_context(token, |window| self.child.request_layout(window, cx))
+        };
+        (layout_id, HighlightLayout { state, token })
     }
 
     fn prepaint(
@@ -311,25 +338,47 @@ impl Element for Highlight {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let numbering = request_layout.borrow().numbering.clone();
-        let frame = Rc::new(HostFrame {
-            declaration: self.declaration.clone(),
-            state: request_layout.clone(),
-            numbering,
-            key: hash_of(id),
-            groups: RefCell::default(),
-            pieces: RefCell::default(),
-            resolution: RefCell::default(),
-        });
+        let state = request_layout.state.clone();
+        let numbering = state.borrow().numbering.clone();
+        let slot: Rc<RefCell<Option<Rc<HostFrame>>>> = Rc::default();
         let service = TextService::current();
-        if let Some(service) = &service {
-            service.push_highlight(frame.clone());
+        let declaration = self.declaration.clone();
+        let key = hash_of(id);
+        window.prepaint_effect(cx, {
+            let slot = slot.clone();
+            let service = service.clone();
+            Rc::new(move |_, _| {
+                let frame = Rc::new(HostFrame {
+                    declaration: declaration.clone(),
+                    state: state.clone(),
+                    numbering: numbering.clone(),
+                    key,
+                    groups: RefCell::default(),
+                    pieces: RefCell::default(),
+                    resolution: RefCell::default(),
+                });
+                *slot.borrow_mut() = Some(frame.clone());
+                if let Some(service) = &service {
+                    service.push_highlight(frame);
+                }
+            })
+        });
+        if self.declaration.is_empty() {
+            self.child.prepaint(window, cx);
+        } else {
+            window.with_retention_context(request_layout.token, |window| {
+                self.child.prepaint(window, cx)
+            });
         }
-        self.child.prepaint(window, cx);
-        if let Some(service) = &service {
-            service.pop_highlight();
-        }
-        HighlightPrepaint { frame }
+        window.prepaint_effect(
+            cx,
+            Rc::new(move |_, _| {
+                if let Some(service) = &service {
+                    service.pop_highlight();
+                }
+            }),
+        );
+        HighlightPrepaint { frame: slot }
     }
 
     fn paint(
@@ -342,36 +391,61 @@ impl Element for Highlight {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let frame = prepaint.frame.clone();
         let service = TextService::current();
-        if let Some(service) = &service {
-            let mut state = frame.state.borrow_mut();
-            state.numbering.begin_frame_if_new(service.frame_id());
-            if !frame.declaration.is_empty() {
-                let groups = frame.groups.borrow().clone();
-                let resolution = state.resolver.resolve(&frame.declaration, &groups);
-                let fire = (resolution.identity != state.last_identity).then(|| {
-                    state.last_identity = resolution.identity;
-                    resolution.total
-                });
-                *frame.resolution.borrow_mut() = Some(resolution);
-                drop(state);
-                if let (Some(total), Some(callback)) = (fire, self.on_count.clone()) {
-                    window.defer(cx, move |window, cx| callback(total, window, cx));
-                }
-            } else if state.last_identity != Resolution::empty().identity {
-                // The declaration became empty: report the (now zero) count once.
-                state.last_identity = Resolution::empty().identity;
-                drop(state);
-                if let Some(callback) = self.on_count.clone() {
-                    window.defer(cx, move |window, cx| callback(0, window, cx));
-                }
-            }
-            service.push_highlight(frame.clone());
-        }
+        let slot = prepaint.frame.clone();
+        let on_count = self.on_count.clone();
+        window.paint_effect(cx, {
+            let service = service.clone();
+            Rc::new(move |window, cx| {
+                let (Some(service), Some(frame)) = (&service, slot.borrow().clone()) else {
+                    return;
+                };
+                begin_painting(&frame, service, on_count.as_ref(), window, cx);
+                service.push_highlight(frame);
+            })
+        });
         self.child.paint(window, cx);
-        if let Some(service) = &service {
-            service.pop_highlight();
+        window.paint_effect(
+            cx,
+            Rc::new(move |_, _| {
+                if let Some(service) = &service {
+                    service.pop_highlight();
+                }
+            }),
+        );
+    }
+}
+
+/// Starts painting under `frame`: restarts the numbering once per frame, resolves the
+/// declaration over every group registered in prepaint and reports the match count when its
+/// identity changed.
+fn begin_painting(
+    frame: &Rc<HostFrame>,
+    service: &TextService,
+    on_count: Option<&CountCallback>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let mut state = frame.state.borrow_mut();
+    state.numbering.begin_frame_if_new(service.frame_id());
+    if !frame.declaration.is_empty() {
+        let groups = frame.groups.borrow().clone();
+        let resolution = state.resolver.resolve(&frame.declaration, &groups);
+        let fire = (resolution.identity != state.last_identity).then(|| {
+            state.last_identity = resolution.identity;
+            resolution.total
+        });
+        *frame.resolution.borrow_mut() = Some(resolution);
+        drop(state);
+        if let (Some(total), Some(callback)) = (fire, on_count.cloned()) {
+            window.defer(cx, move |window, cx| callback(total, window, cx));
+        }
+    } else if state.last_identity != Resolution::empty().identity {
+        // The declaration became empty: report the (now zero) count once.
+        state.last_identity = Resolution::empty().identity;
+        drop(state);
+        if let Some(callback) = on_count.cloned() {
+            window.defer(cx, move |window, cx| callback(0, window, cx));
         }
     }
 }

@@ -1,47 +1,76 @@
 //! Theme roles and metrics of the browser surface (CMP-022 R2).
 //!
-//! The surface reads every colour from a [`BrowserTheme`]; the defaults are a neutral dark set.
-//! A theme system (THM-003) replaces only the source of the colours by building a
-//! [`BrowserTheme`] and handing it to `BrowserSurface::set_theme`.
+//! Every colour of the surface is a semantic role of the active THM-003 theme: [`BrowserTheme`]
+//! maps the theme's colour table onto the nine roles the chrome uses. Without an installed theme
+//! the roles come from the built-in neutral dark variant (the THM-002 tokens), never from values
+//! private to the browser surface. An embedder may still hand an explicit [`BrowserTheme`] to
+//! `BrowserSurface::set_theme`.
 
-use vespertine::{Hsla, Pixels, px, rgb, rgba};
+use vespertine::{App, Hsla, Pixels, px};
+use vespertine_theme::{
+    appearance::{ActiveTheme, try_theme_of},
+    builtin::neutral_variant,
+    theme::{Appearance, ColorTable},
+};
 
 /// The theme roles the browser surface uses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BrowserTheme {
-    /// Primary text.
+    /// Primary text (`text`).
     pub text: Hsla,
-    /// Muted text: icons and secondary labels.
+    /// Muted text: icons and secondary labels (`textMuted`).
     pub muted: Hsla,
-    /// Faint text: hints.
+    /// Faint text: hints (`textFaint`).
     pub faint: Hsla,
-    /// Hairline borders.
+    /// Hairline borders (`border`).
     pub border: Hsla,
-    /// Borders of focused or emphasized controls.
+    /// Borders of focused or emphasized controls (`borderStrong`).
     pub strong_border: Hsla,
-    /// Raised surfaces: toolbar, buttons, cards.
+    /// Raised surfaces: toolbar, buttons, cards (`raised`).
     pub raised: Hsla,
-    /// Opaque backing of the page area and the address field.
+    /// Opaque backing of the page area and the address field (`background`).
     pub page_background: Hsla,
-    /// Validation border and message.
+    /// Validation border and message (`danger`).
     pub danger: Hsla,
-    /// Translucent wash drawn over hovered controls.
+    /// Translucent wash drawn over hovered controls (`hover`).
     pub hover: Hsla,
 }
 
-impl Default for BrowserTheme {
-    fn default() -> Self {
+impl BrowserTheme {
+    /// The roles of a colour table (THM-003 R2).
+    pub fn from_colors(colors: &ColorTable) -> Self {
         Self {
-            text: rgb(0xF0F1F3).into(),
-            muted: rgb(0xA3A9B5).into(),
-            faint: rgb(0x727886).into(),
-            border: rgb(0x3F4450).into(),
-            strong_border: rgb(0x6B7384).into(),
-            raised: rgb(0x30343D).into(),
-            page_background: rgb(0x181A1F).into(),
-            danger: rgb(0xE5675F).into(),
-            hover: rgba(0xFFFFFF1A).into(),
+            text: colors.text.to_hsla(),
+            muted: colors.text_muted.to_hsla(),
+            faint: colors.text_faint.to_hsla(),
+            border: colors.border.to_hsla(),
+            strong_border: colors.border_strong.to_hsla(),
+            raised: colors.raised.to_hsla(),
+            page_background: colors.background.to_hsla(),
+            danger: colors.danger.to_hsla(),
+            hover: colors.hover.to_hsla(),
         }
+    }
+
+    /// The roles of a resolved theme.
+    pub fn from_theme(theme: &ActiveTheme) -> Self {
+        Self::from_colors(&theme.colors)
+    }
+
+    /// The roles of the active theme, or of the built-in neutral dark variant when no theme is
+    /// installed.
+    pub fn current(cx: &App) -> Self {
+        match try_theme_of(cx) {
+            Some(theme) => Self::from_theme(theme),
+            None => Self::default(),
+        }
+    }
+}
+
+impl Default for BrowserTheme {
+    /// The roles of the built-in neutral dark variant (the THM-002 dark tokens).
+    fn default() -> Self {
+        Self::from_colors(&neutral_variant(Appearance::Dark).colors)
     }
 }
 

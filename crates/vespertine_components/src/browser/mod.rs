@@ -6,7 +6,7 @@
 //! It owns address normalization and the scheme policy ([`model`]), loading and error
 //! presentation, page-provided menus, presentation states, per-profile website-data selection
 //! (through the [`BrowserContext`] it is created with) and the lifecycle rules that make
-//! asynchronous engine startup safe. Colours come from a [`BrowserTheme`]; behaviour, states and
+//! asynchronous engine startup safe. Colours are the semantic roles of the active THM-003 theme ([`BrowserTheme::current`]); behaviour, states and
 //! interaction are specified, not an application look.
 //!
 //! Register the key bindings once with [`bind_keys`] (or [`bind_shortcuts`] for embedder chords),

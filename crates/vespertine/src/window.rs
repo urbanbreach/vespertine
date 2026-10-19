@@ -1110,7 +1110,17 @@ pub(crate) struct Frame {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
     pub(crate) tab_stops: TabStopMap,
+    /// Side effects recorded while prepainting, in order (see [`Window::prepaint_effect`]).
+    pub(crate) prepaint_effects: Vec<ReplayEffect>,
+    /// Side effects recorded while painting, in order (see [`Window::paint_effect`]).
+    pub(crate) paint_effects: Vec<ReplayEffect>,
 }
+
+/// A side effect of prepainting or painting that is not part of a frame's own output (window
+/// state an element updates while it draws). The frame records it so that replaying the view
+/// that produced it (PRF-001) performs it again, in order, with the rest of the replayed output.
+/// See [`Window::prepaint_effect`] and [`Window::paint_effect`].
+pub type ReplayEffect = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
@@ -1121,6 +1131,7 @@ pub(crate) struct PrepaintStateIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+    effects_index: usize,
 }
 
 #[derive(Clone, Default)]
@@ -1135,6 +1146,7 @@ pub(crate) struct PaintIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+    effects_index: usize,
 }
 
 impl PrepaintStateIndex {
@@ -1169,6 +1181,7 @@ impl PrepaintStateIndex {
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
+            effects_index: self.effects_index - from.effects_index + to.effects_index,
         }
     }
 }
@@ -1197,6 +1210,7 @@ impl PaintIndex {
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
+            effects_index: self.effects_index - from.effects_index + to.effects_index,
         }
     }
 }
@@ -1236,6 +1250,8 @@ impl Frame {
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_hitboxes: FxHashMap::default(),
             tab_stops: TabStopMap::default(),
+            prepaint_effects: Vec::new(),
+            paint_effects: Vec::new(),
         }
     }
 
@@ -1253,6 +1269,8 @@ impl Frame {
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
         self.tab_stops.clear();
+        self.prepaint_effects.clear();
+        self.paint_effects.clear();
         self.focus = None;
 
         #[cfg(any(test, feature = "test-support"))]
@@ -4352,7 +4370,7 @@ impl Window {
                     });
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
                 } else {
-                    self.reuse_prepaint(prepaint_range);
+                    self.reuse_prepaint(prepaint_range, cx);
                 }
                 let prepaint_end = self.prepaint_index();
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
@@ -4395,7 +4413,7 @@ impl Window {
                     })
                 })
             } else {
-                self.reuse_paint(deferred_draw.paint_range.clone());
+                self.reuse_paint(deferred_draw.paint_range.clone(), cx);
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -4420,11 +4438,12 @@ impl Window {
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
+            effects_index: self.next_frame.prepaint_effects.len(),
         }
     }
 
-    pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
-        self.reuse_prepaint_mapped(range, None);
+    pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>, cx: &mut App) {
+        self.reuse_prepaint_mapped(range, None, cx);
     }
 
     /// Copies the prepaint output in `range` from the previous frame. With a
@@ -4435,6 +4454,7 @@ impl Window {
         &mut self,
         range: Range<PrepaintStateIndex>,
         map: Option<&retained::SpliceMap>,
+        cx: &mut App,
     ) {
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
@@ -4500,6 +4520,16 @@ impl Window {
                     paint_range: deferred_draw.paint_range.clone(),
                 }),
         );
+
+        let effects: SmallVec<[ReplayEffect; 4]> = self.rendered_frame.prepaint_effects
+            [range.start.effects_index..range.end.effects_index]
+            .iter()
+            .cloned()
+            .collect();
+        for effect in effects {
+            self.next_frame.prepaint_effects.push(effect.clone());
+            effect(self, cx);
+        }
     }
 
     pub(crate) fn paint_index(&self) -> PaintIndex {
@@ -4514,10 +4544,11 @@ impl Window {
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
+            effects_index: self.next_frame.paint_effects.len(),
         }
     }
 
-    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+    pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>, cx: &mut App) {
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -4569,6 +4600,55 @@ impl Window {
             range.start.scene_index..range.end.scene_index,
             &self.rendered_frame.scene,
         );
+
+        let effects: SmallVec<[ReplayEffect; 4]> = self.rendered_frame.paint_effects
+            [range.start.effects_index..range.end.effects_index]
+            .iter()
+            .cloned()
+            .collect();
+        for effect in effects {
+            self.next_frame.paint_effects.push(effect.clone());
+            effect(self, cx);
+        }
+    }
+
+    /// Performs `effect` now, while prepainting, and records it: replaying the prepaint output of
+    /// the view being prepainted (PRF-001) performs it again, in order, instead of running the
+    /// element code that produced it. Use it for every update an element makes to state outside
+    /// the frame's output (registries, scoped context stacks) that later elements or the
+    /// application read: a replayed view would otherwise leave that state without it.
+    ///
+    /// `effect` must not depend on anything but what it captured and the state its predecessors
+    /// in the same journal left behind. This method should only be called during the prepaint
+    /// phase of element drawing.
+    pub fn prepaint_effect(&mut self, cx: &mut App, effect: ReplayEffect) {
+        self.invalidator.debug_assert_prepaint();
+        self.next_frame.prepaint_effects.push(effect.clone());
+        effect(self, cx);
+    }
+
+    /// Records `effect` as [`Window::prepaint_effect`] does, without performing it: the caller
+    /// has performed it already (to use its outcome).
+    pub fn record_prepaint_effect(&mut self, effect: ReplayEffect) {
+        self.invalidator.debug_assert_prepaint();
+        self.next_frame.prepaint_effects.push(effect);
+    }
+
+    /// The paint-phase counterpart of [`Window::prepaint_effect`]: performs `effect` now, while
+    /// painting, and records it so that replaying the paint output of the view being painted
+    /// performs it again. This method should only be called during the paint phase of element
+    /// drawing.
+    pub fn paint_effect(&mut self, cx: &mut App, effect: ReplayEffect) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.paint_effects.push(effect.clone());
+        effect(self, cx);
+    }
+
+    /// Records `effect` as [`Window::paint_effect`] does, without performing it: the caller has
+    /// performed it already (to use its outcome).
+    pub fn record_paint_effect(&mut self, effect: ReplayEffect) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.paint_effects.push(effect);
     }
 
     /// Push a text style onto the stack, and call a function with that style active.
@@ -4840,6 +4920,9 @@ impl Window {
                 .accessed_element_states
                 .truncate(index.accessed_element_states_index);
             self.next_frame.tab_stops.truncate(index.tab_handle_index);
+            self.next_frame
+                .prepaint_effects
+                .truncate(index.effects_index);
             self.text_system.truncate_layouts(index.line_layout_index);
         }
         result

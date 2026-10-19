@@ -540,8 +540,9 @@ fn verdict(window: &Window, key: ViewKey, kind: ViewKind) -> Verdict {
         return Verdict::Rebuild;
     }
     if record.dirty_descendants {
-        // Explicitly cached views are rebuilt when anything inside them changed.
-        if kind == ViewKind::Retained {
+        // Explicitly cached views are rebuilt when anything inside them changed, and so are
+        // views that cannot be replayed around rebuilt views.
+        if kind == ViewKind::Retained && !record.splice_unsafe {
             Verdict::Splice
         } else {
             Verdict::Rebuild
@@ -885,7 +886,7 @@ fn prepaint_view(
                     let parent = window.retention.stack.last().copied();
                     window.retention.views.adopt(key, parent);
                     let start = window.prepaint_index();
-                    window.reuse_prepaint(old.clone());
+                    window.reuse_prepaint(old.clone(), cx);
                     let end = window.prepaint_index();
                     window.rebase_prepaint_subtree(key, old, start..end);
                     if kind == ViewKind::Cached {
@@ -1035,7 +1036,7 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
             .map_or_else(|| old.end.clone(), |gap| gap.start.clone());
         let stretch = cursor.clone()..stretch_end;
         let new_start = window.prepaint_index();
-        window.reuse_prepaint_mapped(stretch.clone(), Some(&map));
+        window.reuse_prepaint_mapped(stretch.clone(), Some(&map), cx);
         map.push(
             stretch.start.dispatch_tree_index()..stretch.end.dispatch_tree_index(),
             new_start.dispatch_tree_index(),
@@ -1148,7 +1149,7 @@ fn paint_view(entity_id: EntityId, state: &mut ViewState, window: &mut Window, c
                     .get(key)
                     .and_then(|record| record.paint.clone())
                     .expect("replayed views have paint output");
-                window.reuse_paint(old.clone());
+                window.reuse_paint(old.clone(), cx);
                 let end = window.paint_index();
                 window.rebase_paint_subtree(key, old, start..end);
                 return;
@@ -1190,7 +1191,7 @@ fn paint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [
             .map_or_else(|| old.end.clone(), |gap| gap.start.clone());
         let stretch = cursor.clone()..stretch_end;
         let new_start = window.paint_index();
-        window.reuse_paint(stretch.clone());
+        window.reuse_paint(stretch.clone(), cx);
         stretches.push((stretch, new_start));
         let Some(child) = splice.get_mut(ix) else {
             break;

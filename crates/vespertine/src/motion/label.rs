@@ -531,17 +531,31 @@ pub struct RollGlyphPaint {
 
 /// Paints one rolling glyph.
 ///
-/// Emoji and glyphs whose transform is a pure translation use the ordinary glyph path at the
-/// translated origin. Glyphs with tilt, scale or blur belong to the composite-time transformed
-/// glyph painter (RND-005); until that painter exists they are painted at the position the
-/// transform maps their origin to, with their opacity, but without tilt, scale and blur.
+/// Emoji, and glyphs whose transform is a pure translation with no blur, use the ordinary glyph
+/// path at the translated origin (emoji only ever translate). Glyphs with tilt, scale or blur use
+/// RND-005's composite-time transformed glyph painter: the same cached raster tile is sampled with
+/// the transform (in device pixels, pivot included) and the blur sigma, so rolling never
+/// rasterizes or uploads anything new.
 pub fn paint_roll_glyph(window: &mut Window, paint: &RollGlyphPaint) -> crate::Result<()> {
     let scale_factor = window.scale_factor();
-    let moved = paint
-        .transformation
-        .apply(paint.origin.scale(scale_factor).map(|v| px(v.0)));
-    let origin = point(moved.x / scale_factor, moved.y / scale_factor);
+    let [[xx, xy], [yx, yy]] = paint.transformation.rotation_scale;
+    let translation_only = xx == 1.0 && xy == 0.0 && yx == 0.0 && yy == 1.0;
     window.with_element_opacity(Some(paint.opacity), |window| {
+        if !paint.is_emoji && (!translation_only || paint.blur > px(0.0)) {
+            return window.paint_glyph_transformed(
+                paint.origin,
+                paint.font_id,
+                paint.glyph_id,
+                paint.font_size,
+                paint.color,
+                paint.transformation,
+                paint.blur,
+            );
+        }
+        let moved = paint
+            .transformation
+            .apply(paint.origin.scale(scale_factor).map(|v| px(v.0)));
+        let origin = point(moved.x / scale_factor, moved.y / scale_factor);
         if paint.is_emoji {
             window.paint_emoji(origin, paint.font_id, paint.glyph_id, paint.font_size)
         } else {

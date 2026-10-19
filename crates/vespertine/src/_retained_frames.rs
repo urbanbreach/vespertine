@@ -47,6 +47,25 @@
 //! their view from it. Retention runs on the UI drawing thread only: render closures are
 //! never run speculatively on worker threads.
 //!
+//! ## Custom elements that keep window-level state
+//!
+//! A replayed view does not run its elements, so an element that updates state outside the
+//! frame's own output while it prepaints or paints (a registry of painted runs, a stack of
+//! inherited settings, a counter numbered in paint order) would leave that state without
+//! the view's contribution. Such updates go through `Window::prepaint_effect` and
+//! `Window::paint_effect` (or `Window::record_prepaint_effect` and
+//! `Window::record_paint_effect` when the caller performed them already): the frame records
+//! the effect, and replaying the view performs it again, in order, with the rest of the
+//! replayed output. An effect may depend only on what it captured and on state its
+//! predecessors left behind.
+//!
+//! Two more hooks keep views that inherit something from an element consistent with it.
+//! `Window::with_retention_context` mixes a token into the context the views built inside it
+//! are replayed under, so nested views are rebuilt when what they inherit changes (a token
+//! that is unique per construction rebuilds them whenever the element is rebuilt), and
+//! `Window::require_whole_view_rebuild` declares that the view being built computes state
+//! over its whole subtree, so it is rebuilt, never replayed around a rebuilt nested view.
+//!
 //! ## Testing and benchmarking
 //!
 //! With the `test-support` feature, `Window::set_retention_enabled`

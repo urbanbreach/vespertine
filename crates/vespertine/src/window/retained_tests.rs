@@ -1101,3 +1101,344 @@ fn input_queries_invalidate_only_when_they_notify(cx: &mut TestAppContext) {
         "a notifying query invalidates its readers"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Replayable effects, retention contexts and whole-view rebuilds
+// ---------------------------------------------------------------------------
+
+type EffectLog = Rc<std::cell::RefCell<Vec<&'static str>>>;
+
+/// An element that performs an effect in each phase: `prepaint` and `paint` get the name of the
+/// phase and `name` pushed to their log.
+fn recording(name: &'static str, pre: &EffectLog, paint: &EffectLog) -> crate::Canvas<()> {
+    let (pre, paint) = (pre.clone(), paint.clone());
+    crate::canvas(
+        move |_, window, cx| {
+            window.prepaint_effect(cx, Rc::new(move |_, _| pre.borrow_mut().push(name)));
+        },
+        move |_, (), window, cx| {
+            window.paint_effect(cx, Rc::new(move |_, _| paint.borrow_mut().push(name)));
+        },
+    )
+    .w(px(10.))
+    .h(px(10.))
+}
+
+/// An element whose effects start a frame's logs over.
+fn clearing(pre: &EffectLog, paint: &EffectLog) -> crate::Canvas<()> {
+    let (pre, paint) = (pre.clone(), paint.clone());
+    crate::canvas(
+        move |_, window, cx| {
+            window.prepaint_effect(cx, Rc::new(move |_, _| pre.borrow_mut().clear()));
+        },
+        move |_, (), window, cx| {
+            window.paint_effect(cx, Rc::new(move |_, _| paint.borrow_mut().clear()));
+        },
+    )
+    .w(px(10.))
+    .h(px(10.))
+}
+
+struct EffectLine {
+    name: &'static str,
+    pre: EffectLog,
+    paint: EffectLog,
+}
+
+impl Render for EffectLine {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(100.))
+            .h(px(20.))
+            .child(recording(self.name, &self.pre, &self.paint))
+    }
+}
+
+struct EffectDocument {
+    lines: Vec<Entity<EffectLine>>,
+    pre: EffectLog,
+    paint: EffectLog,
+}
+
+impl Render for EffectDocument {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .child(clearing(&self.pre, &self.paint))
+            .children(self.lines.iter().cloned())
+    }
+}
+
+struct EffectRoot {
+    document: Entity<EffectDocument>,
+}
+
+impl Render for EffectRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.document.clone())
+    }
+}
+
+/// Replaying a view performs the effects its elements recorded, in order, so state an element
+/// builds up while it draws is the same whether its views were built or replayed.
+#[crate::test]
+fn replaying_a_view_performs_its_recorded_effects_again_in_order(cx: &mut TestAppContext) {
+    let (pre, paint): (EffectLog, EffectLog) = (Rc::default(), Rc::default());
+    let lines: Rc<std::cell::RefCell<Vec<Entity<EffectLine>>>> = Rc::default();
+    let window = cx.add_window({
+        let (pre, paint, lines) = (pre.clone(), paint.clone(), lines.clone());
+        move |_, cx| {
+            let made: Vec<Entity<EffectLine>> = ["a", "b", "c"]
+                .into_iter()
+                .map(|name| {
+                    let (pre, paint) = (pre.clone(), paint.clone());
+                    cx.new(move |_| EffectLine { name, pre, paint })
+                })
+                .collect();
+            *lines.borrow_mut() = made.clone();
+            let document = cx.new(|_| EffectDocument {
+                lines: made,
+                pre,
+                paint,
+            });
+            EffectRoot { document }
+        }
+    });
+    let window: AnyWindowHandle = window.into();
+    draw(cx, window);
+    assert_eq!(*pre.borrow(), ["a", "b", "c"]);
+    assert_eq!(*paint.borrow(), ["a", "b", "c"]);
+
+    // Nothing changed: every view is replayed and the effects run again.
+    reset(cx, window);
+    draw(cx, window);
+    assert_eq!(stats(cx, window).views_rendered, 0);
+    assert_eq!(*pre.borrow(), ["a", "b", "c"]);
+    assert_eq!(*paint.borrow(), ["a", "b", "c"]);
+
+    // The middle line is built again: the document is replayed around it, the effects of the
+    // replayed lines surround the new ones in the same order.
+    let b = lines.borrow()[1].clone();
+    reset(cx, window);
+    b.update(cx, |_, cx| cx.notify());
+    draw(cx, window);
+    let s = stats(cx, window);
+    assert_eq!(s.splice_successes, 1, "{s:?}");
+    assert!(s.views_rendered <= 2, "{s:?}");
+    assert_eq!(*pre.borrow(), ["a", "b", "c"]);
+    assert_eq!(*paint.borrow(), ["a", "b", "c"]);
+}
+
+/// An element that mixes a token into the retention context of its child.
+struct TokenScope {
+    token: u64,
+    child: crate::AnyElement,
+}
+
+impl IntoElement for TokenScope {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl crate::Element for TokenScope {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<crate::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&crate::GlobalElementId>,
+        _: Option<&crate::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut crate::App,
+    ) -> (crate::LayoutId, ()) {
+        let token = self.token;
+        let child = &mut self.child;
+        (
+            window.with_retention_context(token, |window| child.request_layout(window, cx)),
+            (),
+        )
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&crate::GlobalElementId>,
+        _: Option<&crate::InspectorElementId>,
+        _: crate::Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut crate::App,
+    ) {
+        let token = self.token;
+        let child = &mut self.child;
+        window.with_retention_context(token, |window| child.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&crate::GlobalElementId>,
+        _: Option<&crate::InspectorElementId>,
+        _: crate::Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut crate::App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
+struct CountedLeaf {
+    renders: Rc<Cell<u32>>,
+}
+
+impl Render for CountedLeaf {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        div().w(px(40.)).h(px(10.))
+    }
+}
+
+struct ScopedRoot {
+    token: Rc<Cell<u64>>,
+    leaf: Entity<CountedLeaf>,
+}
+
+impl Render for ScopedRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        TokenScope {
+            token: self.token.get(),
+            child: self.leaf.clone().into_any_element(),
+        }
+    }
+}
+
+/// A view built inside a retention context is replayed only while the context is unchanged.
+#[crate::test]
+fn a_changed_retention_context_rebuilds_the_views_built_inside_it(cx: &mut TestAppContext) {
+    let token = Rc::new(Cell::new(1));
+    let renders = counter();
+    let window = cx.add_window({
+        let (token, renders) = (token.clone(), renders.clone());
+        move |_, cx| {
+            let leaf = cx.new(move |_| CountedLeaf { renders });
+            ScopedRoot { token, leaf }
+        }
+    });
+    let root = window.root(cx).unwrap();
+    let window: AnyWindowHandle = window.into();
+    draw(cx, window);
+    assert_eq!(renders.get(), 1);
+
+    // The scope is rebuilt with the same token: the leaf inside it is replayed.
+    root.update(cx, |_, cx| cx.notify());
+    draw(cx, window);
+    assert_eq!(renders.get(), 1, "an unchanged context replays the leaf");
+
+    // A new token rebuilds it.
+    token.set(2);
+    root.update(cx, |_, cx| cx.notify());
+    draw(cx, window);
+    assert_eq!(renders.get(), 2, "a changed context rebuilds the leaf");
+
+    root.update(cx, |_, cx| cx.notify());
+    draw(cx, window);
+    assert_eq!(renders.get(), 2);
+}
+
+struct WholeHost {
+    whole: bool,
+    renders: Rc<Cell<u32>>,
+    leaf: Entity<CountedLeaf>,
+}
+
+impl Render for WholeHost {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.renders.set(self.renders.get() + 1);
+        if self.whole {
+            window.require_whole_view_rebuild();
+        }
+        div().size_full().child(self.leaf.clone())
+    }
+}
+
+struct WholeRoot {
+    host: Entity<WholeHost>,
+}
+
+impl Render for WholeRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.host.clone())
+    }
+}
+
+/// A view that computes state over its whole subtree is built again, not replayed around a
+/// rebuilt nested view (PRF-001 R6 does not apply to it).
+#[crate::test]
+fn a_whole_view_rebuild_requirement_forbids_splicing_around_nested_views(cx: &mut TestAppContext) {
+    for whole in [false, true] {
+        let host_renders = counter();
+        let leaf_renders = counter();
+        let leaf_handle: Rc<std::cell::RefCell<Option<Entity<CountedLeaf>>>> = Rc::default();
+        let window = cx.add_window({
+            let (host_renders, leaf_renders, leaf_handle) = (
+                host_renders.clone(),
+                leaf_renders.clone(),
+                leaf_handle.clone(),
+            );
+            move |_, cx| {
+                let leaf = cx.new(move |_| CountedLeaf {
+                    renders: leaf_renders,
+                });
+                *leaf_handle.borrow_mut() = Some(leaf.clone());
+                let host = cx.new(move |_| WholeHost {
+                    whole,
+                    renders: host_renders,
+                    leaf,
+                });
+                WholeRoot { host }
+            }
+        });
+        let window: AnyWindowHandle = window.into();
+        draw(cx, window);
+        draw(cx, window);
+        let (host_before, leaf_before) = (host_renders.get(), leaf_renders.get());
+
+        let leaf = leaf_handle.borrow().clone().unwrap();
+        reset(cx, window);
+        leaf.update(cx, |_, cx| cx.notify());
+        draw(cx, window);
+        let s = stats(cx, window);
+        assert_eq!(
+            leaf_renders.get(),
+            leaf_before + 1,
+            "whole = {whole}: {s:?}"
+        );
+        if whole {
+            assert_eq!(
+                host_renders.get(),
+                host_before + 1,
+                "rebuilt with the leaf: {s:?}"
+            );
+            // The enclosing view is the one replayed around the rebuilt host.
+            assert_eq!(s.views_rendered, 2, "{s:?}");
+        } else {
+            assert_eq!(
+                host_renders.get(),
+                host_before,
+                "replayed around the leaf: {s:?}"
+            );
+            assert_eq!(s.splice_successes, 1, "{s:?}");
+        }
+    }
+}

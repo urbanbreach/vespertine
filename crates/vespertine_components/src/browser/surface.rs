@@ -95,7 +95,8 @@ pub struct BrowserSurface {
     edited: bool,
     menu: Option<MenuState>,
     menu_scroll: ScrollHandle,
-    theme: BrowserTheme,
+    /// An explicit override of the colours; without one the active theme is read on every render.
+    theme: Option<BrowserTheme>,
     metrics: BrowserMetrics,
     shortcuts: BrowserShortcuts,
     empty_title: String,
@@ -118,12 +119,8 @@ impl BrowserSurface {
     /// A surface without a page; the first navigation starts the helper. It is hidden until the
     /// embedder calls [`BrowserSurface::set_presentation`] (R16).
     pub fn new(context: BrowserContext, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = BrowserTheme::default();
         let page = cx.new(|cx| WebPage::new(context, window, cx));
-        let address = cx.new({
-            let theme = theme.clone();
-            |cx| AddressInput::new(ADDRESS_PLACEHOLDER, theme, window, cx)
-        });
+        let address = cx.new(|cx| AddressInput::new(ADDRESS_PLACEHOLDER, window, cx));
         let address_focus = address.read(cx).focus_handle(cx);
         let subscriptions = vec![
             cx.subscribe_in(&page, window, Self::page_event),
@@ -145,7 +142,7 @@ impl BrowserSurface {
             edited: false,
             menu: None,
             menu_scroll: ScrollHandle::new(),
-            theme,
+            theme: None,
             metrics: BrowserMetrics::default(),
             shortcuts: BrowserShortcuts::default(),
             empty_title: "Enter an address".to_owned(),
@@ -266,12 +263,21 @@ impl BrowserSurface {
 
     // ---- configuration ----------------------------------------------------------------------
 
-    /// Replaces the theme roles (R2).
-    pub fn set_theme(&mut self, theme: BrowserTheme, cx: &mut Context<Self>) {
+    /// Replaces the theme roles (R2) with an explicit set. Until this is called (and after it is
+    /// called with `None`) the roles follow the active THM-003 theme.
+    pub fn set_theme(&mut self, theme: impl Into<Option<BrowserTheme>>, cx: &mut Context<Self>) {
+        let theme = theme.into();
         self.address
             .update(cx, |address, cx| address.set_theme(theme.clone(), cx));
         self.theme = theme;
         cx.notify();
+    }
+
+    /// The roles in force: the explicit override, else the active theme's.
+    pub fn theme(&self, cx: &App) -> BrowserTheme {
+        self.theme
+            .clone()
+            .unwrap_or_else(|| BrowserTheme::current(cx))
     }
 
     /// Replaces the metrics of the chrome (R2, R12).
@@ -587,8 +593,12 @@ impl BrowserSurface {
 
     // ---- rendering --------------------------------------------------------------------------
 
-    fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+    fn render_toolbar(
+        &self,
+        theme: &BrowserTheme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let metrics = &self.metrics;
         let focused = self.address.read(cx).is_focused(window);
         let show_go = focused || self.edited;
@@ -703,8 +713,12 @@ impl BrowserSurface {
             .into_any_element()
     }
 
-    fn render_placeholder(&self, placeholder: Placeholder, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+    fn render_placeholder(
+        &self,
+        theme: &BrowserTheme,
+        placeholder: Placeholder,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let hover_background = theme.raised.blend(theme.hover);
         let action = placeholder.action.map(|(action, label)| {
             let accessibility_label = match action {
@@ -790,12 +804,11 @@ impl BrowserSurface {
             .into_any_element()
     }
 
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
+    fn render_body(&self, theme: &BrowserTheme, cx: &mut Context<Self>) -> AnyElement {
         let has_address = self.state.url.is_some();
         let hidden = self.presentation(cx) == Presentation::Hidden;
         let content = match self.placeholder(cx) {
-            Some(placeholder) => Some(self.render_placeholder(placeholder, cx)),
+            Some(placeholder) => Some(self.render_placeholder(theme, placeholder, cx)),
             // A hidden surface paints no page (PLT-015 R20); the backing stays.
             None if hidden => None,
             None => Some(page_element(&self.page, cx).into_any_element()),
@@ -845,7 +858,8 @@ impl BrowserSurface {
 
 impl Render for BrowserSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let toolbar = self.render_toolbar(window, cx);
+        let theme = self.theme(cx);
+        let toolbar = self.render_toolbar(&theme, window, cx);
         let validation = self.validation.clone().map(|message| {
             div()
                 .id("browser-validation")
@@ -854,10 +868,10 @@ impl Render for BrowserSurface {
                 .px(px(12.))
                 .py(px(8.))
                 .text_size(self.metrics.validation_text_size)
-                .text_color(self.theme.danger)
+                .text_color(theme.danger)
                 .child(message)
         });
-        let body = self.render_body(cx);
+        let body = self.render_body(&theme, cx);
         let back_button = MouseButton::Navigate(NavigationDirection::Back);
         let forward_button = MouseButton::Navigate(NavigationDirection::Forward);
         div()

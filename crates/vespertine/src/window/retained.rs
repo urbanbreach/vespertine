@@ -35,6 +35,8 @@ pub(crate) struct CacheKey {
     pub text_style: TextStyle,
     pub opacity: f32,
     pub rem_size: Pixels,
+    /// The retention context in force (see [`Window::with_retention_context`]).
+    pub context: u64,
 }
 
 /// Ambient window state a view was built in, kept so the view can be built
@@ -46,6 +48,7 @@ pub(crate) struct Ambient {
     pub rem_override: SmallVec<[Pixels; 8]>,
     pub rendered_entities: Vec<EntityId>,
     pub image_caches: Vec<crate::AnyImageCache>,
+    pub retention_context: u64,
     /// Prepaint-phase state; `None` until the view was prepainted.
     pub prepaint: Option<PrepaintAmbient>,
 }
@@ -83,6 +86,9 @@ pub(crate) struct ViewRecord {
     pub dirty: bool,
     /// Some view nested in this one is dirty.
     pub dirty_descendants: bool,
+    /// The view's output depends on all of its nested views being built together with it
+    /// (see [`Window::require_whole_view_rebuild`]): it is never replayed around rebuilt views.
+    pub splice_unsafe: bool,
     /// This view was notified since the preceding frame.
     pub notified: bool,
     /// Reads of this view alone (nested views excluded).
@@ -210,6 +216,7 @@ impl RetainedViews {
             registered_in_parent_epoch: u64::MAX,
             dirty: true,
             dirty_descendants: false,
+            splice_unsafe: false,
             notified: false,
             reads: ReadSet::default(),
             built_clock: 0,
@@ -498,7 +505,9 @@ impl RetainedViews {
         stack.extend(self.get(root)?.children.iter().copied());
         while let Some(key) = stack.pop() {
             let record = self.get(key)?;
-            if record.dirty {
+            // A view that cannot be replayed around rebuilt views is rebuilt itself when any
+            // view nested in it is dirty.
+            if record.dirty || (record.splice_unsafe && record.dirty_descendants) {
                 let rebuildable = record.kind == ViewKind::Retained
                     && record.view.is_some()
                     && record.layout_root.is_some()
@@ -557,6 +566,7 @@ impl RetainedViews {
             record.children.clear();
             record.dirty = false;
             record.dirty_descendants = false;
+            record.splice_unsafe = false;
             record.parent = parent;
             record.live_epoch = epoch;
         }
@@ -702,6 +712,9 @@ pub(crate) struct RetentionState {
     pub layout_state_sink: Vec<Vec<(GlobalElementId, TypeId)>>,
     /// Everything must be reconstructed in the frame being drawn.
     pub blocked: bool,
+    /// The retention context in force while a view is built or replayed (see
+    /// [`Window::with_retention_context`]).
+    pub context: u64,
     /// Per-window control (tests and benchmarks).
     pub window_disabled: bool,
     /// Whether accessibility was active when the previous frame started.
@@ -720,6 +733,7 @@ impl RetentionState {
             adopted: FxHashMap::default(),
             layout_state_sink: Vec::new(),
             blocked: false,
+            context: 0,
             window_disabled: false,
             a11y_was_active: false,
         }
@@ -739,6 +753,8 @@ impl PrepaintStateIndex {
             && self.dispatch_tree_index <= range.end.dispatch_tree_index
             && self.accessed_element_states_index >= range.start.accessed_element_states_index
             && self.accessed_element_states_index <= range.end.accessed_element_states_index
+            && self.effects_index >= range.start.effects_index
+            && self.effects_index <= range.end.effects_index
             && self
                 .line_layout_index
                 .within(&range.start.line_layout_index, &range.end.line_layout_index)
@@ -766,6 +782,8 @@ impl PaintIndex {
             && self.accessed_element_states_index <= range.end.accessed_element_states_index
             && self.tab_handle_index >= range.start.tab_handle_index
             && self.tab_handle_index <= range.end.tab_handle_index
+            && self.effects_index >= range.start.effects_index
+            && self.effects_index <= range.end.effects_index
             && self
                 .line_layout_index
                 .within(&range.start.line_layout_index, &range.end.line_layout_index)
@@ -793,6 +811,33 @@ impl Window {
             text_style: self.text_style(),
             opacity: self.element_opacity,
             rem_size: self.rem_size(),
+            context: self.retention.context,
+        }
+    }
+
+    /// Runs `f` with `token` mixed into the retention context: a view built inside `f` is replayed
+    /// only while the context it is reached in is unchanged, so an element whose output depends
+    /// on something its descendants inherit (a scoped setting, a declaration it owns) passes a
+    /// token that changes with that something. A token that is unique per construction of the
+    /// element makes every view nested in it rebuild whenever the element itself is rebuilt.
+    pub fn with_retention_context<R>(&mut self, token: u64, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.retention.context;
+        self.retention.context =
+            (outer.rotate_left(13) ^ token).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let result = f(self);
+        self.retention.context = outer;
+        result
+    }
+
+    /// Declares that the output of the view being built depends on every view nested in it being
+    /// built together with it (for example because an element of the view computes state over
+    /// its whole subtree): when any nested view is dirty the view is built again instead of being
+    /// replayed around the rebuilt one (PRF-001 R6). A no-op outside a view.
+    pub fn require_whole_view_rebuild(&mut self) {
+        if let Some(key) = self.retention.stack.last().copied()
+            && let Some(record) = self.retention.views.get_mut(key)
+        {
+            record.splice_unsafe = true;
         }
     }
 
@@ -835,6 +880,7 @@ impl Window {
             rem_override: self.rem_size_override_stack.clone(),
             rendered_entities: self.rendered_entity_stack.clone(),
             image_caches: self.image_cache_stack.clone(),
+            retention_context: self.retention.context,
             prepaint: None,
         }
     }
@@ -874,6 +920,7 @@ impl Window {
         }
         let rendered = std::mem::replace(&mut self.rendered_entity_stack, rendered);
         let images = std::mem::replace(&mut self.image_cache_stack, ambient.image_caches.clone());
+        let context = std::mem::replace(&mut self.retention.context, ambient.retention_context);
         let prepaint_state = (phase == AmbientPhase::Prepaint)
             .then(|| ambient.prepaint.as_ref())
             .flatten()
@@ -893,6 +940,7 @@ impl Window {
         self.rem_size_override_stack = rem;
         self.rendered_entity_stack = rendered;
         self.image_cache_stack = images;
+        self.retention.context = context;
         if let Some((mask, offset, opacity)) = prepaint_state {
             self.content_mask_stack = mask;
             self.element_offset_stack = offset;

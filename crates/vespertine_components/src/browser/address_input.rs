@@ -39,7 +39,8 @@ pub struct AddressInput {
     last_bounds: Option<Bounds<Pixels>>,
     scroll_x: Pixels,
     is_selecting: bool,
-    theme: BrowserTheme,
+    /// An explicit override of the colours; without one the active theme is read at paint time.
+    theme: Option<BrowserTheme>,
     _subscriptions: Vec<vespertine::Subscription>,
 }
 
@@ -55,7 +56,6 @@ impl AddressInput {
     /// An empty field. Gaining focus selects the whole text (R10).
     pub fn new(
         placeholder: impl Into<SharedString>,
-        theme: BrowserTheme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -74,7 +74,7 @@ impl AddressInput {
             last_bounds: None,
             scroll_x: px(0.),
             is_selecting: false,
-            theme,
+            theme: None,
             _subscriptions: subscriptions,
         }
     }
@@ -121,8 +121,8 @@ impl AddressInput {
         cx.notify();
     }
 
-    /// Replaces the colours.
-    pub fn set_theme(&mut self, theme: BrowserTheme, cx: &mut Context<Self>) {
+    /// Replaces the colours with an explicit set, or `None` to follow the active theme again.
+    pub fn set_theme(&mut self, theme: Option<BrowserTheme>, cx: &mut Context<Self>) {
         self.theme = theme;
         cx.notify();
     }
@@ -666,7 +666,10 @@ impl Element for AddressElement {
         let selected_range = input.selected_range.clone();
         let cursor_offset = input.cursor_offset();
         let marked_range = input.marked_range.clone();
-        let theme = input.theme.clone();
+        let theme = input
+            .theme
+            .clone()
+            .unwrap_or_else(|| BrowserTheme::current(cx));
         let mut scroll_x = input.scroll_x;
         let style = window.text_style();
 

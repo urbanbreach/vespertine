@@ -617,3 +617,49 @@ fn animating_transform_and_blur_never_rasterizes_or_uploads() {
     assert!(after.1 - before.1 >= 600, "one raster per distinct size");
     assert!(after.2 > before.2);
 }
+
+/// ANM-002 R13: the label roll paints tilted, scaled and blurred glyphs through the transformed
+/// painter (the same raster tile, sampled with a transform and a blur) and keeps plain translation
+/// on the ordinary glyph path.
+#[test]
+fn rolling_label_glyphs_paint_through_the_transformed_painter() {
+    use crate::motion::label::{RollGlyphPaint, glyph_transformation, paint_roll_glyph};
+
+    let probe = Arc::new(GlyphProbe::default());
+    let mut cx = new_cx(&probe);
+    let pivot = point(px(40.0), px(30.0));
+    let rolled = glyph_transformation(pivot, px(-5.0), 0.6, 2.0, 2.0);
+    let retilted = glyph_transformation(pivot, px(-2.0), 0.8, 1.0, 2.0);
+    let rising = glyph_transformation(pivot, px(-5.0), 1.0, 0.0, 2.0);
+    let painted = paint_once(&mut cx, move |window| {
+        let roll = |transformation, blur: f32| RollGlyphPaint {
+            origin: point(px(36.0), px(34.0)),
+            font_id: FONT,
+            glyph_id: GLYPH,
+            font_size: px(16.0),
+            color: white(),
+            opacity: 0.5,
+            transformation,
+            blur: px(blur),
+            is_emoji: false,
+        };
+        paint_roll_glyph(window, &roll(rolled, 1.6))?;
+        paint_roll_glyph(window, &roll(retilted, 0.8))?;
+        paint_roll_glyph(window, &roll(rising, 0.0))
+    });
+    assert_ok(&painted);
+    let [first, second, plain] = painted.mono[..] else {
+        panic!("expected three sprites");
+    };
+    // Logical sigma times the scale factor of 2; the transform is attached to the sprite as is.
+    assert_eq!((first.blur, first.transformation), (3.2, rolled));
+    assert_eq!((second.blur, second.transformation), (1.6, retilted));
+    // A pure translation without blur takes the ordinary path at the translated origin.
+    assert_eq!(plain.blur, 0.0);
+    assert_eq!(plain.transformation, TransformationMatrix::unit());
+    assert_eq!(
+        probe.counts().1,
+        1,
+        "tilt, scale and blur reuse the one raster tile"
+    );
+}

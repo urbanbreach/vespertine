@@ -1,5 +1,12 @@
 //! The window-level text service: per-frame registry, selection state, the window listeners
 //! (press, move, release, copy) and the scope elements (TXT-008 R1, R2, R5, R9, R12, R13, R15).
+//!
+//! The registry is built while the frame draws, but a retained frame (PRF-001) replays the output
+//! of views that did not change instead of running their elements. Every update an element makes
+//! to the service while it draws is therefore a replayable effect (`Window::prepaint_effect`,
+//! `Window::paint_effect`): replaying a view performs its effects again, in order, so the registry,
+//! the logs, the highlight numbering and the scope stacks a frame ends with are the same whether
+//! its views were built or replayed.
 
 use crate::autoscroll::{Autoscroll, RegisteredList, TICK, TickOutcome};
 use crate::highlight::HostFrame;
@@ -9,6 +16,7 @@ use crate::registry::{
 use crate::selection::{Outcome, Selection, resolve_spans};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use vespertine::{
     AnyElement, App, Bounds, ClipboardItem, DispatchPhase, Element, ElementId, Global,
@@ -110,11 +118,12 @@ impl TextService {
         CURRENT.with(|stack| stack.borrow().last().cloned())
     }
 
-    fn with_current<R>(&self, f: impl FnOnce() -> R) -> R {
+    fn push_current(&self) {
         CURRENT.with(|stack| stack.borrow_mut().push(self.clone()));
-        let result = f();
+    }
+
+    fn pop_current() {
         CURRENT.with(|stack| stack.borrow_mut().pop());
-        result
     }
 
     /// Sets the callback invoked when the selection identity changes, with the joined selected
@@ -176,12 +185,21 @@ impl TextService {
         self.0.borrow().registry.runs().len()
     }
 
-    /// Registers a scrollable list so a selection drag can autoscroll it.
-    pub fn register_list(&self, list: RegisteredList) {
-        self.0.borrow_mut().lists.push(list);
+    /// Registers a scrollable list so a selection drag can autoscroll it. Paint-time: performed
+    /// now and again whenever the painting view is replayed.
+    pub fn register_list(&self, list: RegisteredList, window: &mut Window, cx: &mut App) {
+        let service = self.clone();
+        window.paint_effect(
+            cx,
+            Rc::new(move |_, _| service.0.borrow_mut().lists.push(list.clone())),
+        );
     }
 
     // --- paint-time API used by elements ---------------------------------------------------
+    //
+    // Each mutator exists twice: the public one performs the update as a paint effect (it is
+    // performed again when the painting view is replayed, PRF-001) and the `*_now` one is for code
+    // that already runs inside an effect.
 
     /// The surface being painted.
     pub fn surface(&self) -> SurfaceId {
@@ -198,22 +216,48 @@ impl TextService {
     }
 
     /// Registers a run (document order = paint order).
-    pub fn register_run(&self, run: RegisteredRun) {
+    pub fn register_run(&self, run: RegisteredRun, window: &mut Window, cx: &mut App) {
+        let service = self.clone();
+        window.paint_effect(
+            cx,
+            Rc::new(move |_, _| service.register_run_now(run.clone())),
+        );
+    }
+
+    pub(crate) fn register_run_now(&self, run: RegisteredRun) {
         self.0.borrow_mut().registry.register(run);
     }
 
     /// Registers a selection start region.
-    pub fn register_region(&self, region: StartRegion) {
+    pub fn register_region(&self, region: StartRegion, window: &mut Window, cx: &mut App) {
+        let service = self.clone();
+        window.paint_effect(cx, Rc::new(move |_, _| service.register_region_now(region)));
+    }
+
+    pub(crate) fn register_region_now(&self, region: StartRegion) {
         self.0.borrow_mut().registry.register_region(region);
     }
 
     /// Logs a painted string.
-    pub fn log_text(&self, entry: PaintedText) {
+    pub fn log_text(&self, entry: PaintedText, window: &mut Window, cx: &mut App) {
+        let service = self.clone();
+        window.paint_effect(cx, Rc::new(move |_, _| service.log_text_now(entry.clone())));
+    }
+
+    pub(crate) fn log_text_now(&self, entry: PaintedText) {
         self.0.borrow_mut().registry.log_text(entry);
     }
 
     /// Logs a painted wash.
-    pub fn log_highlight(&self, entry: PaintedHighlight) {
+    pub fn log_highlight(&self, entry: PaintedHighlight, window: &mut Window, cx: &mut App) {
+        let service = self.clone();
+        window.paint_effect(
+            cx,
+            Rc::new(move |_, _| service.log_highlight_now(entry.clone())),
+        );
+    }
+
+    pub(crate) fn log_highlight_now(&self, entry: PaintedHighlight) {
         self.0.borrow_mut().registry.log_highlight(entry);
     }
 
@@ -504,11 +548,11 @@ impl IntoElement for Scope {
     }
 }
 
-impl Scope {
-    fn enter(&self, service: Option<&TextService>) {
+impl ScopeKind {
+    fn enter(self, service: Option<&TextService>) {
         let Some(service) = service else { return };
         let mut state = service.0.borrow_mut();
-        match self.kind {
+        match self {
             ScopeKind::Root => {}
             ScopeKind::Surface(id) => state.surfaces.push(id),
             ScopeKind::UserSelect(mode) => state.user_select.push(mode),
@@ -516,10 +560,10 @@ impl Scope {
         }
     }
 
-    fn exit(&self, service: Option<&TextService>) {
+    fn exit(self, service: Option<&TextService>) {
         let Some(service) = service else { return };
         let mut state = service.0.borrow_mut();
-        match self.kind {
+        match self {
             ScopeKind::Root => {}
             ScopeKind::Surface(_) => {
                 state.surfaces.pop();
@@ -531,6 +575,26 @@ impl Scope {
                 state.selection_colors.pop();
             }
         }
+    }
+
+    /// The token views nested in the scope are replayed under: a nested view is replayed only
+    /// while the scope it inherits is unchanged (its output depends on the inherited setting).
+    fn retention_token(self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match self {
+            ScopeKind::Root => 0u8.hash(&mut hasher),
+            ScopeKind::Surface(id) => (1u8, id.0).hash(&mut hasher),
+            ScopeKind::UserSelect(mode) => (2u8, mode as u8).hash(&mut hasher),
+            ScopeKind::SelectionColor(color) => (
+                3u8,
+                color.h.to_bits(),
+                color.s.to_bits(),
+                color.l.to_bits(),
+                color.a.to_bits(),
+            )
+                .hash(&mut hasher),
+        }
+        hasher.finish()
     }
 }
 
@@ -558,7 +622,13 @@ impl Element for Scope {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        (self.child.request_layout(window, cx), ())
+        let layout_id = match self.kind {
+            ScopeKind::Root => self.child.request_layout(window, cx),
+            kind => window.with_retention_context(kind.retention_token(), |window| {
+                self.child.request_layout(window, cx)
+            }),
+        };
+        (layout_id, ())
     }
 
     fn prepaint(
@@ -570,25 +640,31 @@ impl Element for Scope {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let service = match self.kind {
-            ScopeKind::Root => {
-                let service = TextService::of(window, cx);
-                service.begin_frame(cx);
-                Some(service)
-            }
-            _ => TextService::current(),
-        };
-        if matches!(self.kind, ScopeKind::Root) {
-            if let Some(service) = &service {
-                service.with_current(|| {
-                    self.child.prepaint(window, cx);
-                });
-            }
-        } else {
-            self.enter(service.as_ref());
+        let kind = self.kind;
+        if matches!(kind, ScopeKind::Root) {
+            let service = TextService::of(window, cx);
+            let begin = service.clone();
+            window.prepaint_effect(
+                cx,
+                Rc::new(move |_, cx| {
+                    begin.begin_frame(cx);
+                    begin.push_current();
+                }),
+            );
             self.child.prepaint(window, cx);
-            self.exit(service.as_ref());
+            window.prepaint_effect(cx, Rc::new(|_, _| TextService::pop_current()));
+            return ScopeState {
+                service: Some(service),
+            };
         }
+        let service = TextService::current();
+        let entering = service.clone();
+        window.prepaint_effect(cx, Rc::new(move |_, _| kind.enter(entering.as_ref())));
+        window.with_retention_context(kind.retention_token(), |window| {
+            self.child.prepaint(window, cx)
+        });
+        let exiting = service.clone();
+        window.prepaint_effect(cx, Rc::new(move |_, _| kind.exit(exiting.as_ref())));
         ScopeState { service }
     }
 
@@ -602,30 +678,37 @@ impl Element for Scope {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let kind = self.kind;
         let service = prepaint.service.clone();
-        match self.kind {
-            ScopeKind::Root => {
-                let Some(service) = service else {
-                    self.child.paint(window, cx);
-                    return;
-                };
-                service.install_listeners(window);
-                service.with_current(|| self.child.paint(window, cx));
-                service.finish_frame(window, cx);
-            }
-            _ => {
-                if let (Some(service), ScopeKind::UserSelect(mode)) = (&service, self.kind)
-                    && mode != UserSelect::Auto
-                {
-                    service.register_region(StartRegion {
-                        bounds,
-                        selectable: mode == UserSelect::Text,
-                    });
-                }
-                self.enter(service.as_ref());
+        if matches!(kind, ScopeKind::Root) {
+            let Some(service) = service else {
                 self.child.paint(window, cx);
-                self.exit(service.as_ref());
-            }
+                return;
+            };
+            service.install_listeners(window);
+            let entering = service.clone();
+            window.paint_effect(cx, Rc::new(move |_, _| entering.push_current()));
+            self.child.paint(window, cx);
+            window.paint_effect(cx, Rc::new(|_, _| TextService::pop_current()));
+            window.paint_effect(
+                cx,
+                Rc::new(move |window, cx| service.finish_frame(window, cx)),
+            );
+            return;
         }
+        if let (Some(service), ScopeKind::UserSelect(mode)) = (&service, kind)
+            && mode != UserSelect::Auto
+        {
+            let service = service.clone();
+            let region = StartRegion {
+                bounds,
+                selectable: mode == UserSelect::Text,
+            };
+            window.paint_effect(cx, Rc::new(move |_, _| service.register_region_now(region)));
+        }
+        let entering = service.clone();
+        window.paint_effect(cx, Rc::new(move |_, _| kind.enter(entering.as_ref())));
+        self.child.paint(window, cx);
+        window.paint_effect(cx, Rc::new(move |_, _| kind.exit(service.as_ref())));
     }
 }

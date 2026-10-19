@@ -4,7 +4,7 @@
 
 use crate::display_map::OriginalText;
 use crate::geometry::RichLayout;
-use crate::highlight::{group_id, log_entry};
+use crate::highlight::{Wash, group_id, log_entry};
 use crate::link_layer::{LinkLayer, LinkOptions};
 use crate::links::Link;
 use crate::registry::{PaintedText, RegisteredRun, RunKey};
@@ -12,8 +12,8 @@ use crate::service::TextService;
 use std::rc::Rc;
 use std::sync::Arc;
 use vespertine::{
-    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    Pixels, SharedString, StyledText, TextRun, Window, fill, px,
+    App, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId, IntoElement,
+    LayoutId, Pixels, SharedString, StyledText, TextRun, Window, fill, px,
 };
 
 /// A rounded wash under the glyphs of a byte range of the displayed text. Each wrapped row of
@@ -148,8 +148,78 @@ pub struct RichPrepaint {
     layout: RichLayout,
     key: RunKey,
     group_id: u64,
-    piece: Option<usize>,
     links: Option<LinkLayer>,
+}
+
+/// What painting a run does to the text service, and what it needs back to paint. Painting
+/// records it as a paint effect, so that replaying the run's view performs it again (the run
+/// registers, logs and numbers its washes exactly as when it paints).
+struct RunPaint {
+    key: RunKey,
+    group_id: u64,
+    group: Option<RunKey>,
+    original: Arc<OriginalText>,
+    layout: Rc<RichLayout>,
+    chrome: bool,
+    native: bool,
+    service: Option<TextService>,
+}
+
+/// The washes a run paints.
+struct RunWashes {
+    /// Search washes with the rectangles they paint, in paint order.
+    highlights: Vec<(Wash, Vec<Bounds<Pixels>>)>,
+    /// The selection wash range and color.
+    selection: Option<(std::ops::Range<usize>, Hsla)>,
+}
+
+impl RunPaint {
+    fn apply(&self) -> RunWashes {
+        let mut highlights = Vec::new();
+        let mut selection = None;
+        let text = self.original.displayed();
+        if let Some(service) = &self.service {
+            if let Some(host) = service.highlight()
+                && !host.is_empty()
+                && !self.chrome
+            {
+                // Retained text registered with the host in prepaint; native (generated) text is
+                // matched against the exact string it paints.
+                let piece = host.piece_of(self.key).filter(|_| !self.native);
+                if self.native || piece.is_some() {
+                    for wash in host.washes(self.key, self.group_id, piece, text, service.accent())
+                    {
+                        let rects =
+                            self.layout
+                                .range_rects(wash.range.clone(), Pixels::ZERO, Pixels::ZERO);
+                        service.log_highlight_now(log_entry(self.key, text, &wash, &rects));
+                        highlights.push((wash, rects));
+                    }
+                }
+            }
+            service.log_text_now(PaintedText {
+                key: self.key,
+                text: text.to_string(),
+                chrome: self.chrome,
+            });
+            if !self.chrome && service.selectable_now() {
+                service.register_run_now(RegisteredRun {
+                    key: self.key,
+                    surface: service.surface(),
+                    text: self.original.clone(),
+                    geometry: self.layout.clone(),
+                    group: self.group,
+                });
+                selection = service
+                    .selection_wash(self.key)
+                    .map(|range| (range, service.selection_color()));
+            }
+        }
+        RunWashes {
+            highlights,
+            selection,
+        }
+    }
 }
 
 impl Element for RichText {
@@ -213,15 +283,24 @@ impl Element for RichText {
         let group_id = group_id(self.group, key);
         // Retained text registers with the nearest declaring ancestor's highlight; native
         // (generated) text is matched at paint against the exact string it paints.
-        let piece = TextService::current()
-            .and_then(|service| service.highlight())
-            .filter(|host| !self.native && !self.chrome && !host.is_empty())
-            .map(|host| host.register(key, group_id, self.original.displayed()));
+        if !self.native && !self.chrome {
+            let service = TextService::current();
+            let text: Arc<str> = Arc::from(self.original.displayed());
+            window.prepaint_effect(
+                cx,
+                Rc::new(move |_, _| {
+                    if let Some(host) = service.as_ref().and_then(TextService::highlight)
+                        && !host.is_empty()
+                    {
+                        host.register(key, group_id, &text);
+                    }
+                }),
+            );
+        }
         RichPrepaint {
             layout,
             key,
             group_id,
-            piece,
             links,
         }
     }
@@ -236,43 +315,24 @@ impl Element for RichText {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let service = TextService::current();
-        let key = prepaint.key;
         let layout = &prepaint.layout;
-        let mut wash = None;
-        let mut washes = Vec::new();
-        if let Some(service) = &service {
-            if let Some(host) = service.highlight()
-                && !host.is_empty()
-                && !self.chrome
-                && (self.native || prepaint.piece.is_some())
-            {
-                washes = host.washes(
-                    key,
-                    prepaint.group_id,
-                    prepaint.piece,
-                    self.original.displayed(),
-                    service.accent(),
-                );
-            }
-            service.log_text(PaintedText {
-                key,
-                text: self.original.displayed().to_string(),
-                chrome: self.chrome,
-            });
-            if !self.chrome && service.selectable_now() {
-                service.register_run(RegisteredRun {
-                    key,
-                    surface: service.surface(),
-                    text: Arc::new(self.original.clone()),
-                    geometry: Rc::new(layout.clone()),
-                    group: self.group,
-                });
-                wash = service
-                    .selection_wash(key)
-                    .map(|range| (range, service.selection_color()));
-            }
-        }
+        let run = Rc::new(RunPaint {
+            key: prepaint.key,
+            group_id: prepaint.group_id,
+            group: self.group,
+            original: Arc::new(self.original.clone()),
+            layout: Rc::new(layout.clone()),
+            chrome: self.chrome,
+            native: self.native,
+            service: TextService::current(),
+        });
+        let RunWashes {
+            highlights,
+            selection,
+        } = run.apply();
+        window.record_paint_effect(Rc::new(move |_, _| {
+            run.apply();
+        }));
 
         let text_layout = layout.text_layout();
         // Run backgrounds first, then search washes, then the selection wash, then the glyphs.
@@ -284,24 +344,12 @@ impl Element for RichText {
                 window.paint_quad(fill(rect, under.color).corner_radii(under.radius));
             }
         }
-        for highlight_wash in &washes {
-            let rects =
-                layout.range_rects(highlight_wash.range.clone(), Pixels::ZERO, Pixels::ZERO);
-            for rect in &rects {
-                window.paint_quad(
-                    fill(*rect, highlight_wash.color).corner_radii(px(highlight_wash.radius)),
-                );
-            }
-            if let Some(service) = &service {
-                service.log_highlight(log_entry(
-                    key,
-                    self.original.displayed(),
-                    highlight_wash,
-                    &rects,
-                ));
+        for (wash, rects) in &highlights {
+            for rect in rects {
+                window.paint_quad(fill(*rect, wash.color).corner_radii(px(wash.radius)));
             }
         }
-        if let Some((range, color)) = wash {
+        if let Some((range, color)) = selection {
             for rect in layout.range_rects(range, Pixels::ZERO, Pixels::ZERO) {
                 window.paint_quad(fill(rect, color));
             }

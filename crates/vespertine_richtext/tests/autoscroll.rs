@@ -41,17 +41,19 @@ fn harness(height: f32, scroller: &Rc<Scroller>) -> Harness {
                 .child(RichText::new("b", "second row of text"))
                 .child(canvas(
                     |_, _, _| (),
-                    move |_, (), _, _| {
-                        TextService::current()
-                            .unwrap()
-                            .register_list(RegisteredList {
+                    move |_, (), window, cx| {
+                        TextService::current().unwrap().register_list(
+                            RegisteredList {
                                 id: 1,
                                 viewport: Bounds {
                                     origin: point(px(0.), px(0.)),
                                     size: size(px(300.), px(height)),
                                 },
                                 target: scroller,
-                            });
+                            },
+                            window,
+                            cx,
+                        );
                     },
                 )),
         )

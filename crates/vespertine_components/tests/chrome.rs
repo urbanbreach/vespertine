@@ -490,3 +490,151 @@ fn the_page_label_is_the_title_then_the_host_then_browser(cx: &mut TestAppContex
     );
     assert!(pump_until(cx, |cx| fixture.read(cx, |s| s.title() == "Local preview")));
 }
+
+/// The `(role, label)` of every node of the surface's accessibility tree in the last frame.
+fn accessibility_nodes(cx: &mut vespertine::VisualTestContext) -> Vec<(String, String)> {
+    cx.update(|window, _| window.set_a11y_active_for_tests(true));
+    cx.run_until_parked();
+    let json = cx
+        .update(|window, _| window.debug_a11y_tree_json())
+        .expect("the window builds an accessibility tree while it is active");
+    let tree: serde_json::Value = serde_json::from_str(&json).expect("the tree is JSON");
+    tree["nodes"]
+        .as_object()
+        .expect("nodes")
+        .values()
+        .filter_map(|node| {
+            let aria = &node["aria"];
+            Some((
+                aria["role"].as_str()?.to_owned(),
+                aria["label"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+fn has_node(nodes: &[(String, String)], role: &str, label: &str) -> bool {
+    nodes.iter().any(|(r, l)| r == role && l == label)
+}
+
+#[vespertine::test]
+fn the_chrome_exposes_its_accessibility_roles_and_labels(cx: &mut TestAppContext) {
+    // R19, A11Y-001: the toolbar buttons are buttons with their labels, the address field is a
+    // text input, the placeholder action and the go button are labelled buttons.
+    let startup = scripted();
+    let (fixture, cx) = setup(cx, &startup, Presentation::Live);
+    let nodes = accessibility_nodes(cx);
+    for label in [
+        "Back",
+        "Forward",
+        "Reload page",
+        "Open in default browser",
+        "Enter an address",
+    ] {
+        assert!(has_node(&nodes, "Button", label), "{label}: {nodes:?}");
+    }
+    assert!(has_node(&nodes, "TextInput", "Address"), "{nodes:?}");
+    assert!(!has_node(&nodes, "Button", "Go to address"), "{nodes:?}");
+
+    // Editing the field shows the go button.
+    fixture.call(cx, |surface, window, cx| surface.focus_address(window, cx));
+    cx.simulate_input("example.test");
+    redraw(cx);
+    let nodes = accessibility_nodes(cx);
+    assert!(has_node(&nodes, "Button", "Go to address"), "{nodes:?}");
+
+    // A failed page shows the retry action under its own label.
+    let peer = fixture.open(cx, "example.test");
+    send_state(
+        &peer,
+        state_json(
+            "https://example.test/",
+            "",
+            Some("net::ERR_FAILED"),
+            false,
+            false,
+            false,
+        ),
+    );
+    assert!(pump_until(cx, |cx| fixture.read(cx, |s| s.state.error.is_some())));
+    redraw(cx);
+    let nodes = accessibility_nodes(cx);
+    assert!(has_node(&nodes, "Button", "Retry page"), "{nodes:?}");
+    assert!(!has_node(&nodes, "Button", "Enter an address"), "{nodes:?}");
+}
+
+#[vespertine::test]
+fn the_chrome_colors_are_the_semantic_tokens_of_the_active_theme(cx: &mut TestAppContext) {
+    use vespertine::{Background, Hsla};
+    use vespertine_components::browser::BrowserTheme;
+    use vespertine_theme::{
+        appearance,
+        selection::{AccentSelection, AppearanceMode, SurfacePreference, ThemeSelection},
+    };
+
+    let startup = scripted();
+    let (fixture, cx) = setup(cx, &startup, Presentation::Live);
+    let painted_quad_with = |cx: &mut vespertine::VisualTestContext, color: Hsla| {
+        let background = format!("{:?}", Background::from(color));
+        cx.update(|window, _| {
+            window
+                .painted_primitives()
+                .iter()
+                .any(|primitive| primitive.contains(&background))
+        })
+    };
+    let roles = |cx: &mut vespertine::VisualTestContext| {
+        cx.update(|_, app| fixture.surface.read(app).theme(app))
+    };
+
+    // Without an installed theme the roles are the built-in neutral dark tokens.
+    let neutral = BrowserTheme::default();
+    assert_eq!(roles(cx), neutral);
+
+    let mut resolved = Vec::new();
+    for mode in [AppearanceMode::Dark, AppearanceMode::Light] {
+        cx.update(|_, app| {
+            if appearance::try_theme_of(app).is_none() {
+                appearance::init(
+                    app,
+                    mode,
+                    ThemeSelection::default(),
+                    AccentSelection::ThemeDefault,
+                    SurfacePreference::ThemeDefault,
+                );
+            } else {
+                appearance::set_mode(app, mode);
+            }
+        });
+        redraw(cx);
+        let expected = cx.update(|_, app| BrowserTheme::from_theme(appearance::theme_of(app)));
+        assert_eq!(roles(cx), expected, "{mode:?}");
+        // The toolbar fill is the theme's `raised` role and the page backing its `background`.
+        assert!(painted_quad_with(cx, expected.raised), "{mode:?} raised");
+        assert!(
+            painted_quad_with(cx, expected.page_background),
+            "{mode:?} background"
+        );
+        resolved.push(expected);
+    }
+    assert_eq!(resolved[0], neutral);
+    assert_ne!(
+        resolved[0], resolved[1],
+        "the light theme recolors the chrome"
+    );
+
+    // An explicit set overrides the theme until it is cleared again.
+    let custom = BrowserTheme {
+        raised: vespertine::rgb(0x123456).into(),
+        ..resolved[1].clone()
+    };
+    fixture.call(cx, |surface, _, cx| surface.set_theme(custom.clone(), cx));
+    redraw(cx);
+    assert_eq!(roles(cx), custom);
+    assert!(painted_quad_with(cx, custom.raised));
+    fixture.call(cx, |surface, _, cx| {
+        surface.set_theme(None::<BrowserTheme>, cx)
+    });
+    redraw(cx);
+    assert_eq!(roles(cx), resolved[1]);
+}
