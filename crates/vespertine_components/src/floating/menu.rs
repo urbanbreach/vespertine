@@ -378,10 +378,7 @@ impl RenderOnce for AnchoredMenu {
                 .flex()
                 .flex_col()
                 .gap(self.row_gap)
-                .max_h(rows_max_height(
-                    max.height,
-                    chrome + MENU_PADDING * 2.,
-                ))
+                .max_h(rows_max_height(max.height, chrome + MENU_PADDING * 2.))
                 .overflow_y_scroll();
             if let Some(handle) = &self.scroll {
                 inner = inner.track_scroll(handle);

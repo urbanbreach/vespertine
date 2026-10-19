@@ -158,7 +158,10 @@ mod tests {
     use StepDirection::{Backward, Forward};
 
     fn keys(names: &[&str]) -> Vec<RowKey> {
-        names.iter().map(|name| RowKey::from(name.to_string())).collect()
+        names
+            .iter()
+            .map(|name| RowKey::from(name.to_string()))
+            .collect()
     }
 
     #[test]
@@ -170,7 +173,11 @@ mod tests {
         assert_eq!(highlight.step(&rows, &on, Forward), Some(1));
 
         let mut highlight = Highlight::new();
-        assert_eq!(highlight.step(&rows, &on, Backward), Some(2), "the first Up wraps");
+        assert_eq!(
+            highlight.step(&rows, &on, Backward),
+            Some(2),
+            "the first Up wraps"
+        );
     }
 
     #[test]
@@ -198,7 +205,10 @@ mod tests {
         let mut highlight = Highlight::new();
         highlight.reconcile(&rows, &[true; 4]);
         highlight.step(&rows, &[true; 4], Forward);
-        assert_eq!(highlight.reconcile(&keys(&["a", "c", "d"]), &[true; 3]), Some(1));
+        assert_eq!(
+            highlight.reconcile(&keys(&["a", "c", "d"]), &[true; 3]),
+            Some(1)
+        );
         assert_eq!(highlight.key().map(|k| k.as_ref()), Some("c"));
     }
 

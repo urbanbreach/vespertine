@@ -226,7 +226,11 @@ mod tests {
         ]);
         assert_eq!(model.activate("ok"), None);
         assert_eq!(model.activate("other"), None);
-        assert_eq!(model.activate_default(), None, "Enter does nothing when the primary is disabled");
+        assert_eq!(
+            model.activate_default(),
+            None,
+            "Enter does nothing when the primary is disabled"
+        );
         assert_eq!(model.activate("missing"), None);
     }
 
@@ -259,8 +263,14 @@ mod tests {
     fn a_destructive_confirmation_ignores_but_consumes_escape_and_ignores_outside_presses() {
         let model = confirmation(DismissalPolicy::explicit_only());
         assert_eq!(model.escape(), Dismissal::Ignored { consumed: true });
-        assert_eq!(model.outside_press(), Dismissal::Ignored { consumed: false });
-        assert!(model.activate("cancel").is_some(), "the explicit buttons still work");
+        assert_eq!(
+            model.outside_press(),
+            Dismissal::Ignored { consumed: false }
+        );
+        assert!(
+            model.activate("cancel").is_some(),
+            "the explicit buttons still work"
+        );
     }
 
     #[test]

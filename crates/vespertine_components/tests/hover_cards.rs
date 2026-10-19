@@ -60,7 +60,11 @@ fn fixture(interactive: bool, placement: CardPlacement) -> Fixture {
         let cards = cx.new(|cx| {
             HoverCardHost::new(
                 |key: &usize, _, _| {
-                    div().w(px(100.)).h(px(40.)).child(format!("card {key}")).into_any_element()
+                    div()
+                        .w(px(100.))
+                        .h(px(40.))
+                        .child(format!("card {key}"))
+                        .into_any_element()
                 },
                 cx,
             )
@@ -96,7 +100,9 @@ impl Fixture {
 
     fn target(&mut self) -> Option<usize> {
         let cards = self.cards.clone();
-        self.host.app().update(|cx| cards.read(cx).target().copied())
+        self.host
+            .app()
+            .update(|cx| cards.read(cx).target().copied())
     }
 
     fn at(&mut self, ix: usize) {
@@ -112,7 +118,9 @@ impl Fixture {
     /// The container re-renders (its state changed).
     fn rerender(&mut self) {
         let root = self.root.clone();
-        self.host.app().update(|cx| root.update(cx, |_, cx| cx.notify()));
+        self.host
+            .app()
+            .update(|cx| root.update(cx, |_, cx| cx.notify()));
         self.host.flush();
     }
 
@@ -134,7 +142,11 @@ fn the_first_card_shows_after_550_ms_and_a_neighbor_shows_at_once() {
     assert_eq!(f.shown(), Some(0));
     assert!(f.host.painted_text().iter().any(|t| t == "card 0"));
     f.at(1);
-    assert_eq!(f.shown(), Some(1), "a neighbor shows at once while a card is shown");
+    assert_eq!(
+        f.shown(),
+        Some(1),
+        "a neighbor shows at once while a card is shown"
+    );
     f.pass(0.);
     assert!(f.host.painted_text().iter().any(|t| t == "card 1"));
 }
@@ -194,10 +206,16 @@ fn an_unmounted_trigger_is_reconciled_at_the_next_render() {
     f.rerender();
     let cards = f.cards.clone();
     f.host.app().update(|cx| {
-        cards.update(cx, |cards, cx| cards.reconcile(|key| *key != 0, false, false, cx))
+        cards.update(cx, |cards, cx| {
+            cards.reconcile(|key| *key != 0, false, false, cx)
+        })
     });
     f.host.flush();
-    assert_eq!(f.shown(), None, "the card of an unmounted trigger is dismissed");
+    assert_eq!(
+        f.shown(),
+        None,
+        "the card of an unmounted trigger is dismissed"
+    );
 }
 
 #[test]
@@ -210,13 +228,23 @@ fn a_trigger_that_moves_under_a_stationary_pointer_cancels_the_pending_dwell() {
     f.shift.set(200.);
     f.rerender();
     f.pass(300.);
-    assert_eq!(f.shown(), None, "the moved trigger cancelled the dwell before it settled");
+    assert_eq!(
+        f.shown(),
+        None,
+        "the moved trigger cancelled the dwell before it settled"
+    );
 }
 
 #[test]
 fn an_interactive_card_survives_a_diagonal_travel_and_closes_after_the_grace() {
     require_backend!();
-    let mut f = fixture(true, CardPlacement::Beside { left: false, clearance: px(30.) });
+    let mut f = fixture(
+        true,
+        CardPlacement::Beside {
+            left: false,
+            clearance: px(30.),
+        },
+    );
     f.mounted.set([true, false, false]);
     f.host.flush();
     f.at(0);
@@ -224,9 +252,15 @@ fn an_interactive_card_survives_a_diagonal_travel_and_closes_after_the_grace() {
     assert_eq!(f.shown(), Some(0));
     let card = {
         let cards = f.cards.clone();
-        f.host.app().update(|cx| cards.read(cx).card_bounds()).expect("card painted")
+        f.host
+            .app()
+            .update(|cx| cards.read(cx).card_bounds())
+            .expect("card painted")
     };
-    assert!(f32::from(card.left()) >= 129.0, "the card sits 30 px beside the trigger");
+    assert!(
+        f32::from(card.left()) >= 129.0,
+        "the card sits 30 px beside the trigger"
+    );
     // Leave the trigger heading for the card and keep moving forward in steps of 3 px.
     f.move_to(101.0, 36.0);
     for step in 0..8 {
@@ -236,7 +270,10 @@ fn an_interactive_card_survives_a_diagonal_travel_and_closes_after_the_grace() {
     assert_eq!(f.shown(), Some(0), "forward moves keep the card open");
     // Entering the card keeps it open however long the pointer rests there.
     let center = card.center();
-    f.move_to(f64::from(f32::from(center.x)), f64::from(f32::from(center.y)));
+    f.move_to(
+        f64::from(f32::from(center.x)),
+        f64::from(f32::from(center.y)),
+    );
     f.pass(500.);
     assert_eq!(f.shown(), Some(0));
     // Leaving the card closes it after the 80 ms grace.
@@ -250,7 +287,13 @@ fn an_interactive_card_survives_a_diagonal_travel_and_closes_after_the_grace() {
 #[test]
 fn a_reversal_inside_the_corridor_closes_the_interactive_card_at_once() {
     require_backend!();
-    let mut f = fixture(true, CardPlacement::Beside { left: false, clearance: px(30.) });
+    let mut f = fixture(
+        true,
+        CardPlacement::Beside {
+            left: false,
+            clearance: px(30.),
+        },
+    );
     f.mounted.set([true, false, false]);
     f.host.flush();
     f.at(0);

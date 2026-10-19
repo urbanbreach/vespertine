@@ -15,9 +15,9 @@ use crate::floating::{
 use crate::tokens::ComponentTokens;
 use std::{collections::HashMap, hash::Hash, rc::Rc, time::Duration, time::Instant};
 use vespertine::{
-    AnyElement, App, Bounds, Context, Div, Entity, InteractiveElement, IntoElement,
-    MouseMoveEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent, Stateful,
-    StatefulInteractiveElement, Styled, Task, Window, canvas, div, prelude::FluentBuilder, px,
+    AnyElement, App, Bounds, Context, Div, Entity, InteractiveElement, IntoElement, MouseMoveEvent,
+    ParentElement, Pixels, Point, Render, ScrollWheelEvent, Stateful, StatefulInteractiveElement,
+    Styled, Task, Window, canvas, div, prelude::FluentBuilder, px,
 };
 
 /// Builds the content of the card of a trigger key.
@@ -152,7 +152,9 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
         let press = dismiss.clone();
         trigger
             .on_hover(on_hover)
-            .on_mouse_down(vespertine::MouseButton::Left, move |_, window, cx| press(window, cx))
+            .on_mouse_down(vespertine::MouseButton::Left, move |_, window, cx| {
+                press(window, cx)
+            })
             .on_scroll_wheel(move |_, window, cx| dismiss(window, cx))
             .child(bounds.probe())
     }
@@ -274,7 +276,12 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
         cx.notify();
     }
 
-    fn pointer_moved(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    fn pointer_moved(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.last_pointer = position;
         if !self.interactive || self.cards.shown().is_none() {
             return;
@@ -351,7 +358,11 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
             },
             CardPlacement::Beside { left, clearance } => Placement::Beside {
                 left,
-                offset: if clearance > px(0.) { clearance } else { BESIDE_OFFSET },
+                offset: if clearance > px(0.) {
+                    clearance
+                } else {
+                    BESIDE_OFFSET
+                },
             },
         };
         let host = cx.entity();
@@ -392,7 +403,9 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
                 move |_, _, window, _| {
                     let moved = tracker_host.clone();
                     window.on_mouse_event(move |event: &MouseMoveEvent, _, window, cx| {
-                        moved.update(cx, |this, cx| this.pointer_moved(event.position, window, cx));
+                        moved.update(cx, |this, cx| {
+                            this.pointer_moved(event.position, window, cx)
+                        });
                     });
                     let scrolled = tracker_host.clone();
                     window.on_mouse_event(move |_: &ScrollWheelEvent, _, window, cx| {

@@ -12,8 +12,8 @@ use crate::tokens::ComponentTokens;
 use std::time::Duration;
 use vespertine::{
     Anchor, AnyView, App, AppContext, Context, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, anchored,
-    div, point, px,
+    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, anchored, div,
+    point, px,
 };
 
 /// Maximum width of a text tooltip; longer text wraps.

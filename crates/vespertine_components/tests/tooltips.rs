@@ -60,7 +60,10 @@ fn a_text_tooltip_shows_after_the_default_500_ms_and_a_non_hoverable_one_hides_o
     assert!(shown(cx), "shown at 500 ms");
     hover(cx, 300., 300.);
     pass(cx, 0);
-    assert!(!shown(cx), "a non-hoverable tooltip hides as soon as the pointer leaves");
+    assert!(
+        !shown(cx),
+        "a non-hoverable tooltip hides as soon as the pointer leaves"
+    );
 }
 
 #[vespertine::test]
@@ -82,7 +85,11 @@ fn a_hoverable_tooltip_stays_while_hovered_and_hides_500_ms_after_leaving(cx: &m
     assert!(shown(cx));
     let bounds = cx.debug_bounds("text-tooltip").expect("tooltip bounds");
     // Move onto the tooltip itself: it stays.
-    hover(cx, f32::from(bounds.center().x), f32::from(bounds.center().y));
+    hover(
+        cx,
+        f32::from(bounds.center().x),
+        f32::from(bounds.center().y),
+    );
     pass(cx, 2000);
     assert!(shown(cx), "stays while the pointer is on it");
     // Leave both: it hides after 500 ms and not before.
@@ -122,7 +129,11 @@ fn the_above_placement_leaves_a_20_px_clearance_over_the_pointer(cx: &mut TestAp
     hover(cx, 110., 110.);
     pass(cx, 500);
     let bounds = cx.debug_bounds("text-tooltip").expect("tooltip bounds");
-    assert_eq!(f32::from(bounds.bottom()), 90.0, "bottom edge 20 px above the pointer");
+    assert_eq!(
+        f32::from(bounds.bottom()),
+        90.0,
+        "bottom edge 20 px above the pointer"
+    );
     assert_eq!(f32::from(bounds.left()), 110.0);
 }
 
@@ -144,7 +155,10 @@ fn a_long_text_wraps_at_the_320_px_maximum(cx: &mut TestAppContext) {
     pass(cx, 500);
     let bounds = cx.debug_bounds("text-tooltip").expect("tooltip bounds");
     assert!(f32::from(bounds.size.width) <= 320.0);
-    assert!(f32::from(bounds.size.height) > 40.0, "the text wrapped onto many lines");
+    assert!(
+        f32::from(bounds.size.height) > 40.0,
+        "the text wrapped onto many lines"
+    );
 }
 
 #[vespertine::test]
@@ -159,5 +173,8 @@ fn wheel_scrolling_away_from_the_tooltip_hides_it(cx: &mut TestAppContext) {
         ..Default::default()
     });
     pass(cx, 0);
-    assert!(!shown(cx), "a wheel scroll that is not over the tooltip hides it");
+    assert!(
+        !shown(cx),
+        "a wheel scroll that is not over the tooltip hides it"
+    );
 }

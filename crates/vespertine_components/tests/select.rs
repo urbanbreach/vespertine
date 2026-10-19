@@ -221,18 +221,34 @@ fn keyboard_opens_on_the_selected_option_steps_wraps_and_commits_the_stable_id()
     f.focus_trigger();
     f.key("down");
     assert!(f.open_state(), "Down on a closed select opens it");
-    assert_eq!(f.highlighted().as_deref(), Some("opt2"), "without advancing");
+    assert_eq!(
+        f.highlighted().as_deref(),
+        Some("opt2"),
+        "without advancing"
+    );
     f.key("down");
     assert_eq!(f.highlighted().as_deref(), Some("opt3"));
     f.key("down");
     f.key("down");
-    assert_eq!(f.highlighted().as_deref(), Some("opt0"), "wraps past the end");
+    assert_eq!(
+        f.highlighted().as_deref(),
+        Some("opt0"),
+        "wraps past the end"
+    );
     f.key("up");
-    assert_eq!(f.highlighted().as_deref(), Some("opt4"), "wraps past the start");
+    assert_eq!(
+        f.highlighted().as_deref(),
+        Some("opt4"),
+        "wraps past the start"
+    );
     f.key("home");
     assert_eq!(f.highlighted().as_deref(), Some("opt0"));
     f.key("down");
-    assert_eq!(f.highlighted().as_deref(), Some("opt2"), "the disabled option is skipped");
+    assert_eq!(
+        f.highlighted().as_deref(),
+        Some("opt2"),
+        "the disabled option is skipped"
+    );
     f.key("end");
     assert_eq!(f.highlighted().as_deref(), Some("opt4"));
 
@@ -246,7 +262,11 @@ fn keyboard_opens_on_the_selected_option_steps_wraps_and_commits_the_stable_id()
         })
     });
     f.host.flush();
-    assert_eq!(f.highlighted().as_deref(), Some("opt4"), "the highlight follows its id");
+    assert_eq!(
+        f.highlighted().as_deref(),
+        Some("opt4"),
+        "the highlight follows its id"
+    );
     f.key("enter");
     assert_eq!(f.selections(), vec!["opt4".to_string()]);
     assert!(!f.open_state(), "the commit closes the menu");
@@ -300,7 +320,10 @@ fn a_selection_outside_the_viewport_is_brought_to_the_center_and_stepping_reveal
     f.key("home");
     f.settle();
     let first = f.rect(MenuPart::Row(0)).expect("first row");
-    assert!(first.1 >= card.1 - 0.5, "Home reveals the first row: {first:?} in {card:?}");
+    assert!(
+        first.1 >= card.1 - 0.5,
+        "Home reveals the first row: {first:?} in {card:?}"
+    );
 }
 
 #[test]
@@ -317,13 +340,25 @@ fn a_select_near_the_bottom_flips_above_and_stays_inside_the_limits() {
     f.settle();
     let trigger = f.rect(MenuPart::Trigger).expect("trigger");
     let card = f.rect(MenuPart::Surface).expect("card");
-    assert!(card.1 + card.3 <= trigger.1 - 6.0 + 0.01, "above with >= 6 px clearance");
-    assert!(card.1 >= 8.0 - 0.01 && card.1 + card.3 <= 352.0 + 0.01, "inside the limits");
+    assert!(
+        card.1 + card.3 <= trigger.1 - 6.0 + 0.01,
+        "above with >= 6 px clearance"
+    );
+    assert!(
+        card.1 >= 8.0 - 0.01 && card.1 + card.3 <= 352.0 + 0.01,
+        "inside the limits"
+    );
     let formula = ((344.0_f64 - trigger.3) / 2.0 - 6.0).clamp(1.0, 320.0);
-    assert!(card.3 <= formula + 0.01, "no taller than the formula allows: {} <= {formula}", card.3);
+    assert!(
+        card.3 <= formula + 0.01,
+        "no taller than the formula allows: {} <= {formula}",
+        card.3
+    );
     // 30 rows scroll inside the card.
     let before = f.read(|select| select.scroll_offset().y);
-    f.host.scroll_wheel(card.0 + 20.0, card.1 + 20.0, 0.0, -60.0, "").unwrap();
+    f.host
+        .scroll_wheel(card.0 + 20.0, card.1 + 20.0, 0.0, -60.0, "")
+        .unwrap();
     f.host.flush();
     let after = f.read(|select| select.scroll_offset().y);
     assert_ne!(f32::from(before), f32::from(after), "the rows scroll");
@@ -343,8 +378,14 @@ fn the_menu_opens_below_end_aligned_and_is_at_least_160_wide() {
     let trigger = f.rect(MenuPart::Trigger).expect("trigger");
     let card = f.rect(MenuPart::Surface).expect("card");
     assert!(card.2 >= 160.0 - 0.01, "at least 160 wide: {}", card.2);
-    assert!((card.0 + card.2 - (trigger.0 + trigger.2)).abs() < 0.01, "right edges align");
-    assert!(card.1 >= trigger.1 + trigger.3 + 6.0 - 0.01, "below with the clearance");
+    assert!(
+        (card.0 + card.2 - (trigger.0 + trigger.2)).abs() < 0.01,
+        "right edges align"
+    );
+    assert!(
+        card.1 >= trigger.1 + trigger.3 + 6.0 - 0.01,
+        "below with the clearance"
+    );
 
     let mut g = fixture(Spec {
         width: Some(100.),
@@ -357,7 +398,10 @@ fn the_menu_opens_below_end_aligned_and_is_at_least_160_wide() {
     g.settle();
     let trigger = g.rect(MenuPart::Trigger).expect("trigger");
     let card = g.rect(MenuPart::Surface).expect("card");
-    assert!((card.0 - trigger.0).abs() < 0.01, "start-aligned opens rightward");
+    assert!(
+        (card.0 - trigger.0).abs() < 0.01,
+        "start-aligned opens rightward"
+    );
 }
 
 #[test]
@@ -374,7 +418,11 @@ fn compact_selector_list_heights_follow_the_formula() {
         f.key("down");
         f.settle();
         let card = f.rect(MenuPart::Surface).expect("card");
-        assert!((card.3 - expected).abs() < 0.51, "{count} options: {} vs {expected}", card.3);
+        assert!(
+            (card.3 - expected).abs() < 0.51,
+            "{count} options: {} vs {expected}",
+            card.3
+        );
         assert!((card.2 - 256.0).abs() < 0.51, "256 px wide");
     }
 }
@@ -393,7 +441,11 @@ fn a_row_click_selects_it_closes_and_does_not_reach_the_content_beneath() {
     f.host.flush();
     assert_eq!(f.selections(), vec!["opt2".to_string()]);
     assert!(!f.open_state());
-    assert_eq!(f.shared.background_clicks.get(), before, "the row click did not reach the background");
+    assert_eq!(
+        f.shared.background_clicks.get(),
+        before,
+        "the row click did not reach the background"
+    );
 }
 
 #[test]
@@ -405,7 +457,10 @@ fn pressing_the_open_trigger_leaves_it_closed_and_an_outside_press_dismisses() {
     assert!(f.open_state());
     f.host.click(300.0, 36.0, 0, "").unwrap();
     f.host.flush();
-    assert!(!f.open_state(), "press and click on the trigger of an open menu leave it closed");
+    assert!(
+        !f.open_state(),
+        "press and click on the trigger of an open menu leave it closed"
+    );
     f.settle();
     f.host.click(300.0, 36.0, 0, "").unwrap();
     f.host.flush();
@@ -451,11 +506,19 @@ fn the_heading_stays_fixed_while_only_the_rows_scroll() {
     f.key("down");
     f.settle();
     let painted = f.host.painted_text();
-    assert!(painted.iter().any(|t| t == "Letters"), "the heading is shown");
+    assert!(
+        painted.iter().any(|t| t == "Letters"),
+        "the heading is shown"
+    );
     let card = f.rect(MenuPart::Surface).expect("card");
-    f.host.scroll_wheel(card.0 + 20.0, card.1 + 40.0, 0.0, -200.0, "").unwrap();
+    f.host
+        .scroll_wheel(card.0 + 20.0, card.1 + 40.0, 0.0, -200.0, "")
+        .unwrap();
     f.host.flush();
-    assert!(f.host.painted_text().iter().any(|t| t == "Letters"), "the heading did not scroll away");
+    assert!(
+        f.host.painted_text().iter().any(|t| t == "Letters"),
+        "the heading did not scroll away"
+    );
 }
 
 #[test]
@@ -470,7 +533,14 @@ fn the_accessibility_tree_names_the_trigger_and_marks_one_selected_radio_row() {
     f.settle();
     let tree = f.host.accessibility_tree().unwrap().expect("a tree");
     let text = tree.to_string();
-    assert!(text.contains("Letters: Option 1"), "the trigger name is `label: value`");
+    assert!(
+        text.contains("Letters: Option 1"),
+        "the trigger name is `label: value`"
+    );
     assert_eq!(text.matches("menuItemRadio").count(), 3);
-    assert_eq!(text.matches("\"toggled\":\"true\"").count(), 1, "one selected radio row");
+    assert_eq!(
+        text.matches("\"toggled\":\"true\"").count(),
+        1,
+        "one selected radio row"
+    );
 }

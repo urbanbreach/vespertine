@@ -708,7 +708,10 @@ mod tests {
         // A newer generation begins: the late page answer is dropped and asks for nothing.
         let newer = requests(&set.set_query(ms(2), "abc"));
         assert!(!set.page_answer(0, page[0].1, Ok(rows(&["c"]))));
-        assert!(set.scrolled_to_end().is_empty(), "nothing to page before an answer");
+        assert!(
+            set.scrolled_to_end().is_empty(),
+            "nothing to page before an answer"
+        );
         let answer = Answer {
             has_more: true,
             ..rows(&["x"])
@@ -745,7 +748,10 @@ mod tests {
         assert!(set.is_loading_more(0));
         set.page_answer(0, page[0].1, Err("net".into()));
         assert_eq!(set.page_error(0), Some("net"));
-        assert!(set.scrolled_to_end().is_empty(), "the error blocks silent retries");
+        assert!(
+            set.scrolled_to_end().is_empty(),
+            "the error blocks silent retries"
+        );
         let retry = requests(&set.retry_page(0));
         assert_eq!(retry.len(), 1);
         assert_eq!(retry[0].3, 1);

@@ -29,7 +29,9 @@ fn fetcher(log: &Rc<RefCell<Log>>) -> Fetcher<String> {
 }
 
 fn answer(rows: &[&str]) -> Result<Answer<String>, String> {
-    Ok(Answer::complete(rows.iter().map(|row| row.to_string()).collect()))
+    Ok(Answer::complete(
+        rows.iter().map(|row| row.to_string()).collect(),
+    ))
 }
 
 fn rows(sources: &Entity<PickerSources<String>>, cx: &mut TestAppContext) -> Vec<String> {
@@ -66,7 +68,9 @@ fn answers_arriving_in_reverse_order_keep_the_newer_results_and_a_failure_retrie
     assert_eq!(rows(&sources, cx), ["abc-result"]);
     // The first request was cancelled when it was superseded (its task dropped); even if it had
     // answered, the generation check would drop it.
-    let _ = log.borrow_mut().replies[0].take().map(|tx| tx.send(answer(&["stale"])));
+    let _ = log.borrow_mut().replies[0]
+        .take()
+        .map(|tx| tx.send(answer(&["stale"])));
     cx.run_until_parked();
     assert_eq!(rows(&sources, cx), ["abc-result"]);
 
@@ -138,21 +142,37 @@ fn an_indexing_source_refreshes_after_500_1000_2000_and_2000_ms(cx: &mut TestApp
         reply(&log, expected_requests - 1, partial());
         cx.run_until_parked();
         sources.read_with(cx, |s, _| assert!(s.set().is_indexing(0)));
-        assert_eq!(rows(&sources, cx), ["partial"], "partial rows stay displayed");
+        assert_eq!(
+            rows(&sources, cx),
+            ["partial"],
+            "partial rows stay displayed"
+        );
         cx.executor().advance_clock(Duration::from_millis(wait - 1));
         cx.run_until_parked();
-        assert_eq!(log.borrow().requests.len(), expected_requests, "not before {wait} ms");
+        assert_eq!(
+            log.borrow().requests.len(),
+            expected_requests,
+            "not before {wait} ms"
+        );
         cx.executor().advance_clock(Duration::from_millis(1));
         cx.run_until_parked();
         expected_requests += 1;
-        assert_eq!(log.borrow().requests.len(), expected_requests, "refresh after {wait} ms");
+        assert_eq!(
+            log.borrow().requests.len(),
+            expected_requests,
+            "refresh after {wait} ms"
+        );
     }
     reply(&log, expected_requests - 1, answer(&["done"]));
     cx.run_until_parked();
     sources.read_with(cx, |s, _| assert!(!s.set().is_indexing(0)));
     cx.executor().advance_clock(Duration::from_secs(10));
     cx.run_until_parked();
-    assert_eq!(log.borrow().requests.len(), expected_requests, "no more refreshes");
+    assert_eq!(
+        log.borrow().requests.len(),
+        expected_requests,
+        "no more refreshes"
+    );
 }
 
 #[vespertine::test]
@@ -180,11 +200,17 @@ fn scrolling_to_the_end_requests_exactly_one_next_page_and_none_after_a_newer_ge
     // A newer generation begins: the page answer is dropped and nothing pages.
     sources.update(cx, |s, cx| s.set_query("abc", cx));
     cx.run_until_parked();
-    let _ = log.borrow_mut().replies[1].take().map(|tx| tx.send(answer(&["late"])));
+    let _ = log.borrow_mut().replies[1]
+        .take()
+        .map(|tx| tx.send(answer(&["late"])));
     cx.run_until_parked();
     sources.update(cx, |s, cx| s.scrolled_to_end(cx));
     cx.run_until_parked();
-    assert_eq!(log.borrow().requests.len(), 3, "only the new first-page request");
+    assert_eq!(
+        log.borrow().requests.len(),
+        3,
+        "only the new first-page request"
+    );
     assert!(rows(&sources, cx).iter().all(|row| row != "late"));
 }
 
@@ -201,5 +227,8 @@ fn clearing_cancels_the_in_flight_request_and_empties_the_rows(cx: &mut TestAppC
     cx.run_until_parked();
     assert!(rows(&sources, cx).is_empty());
     let late = log.borrow_mut().replies[1].take().expect("still held");
-    assert!(late.send(answer(&["late"])).is_err(), "the request task was dropped");
+    assert!(
+        late.send(answer(&["late"])).is_err(),
+        "the request task was dropped"
+    );
 }

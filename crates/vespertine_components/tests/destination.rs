@@ -1,14 +1,13 @@
 //! CMP-004 A7: the link destination card.
 
-use vespertine::{
-    Context, IntoElement, Render, Size, Styled, TestAppContext, Window, div, px,
-    size,
-};
 use std::{cell::RefCell, rc::Rc};
-use vespertine_test_host::{HostOptions, TestHost, require_backend};
 use vespertine::AppContext as _;
+use vespertine::{
+    Context, IntoElement, Render, Size, Styled, TestAppContext, Window, div, px, size,
+};
 use vespertine_components::tokens::ComponentTokens;
 use vespertine_components::tooltip::destination::{DestinationCard, card_limits, destination_card};
+use vespertine_test_host::{HostOptions, TestHost, require_backend};
 
 #[vespertine::test]
 fn limits_follow_the_viewport() {
@@ -18,7 +17,9 @@ fn limits_follow_the_viewport() {
         (size(px(80.), px(80.)), (56.0, 1.0)),
     ] {
         assert_eq!(card_limits(viewport), expected);
-        assert!(expected.0 <= f32::from(viewport.width) && expected.1 <= f32::from(viewport.height));
+        assert!(
+            expected.0 <= f32::from(viewport.width) && expected.1 <= f32::from(viewport.height)
+        );
     }
 }
 
@@ -29,7 +30,11 @@ impl Render for Empty {
     }
 }
 
-fn measure(cx: &mut TestAppContext, text: &str, viewport: Size<vespertine::Pixels>) -> DestinationCard {
+fn measure(
+    cx: &mut TestAppContext,
+    text: &str,
+    viewport: Size<vespertine::Pixels>,
+) -> DestinationCard {
     let (_, vcx) = cx.add_window_view(|_, _| Empty);
     let text = text.to_string();
     vcx.update(|window, _| destination_card(&text, viewport, ComponentTokens::neutral(), window))
@@ -41,13 +46,20 @@ fn removing_every_inserted_zero_width_space_reproduces_the_original(cx: &mut Tes
     let card = measure(cx, &destination, size(px(400.), px(300.)));
     assert_ne!(card.display_text(), destination);
     assert_eq!(card.display_text().replace('\u{200B}', ""), destination);
-    assert_eq!(card.copied_text(), destination, "copying yields the original exactly");
+    assert_eq!(
+        card.copied_text(),
+        destination,
+        "copying yields the original exactly"
+    );
     assert_eq!(card.destination(), destination);
     // Wrapped but never above the maximum, and never above the viewport.
     let bounds = card.bounds();
     assert!(f32::from(bounds.width) <= 360.0);
     assert!(f32::from(bounds.height) <= 160.0);
-    assert!(f32::from(bounds.height) > 100.0, "a long destination uses its scroll height");
+    assert!(
+        f32::from(bounds.height) > 100.0,
+        "a long destination uses its scroll height"
+    );
 }
 
 #[vespertine::test]
@@ -68,7 +80,12 @@ impl Render for Measurer {
         if self.out.borrow().is_empty() {
             let viewport = size(px(400.), px(300.));
             let mut cards = vec![
-                destination_card("docs/readme.md", viewport, ComponentTokens::neutral(), window),
+                destination_card(
+                    "docs/readme.md",
+                    viewport,
+                    ComponentTokens::neutral(),
+                    window,
+                ),
                 destination_card(
                     &"x".repeat(2000),
                     viewport,
@@ -94,10 +111,22 @@ fn a_short_destination_stays_on_one_line_and_a_long_one_wraps_and_scrolls() {
     host.flush();
     let cards = out.borrow();
     let short = &cards[0];
-    assert_eq!(f32::from(short.bounds().height), 14.0 + 10.0, "one 14 px line plus the chrome");
+    assert_eq!(
+        f32::from(short.bounds().height),
+        14.0 + 10.0,
+        "one 14 px line plus the chrome"
+    );
     assert_eq!(f32::from(short.bounds().width), short.limits().width);
     assert!(f32::from(short.bounds().width) < 200.0);
     let long = &cards[1];
-    assert_eq!(f32::from(long.bounds().width), 360.0, "capped at the maximum width");
-    assert_eq!(f32::from(long.bounds().height), 160.0, "capped at the maximum height");
+    assert_eq!(
+        f32::from(long.bounds().width),
+        360.0,
+        "capped at the maximum width"
+    );
+    assert_eq!(
+        f32::from(long.bounds().height),
+        160.0,
+        "capped at the maximum height"
+    );
 }

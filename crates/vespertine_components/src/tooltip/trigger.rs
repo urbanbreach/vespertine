@@ -16,8 +16,8 @@ use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
     Anchor, AnyElement, App, Bounds, Context, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Window, anchored, deferred, div, point, px,
+    IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred, div, point, px,
 };
 
 /// Clearance between the trigger and the surface.

@@ -307,7 +307,13 @@ mod tests {
     }
 
     fn build(specs: &[SectionSpec], view: &View) -> Results {
-        Results::build(specs, view, &Paging::default(), "No results", "Try another query")
+        Results::build(
+            specs,
+            view,
+            &Paging::default(),
+            "No results",
+            "Try another query",
+        )
     }
 
     #[test]
@@ -358,7 +364,13 @@ mod tests {
         spec.scope_limit = 1000;
         let results = build(&[spec], &View::Scope(vec!["files".into()]));
         assert_eq!(results.len(), DISPLAY_CAP);
-        assert_eq!(results.footer, Footer::ShowingOf { shown: 300, total: 450 });
+        assert_eq!(
+            results.footer,
+            Footer::ShowingOf {
+                shown: 300,
+                total: 450
+            }
+        );
         assert_eq!(results.footer.text().as_deref(), Some("Showing 300 of 450"));
     }
 

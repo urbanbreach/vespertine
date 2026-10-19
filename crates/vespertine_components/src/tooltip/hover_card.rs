@@ -314,7 +314,13 @@ mod tests {
     fn the_first_card_shows_after_the_dwell_with_the_pointer_still_on_the_trigger() {
         let mut cards = HoverCards::<u32>::new();
         let reaction = cards.enter(ms(0), &1, false);
-        assert_eq!(reaction, Reaction::StartDwell { target: 1, due: ms(550) });
+        assert_eq!(
+            reaction,
+            Reaction::StartDwell {
+                target: 1,
+                due: ms(550)
+            }
+        );
         assert_eq!(cards.settle(ms(549), &1), Reaction::None);
         assert_eq!(cards.settle(ms(550), &1), Reaction::Show(1));
         assert_eq!(cards.shown(), Some(&1));
@@ -335,7 +341,11 @@ mod tests {
         cards.enter(ms(0), &1, false);
         cards.settle(ms(550), &1);
         assert_eq!(cards.enter(ms(600), &2, false), Reaction::Show(2));
-        assert_eq!(cards.enter(ms(610), &2, false), Reaction::None, "already shown");
+        assert_eq!(
+            cards.enter(ms(610), &2, false),
+            Reaction::None,
+            "already shown"
+        );
     }
 
     #[test]
@@ -348,7 +358,10 @@ mod tests {
         cards.leave(ms(1500), &2);
         assert_eq!(
             cards.enter(ms(1901), &1, false),
-            Reaction::StartDwell { target: 1, due: ms(2451) },
+            Reaction::StartDwell {
+                target: 1,
+                due: ms(2451)
+            },
             "401 ms after the hide waits the dwell"
         );
     }
@@ -361,7 +374,10 @@ mod tests {
         assert_eq!(cards.dismiss_cold(), Reaction::Hide(1));
         assert_eq!(
             cards.enter(ms(600), &1, false),
-            Reaction::StartDwell { target: 1, due: ms(1150) },
+            Reaction::StartDwell {
+                target: 1,
+                due: ms(1150)
+            },
             "a re-enter right after a click waits the dwell"
         );
         assert_eq!(cards.dismiss_cold(), Reaction::None);
@@ -407,14 +423,26 @@ mod tests {
         let answer = hide.trigger_left(ms(0), point(px(110.), px(105.)), card(), false);
         assert_eq!(answer, HideAnswer::StartGrace);
         // Forward moves at least 2 px apart keep renewing the grace.
-        assert_eq!(hide.moved(ms(60), point(px(115.), px(108.)), card(), false), HideAnswer::StartGrace);
+        assert_eq!(
+            hide.moved(ms(60), point(px(115.), px(108.)), card(), false),
+            HideAnswer::StartGrace
+        );
         assert_eq!(hide.grace_due(), Some(ms(140)));
-        assert_eq!(hide.moved(ms(100), point(px(120.), px(110.)), card(), false), HideAnswer::StartGrace);
+        assert_eq!(
+            hide.moved(ms(100), point(px(120.), px(110.)), card(), false),
+            HideAnswer::StartGrace
+        );
         assert!(!hide.expired(ms(179)));
         // A small movement keeps the running timer.
-        assert_eq!(hide.moved(ms(150), point(px(120.5), px(110.)), card(), false), HideAnswer::None);
+        assert_eq!(
+            hide.moved(ms(150), point(px(120.5), px(110.)), card(), false),
+            HideAnswer::None
+        );
         // A reversal of 2 px or more closes at once.
-        assert_eq!(hide.moved(ms(160), point(px(117.), px(110.)), card(), false), HideAnswer::Close);
+        assert_eq!(
+            hide.moved(ms(160), point(px(117.), px(110.)), card(), false),
+            HideAnswer::Close
+        );
         assert_eq!(hide.grace_due(), None);
     }
 
@@ -424,8 +452,14 @@ mod tests {
         hide.record_origin(point(px(100.), px(100.)));
         hide.trigger_left(ms(0), point(px(110.), px(105.)), card(), false);
         // Far above the funnel: out of the corridor, no renewal.
-        assert_eq!(hide.moved(ms(40), point(px(130.), px(0.)), card(), false), HideAnswer::None);
-        assert_eq!(hide.moved(ms(50), point(px(140.), px(0.)), card(), false), HideAnswer::None);
+        assert_eq!(
+            hide.moved(ms(40), point(px(130.), px(0.)), card(), false),
+            HideAnswer::None
+        );
+        assert_eq!(
+            hide.moved(ms(50), point(px(140.), px(0.)), card(), false),
+            HideAnswer::None
+        );
         assert!(!hide.expired(ms(79)));
         assert!(hide.expired(ms(80)));
     }
@@ -447,7 +481,13 @@ mod tests {
         let mut hide = InteractiveHide::new();
         hide.record_origin(point(px(200.), px(100.)));
         hide.trigger_left(ms(0), point(px(190.), px(105.)), card, true);
-        assert_eq!(hide.moved(ms(60), point(px(185.), px(108.)), card, true), HideAnswer::StartGrace);
-        assert_eq!(hide.moved(ms(100), point(px(188.), px(108.)), card, true), HideAnswer::Close);
+        assert_eq!(
+            hide.moved(ms(60), point(px(185.), px(108.)), card, true),
+            HideAnswer::StartGrace
+        );
+        assert_eq!(
+            hide.moved(ms(100), point(px(188.), px(108.)), card, true),
+            HideAnswer::Close
+        );
     }
 }

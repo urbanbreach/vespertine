@@ -9,8 +9,8 @@
 
 use crate::tokens::ComponentTokens;
 use vespertine::{
-    InteractiveElement, IntoElement, ParentElement, Pixels, SharedString, Size, StatefulInteractiveElement, Styled, TextRun,
-    Window, div, px, size,
+    InteractiveElement, IntoElement, ParentElement, Pixels, SharedString, Size,
+    StatefulInteractiveElement, Styled, TextRun, Window, div, px, size,
 };
 use vespertine_richtext::links::{
     DISCLOSURE_LINE_HEIGHT, DISCLOSURE_PADDING_X, DISCLOSURE_PADDING_Y, DISCLOSURE_TEXT_SIZE,
@@ -135,7 +135,10 @@ impl DestinationCard {
             .text_size(px(DISCLOSURE_TEXT_SIZE))
             .line_height(px(DISCLOSURE_LINE_HEIGHT))
             .text_color(self.tokens.text)
-            .child(RichText::with_original("destination-card-text", self.original.clone()))
+            .child(RichText::with_original(
+                "destination-card-text",
+                self.original.clone(),
+            ))
     }
 }
 

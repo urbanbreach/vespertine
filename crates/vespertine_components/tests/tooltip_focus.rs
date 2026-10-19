@@ -22,7 +22,13 @@ impl Render for Root {
         div()
             .size_full()
             .relative()
-            .child(div().absolute().left(px(20.)).top(px(100.)).child(self.trigger.clone()))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(20.))
+                    .top(px(100.))
+                    .child(self.trigger.clone()),
+            )
             .child(
                 div()
                     .id("sibling")
@@ -34,7 +40,13 @@ impl Render for Root {
                     .track_focus(&self.sibling)
                     .child("sibling"),
             )
-            .child(div().absolute().left(px(200.)).top(px(20.)).child(self.menu.clone()))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(200.))
+                    .top(px(20.))
+                    .child(self.menu.clone()),
+            )
     }
 }
 
@@ -110,7 +122,11 @@ impl Fixture {
             .app()
             .update_window(window, |_, window, cx| {
                 let root = root.read(cx);
-                let handle = if which == "button" { &root.button } else { &root.sibling };
+                let handle = if which == "button" {
+                    &root.button
+                } else {
+                    &root.sibling
+                };
                 handle.is_focused(window)
             })
             .unwrap()
@@ -145,7 +161,10 @@ fn a_trigger_focused_by_tab_opens_at_once_and_closes_on_blur() {
     assert!(!f.shown());
     f.tab();
     assert!(f.focused_is("button"), "tab focuses the wrapped button");
-    assert!(f.trigger_open(), "a keyboard-focused trigger opens with no delay");
+    assert!(
+        f.trigger_open(),
+        "a keyboard-focused trigger opens with no delay"
+    );
     assert!(f.shown(), "the surface is painted");
     f.tab();
     assert!(f.focused_is("sibling"));
@@ -173,7 +192,10 @@ fn escape_and_a_press_close_a_focus_opened_surface_without_changing_focus() {
     assert!(f.shown());
     f.escape();
     assert!(!f.trigger_open(), "Escape closes it");
-    assert!(f.focused_is("button"), "the focus owner is unchanged by hiding");
+    assert!(
+        f.focused_is("button"),
+        "the focus owner is unchanged by hiding"
+    );
 
     // Re-open by keyboard and close by a press on the trigger (A6: still focused afterwards).
     f.tab();
@@ -205,9 +227,15 @@ fn escape_reaches_the_tooltip_before_the_menu_below_it() {
     assert!(f.host.app().update(|cx| menu.read(cx).is_open()));
     f.escape();
     assert!(!f.trigger_open(), "the first Escape closes the tooltip");
-    assert!(f.host.app().update(|cx| menu.read(cx).is_open()), "the menu is still open");
+    assert!(
+        f.host.app().update(|cx| menu.read(cx).is_open()),
+        "the menu is still open"
+    );
     f.escape();
-    assert!(!f.host.app().update(|cx| menu.read(cx).is_open()), "the second closes the menu");
+    assert!(
+        !f.host.app().update(|cx| menu.read(cx).is_open()),
+        "the second closes the menu"
+    );
 }
 
 #[test]
@@ -218,7 +246,9 @@ fn passive_native_tooltips_do_not_take_escape_from_the_menu() {
     let window = f.host.window();
     f.host
         .app()
-        .update_window(window, |_, window, cx| menu.update(cx, |menu, cx| menu.open(window, cx)))
+        .update_window(window, |_, window, cx| {
+            menu.update(cx, |menu, cx| menu.open(window, cx))
+        })
         .unwrap();
     f.host.flush();
     // Hover the trigger long enough for the base text tooltip to show.
@@ -227,5 +257,8 @@ fn passive_native_tooltips_do_not_take_escape_from_the_menu() {
     f.host.flush();
     assert!(f.shown(), "the passive hover tooltip is visible");
     f.escape();
-    assert!(!f.host.app().update(|cx| menu.read(cx).is_open()), "Escape went to the menu");
+    assert!(
+        !f.host.app().update(|cx| menu.read(cx).is_open()),
+        "Escape went to the menu"
+    );
 }

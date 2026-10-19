@@ -8,13 +8,13 @@ use super::model::{
     Leading, OptionId, Outcome, SelectKey, SelectOption, SelectState, compact, position_of,
     trigger_name, value_text,
 };
+use crate::floating::menu::{AnchoredMenu, MENU_PADDING, ROW_GAP};
 use crate::floating::{
     BoundsObserver, ContainedAlign, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle,
     LayerOptions, MenuPart, OutsidePress, Placement, Popup, SurfaceMotion, TriggerBounds,
-    classify_key, close_popup, containment_limits, contained_max_size, keys::ListKey, open_layer,
+    classify_key, close_popup, contained_max_size, containment_limits, keys::ListKey, open_layer,
     rows_max_height,
 };
-use crate::floating::menu::{AnchoredMenu, MENU_PADDING, ROW_GAP};
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
@@ -219,7 +219,8 @@ impl Select {
     /// Replaces the options (identity is the id: the highlight follows it).
     pub fn set_options(&mut self, options: Vec<SelectOption>, cx: &mut Context<Self>) {
         self.options = options;
-        self.state.reconcile(&self.options, self.selected.as_deref());
+        self.state
+            .reconcile(&self.options, self.selected.as_deref());
         cx.notify();
     }
 
@@ -257,9 +258,7 @@ impl Select {
 
     /// The highlighted option id while open.
     pub fn highlighted(&self) -> Option<&OptionId> {
-        self.popup
-            .as_open()
-            .and_then(|_| self.state.highlighted())
+        self.popup.as_open().and_then(|_| self.state.highlighted())
     }
 
     /// The scroll offset of the rows.
@@ -481,7 +480,11 @@ impl Select {
             .id(ElementId::NamedInteger("select-row".into(), ix as u64))
             .role(Role::MenuItemRadio)
             .aria_label(option.label.clone())
-            .aria_toggled(if selected { Toggled::True } else { Toggled::False })
+            .aria_toggled(if selected {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
             .aria_disabled(disabled)
             .when(highlighted, |row| row.aria_active_descendant())
             .relative()
@@ -503,13 +506,17 @@ impl Select {
                         cx.notify();
                     }
                 }))
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    if !matches!(event, ClickEvent::Keyboard(_)) {
-                        this.commit(&id, window, cx);
-                    }
-                }))
+                .on_click(cx.listener(
+                    move |this, event: &ClickEvent, window, cx| {
+                        if !matches!(event, ClickEvent::Keyboard(_)) {
+                            this.commit(&id, window, cx);
+                        }
+                    },
+                ))
             })
-            .when_some(leading, |row, leading| row.child(leading_element(leading, tokens)))
+            .when_some(leading, |row, leading| {
+                row.child(leading_element(leading, tokens))
+            })
             .child(
                 div()
                     .flex()
@@ -577,7 +584,12 @@ impl Select {
 }
 
 fn leading_element(leading: Leading, tokens: &ComponentTokens) -> impl IntoElement + use<> {
-    let slot = div().flex_none().w(px(16.)).flex().items_center().justify_center();
+    let slot = div()
+        .flex_none()
+        .w(px(16.))
+        .flex()
+        .items_center()
+        .justify_center();
     match leading {
         Leading::Glyph(glyph) => slot.text_color(tokens.text_muted).child(glyph),
         Leading::Swatch(color) => slot.child(
@@ -733,7 +745,9 @@ impl Render for Select {
                     .child(
                         div()
                             .truncate()
-                            .when(showing_placeholder, |text| text.text_color(tokens.text_muted))
+                            .when(showing_placeholder, |text| {
+                                text.text_color(tokens.text_muted)
+                            })
                             .child(value),
                     ),
             )

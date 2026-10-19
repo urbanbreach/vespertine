@@ -282,8 +282,12 @@ impl SelectState {
             .as_deref()
             .and_then(|id| position_of(options, id));
         let target = match key {
-            SelectKey::Up => step_available(options.len(), current, StepDirection::Backward, available),
-            SelectKey::Down => step_available(options.len(), current, StepDirection::Forward, available),
+            SelectKey::Up => {
+                step_available(options.len(), current, StepDirection::Backward, available)
+            }
+            SelectKey::Down => {
+                step_available(options.len(), current, StepDirection::Forward, available)
+            }
             SelectKey::Home => edge_available(options.len(), Edge::First, available),
             SelectKey::End => edge_available(options.len(), Edge::Last, available),
             SelectKey::Enter | SelectKey::Space => {
@@ -325,13 +329,25 @@ mod tests {
     fn closed_up_and_down_open_with_the_highlight_on_the_selected_option() {
         let options = options();
         let mut state = SelectState::new();
-        assert_eq!(state.key_down(Down, false, false, &options, Some("c")), Outcome::Open);
+        assert_eq!(
+            state.key_down(Down, false, false, &options, Some("c")),
+            Outcome::Open
+        );
         assert_eq!(state.highlighted().map(|id| id.as_ref()), Some("c"));
         let mut state = SelectState::new();
-        assert_eq!(state.key_down(Up, false, false, &options, None), Outcome::Open);
+        assert_eq!(
+            state.key_down(Up, false, false, &options, None),
+            Outcome::Open
+        );
         assert_eq!(state.highlighted(), None);
-        assert_eq!(state.key_down(Home, false, false, &options, None), Outcome::Ignored);
-        assert_eq!(state.key_down(Escape, false, false, &options, None), Outcome::Ignored);
+        assert_eq!(
+            state.key_down(Home, false, false, &options, None),
+            Outcome::Ignored
+        );
+        assert_eq!(
+            state.key_down(Escape, false, false, &options, None),
+            Outcome::Ignored
+        );
     }
 
     #[test]
@@ -339,12 +355,30 @@ mod tests {
         let options = options();
         let mut state = SelectState::new();
         state.open(&options, Some("a"));
-        assert_eq!(state.key_down(Down, false, true, &options, Some("a")), Outcome::Highlighted("c".into()));
-        assert_eq!(state.key_down(Down, false, true, &options, Some("a")), Outcome::Highlighted("d".into()));
-        assert_eq!(state.key_down(Down, false, true, &options, Some("a")), Outcome::Highlighted("a".into()));
-        assert_eq!(state.key_down(Up, false, true, &options, Some("a")), Outcome::Highlighted("d".into()));
-        assert_eq!(state.key_down(Home, false, true, &options, Some("a")), Outcome::Highlighted("a".into()));
-        assert_eq!(state.key_down(End, false, true, &options, Some("a")), Outcome::Highlighted("d".into()));
+        assert_eq!(
+            state.key_down(Down, false, true, &options, Some("a")),
+            Outcome::Highlighted("c".into())
+        );
+        assert_eq!(
+            state.key_down(Down, false, true, &options, Some("a")),
+            Outcome::Highlighted("d".into())
+        );
+        assert_eq!(
+            state.key_down(Down, false, true, &options, Some("a")),
+            Outcome::Highlighted("a".into())
+        );
+        assert_eq!(
+            state.key_down(Up, false, true, &options, Some("a")),
+            Outcome::Highlighted("d".into())
+        );
+        assert_eq!(
+            state.key_down(Home, false, true, &options, Some("a")),
+            Outcome::Highlighted("a".into())
+        );
+        assert_eq!(
+            state.key_down(End, false, true, &options, Some("a")),
+            Outcome::Highlighted("d".into())
+        );
     }
 
     #[test]
@@ -358,22 +392,43 @@ mod tests {
         options.reverse();
         state.reconcile(&options, Some("a"));
         assert_eq!(state.highlighted().map(|id| id.as_ref()), Some("c"));
-        assert_eq!(state.key_down(Enter, false, true, &options, Some("a")), Outcome::Commit("c".into()));
+        assert_eq!(
+            state.key_down(Enter, false, true, &options, Some("a")),
+            Outcome::Commit("c".into())
+        );
     }
 
     #[test]
     fn a_held_enter_neither_opens_nor_commits_twice() {
         let options = options();
         let mut state = SelectState::new();
-        assert_eq!(state.key_down(Enter, false, false, &options, Some("a")), Outcome::Open);
+        assert_eq!(
+            state.key_down(Enter, false, false, &options, Some("a")),
+            Outcome::Open
+        );
         // An unflagged repeat of the same press while the menu is open does not commit.
-        assert_eq!(state.key_down(Enter, false, true, &options, Some("a")), Outcome::Consumed);
-        assert_eq!(state.key_down(Enter, true, true, &options, Some("a")), Outcome::Consumed);
+        assert_eq!(
+            state.key_down(Enter, false, true, &options, Some("a")),
+            Outcome::Consumed
+        );
+        assert_eq!(
+            state.key_down(Enter, true, true, &options, Some("a")),
+            Outcome::Consumed
+        );
         state.key_up(Enter);
-        assert_eq!(state.key_down(Enter, false, true, &options, Some("a")), Outcome::Commit("a".into()));
-        assert_eq!(state.key_down(Enter, false, true, &options, Some("a")), Outcome::Consumed);
+        assert_eq!(
+            state.key_down(Enter, false, true, &options, Some("a")),
+            Outcome::Commit("a".into())
+        );
+        assert_eq!(
+            state.key_down(Enter, false, true, &options, Some("a")),
+            Outcome::Consumed
+        );
         state.key_up(Enter);
-        assert_eq!(state.key_down(Space, false, true, &options, Some("a")), Outcome::Commit("a".into()));
+        assert_eq!(
+            state.key_down(Space, false, true, &options, Some("a")),
+            Outcome::Commit("a".into())
+        );
     }
 
     #[test]
@@ -381,11 +436,24 @@ mod tests {
         let options = options();
         let mut state = SelectState::new();
         state.open(&options, Some("b"));
-        assert_eq!(state.highlighted(), None, "a disabled selection is not highlighted");
-        assert_eq!(state.key_down(Enter, false, true, &options, Some("b")), Outcome::Consumed);
-        assert_eq!(state.key_down(Escape, false, true, &options, Some("b")), Outcome::Close);
+        assert_eq!(
+            state.highlighted(),
+            None,
+            "a disabled selection is not highlighted"
+        );
+        assert_eq!(
+            state.key_down(Enter, false, true, &options, Some("b")),
+            Outcome::Consumed
+        );
+        assert_eq!(
+            state.key_down(Escape, false, true, &options, Some("b")),
+            Outcome::Close
+        );
         let all_disabled = vec![SelectOption::new("x", "X").disabled(true)];
-        assert_eq!(state.key_down(Down, false, true, &all_disabled, None), Outcome::Consumed);
+        assert_eq!(
+            state.key_down(Down, false, true, &all_disabled, None),
+            Outcome::Consumed
+        );
     }
 
     #[test]
@@ -394,7 +462,10 @@ mod tests {
         let mut state = SelectState::new();
         state.open(&options, Some("a"));
         state.key_down(Down, false, true, &options, Some("a"));
-        let replaced = vec![SelectOption::new("a", "Alpha"), SelectOption::new("z", "Zed")];
+        let replaced = vec![
+            SelectOption::new("a", "Alpha"),
+            SelectOption::new("z", "Zed"),
+        ];
         state.reconcile(&replaced, Some("a"));
         assert_eq!(state.highlighted().map(|id| id.as_ref()), Some("a"));
         let none_selected = vec![SelectOption::new("q", "Q")];
@@ -405,8 +476,14 @@ mod tests {
     #[test]
     fn trigger_name_and_value_text() {
         let options = options();
-        assert_eq!(trigger_name("Greek", &options, Some("c"), Some("Pick")), "Greek: Gamma");
-        assert_eq!(trigger_name("Greek", &options, Some("zz"), Some("Pick")), "Greek: Pick");
+        assert_eq!(
+            trigger_name("Greek", &options, Some("c"), Some("Pick")),
+            "Greek: Gamma"
+        );
+        assert_eq!(
+            trigger_name("Greek", &options, Some("zz"), Some("Pick")),
+            "Greek: Pick"
+        );
         assert_eq!(trigger_name("Greek", &options, None, None), "Greek: ");
     }
 

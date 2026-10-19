@@ -190,7 +190,11 @@ impl PickerModel {
 
     /// The view of the active tab.
     pub fn view(&self) -> View {
-        match self.tabs.get(self.active_tab).and_then(|tab| tab.sections.clone()) {
+        match self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.sections.clone())
+        {
             Some(sections) => View::Scope(sections),
             None => View::Summary,
         }
@@ -236,7 +240,8 @@ impl PickerModel {
 
     /// Resolves the highlight against the displayed rows and returns its flat index.
     pub fn reconcile(&mut self, results: &Results) -> Option<usize> {
-        self.highlight.reconcile(&results.keys(), &results.enabled())
+        self.highlight
+            .reconcile(&results.keys(), &results.enabled())
     }
 
     /// Up/Down or Ctrl-P/Ctrl-N: steps the highlight with wraparound and turns keyboard mode on.
@@ -249,7 +254,8 @@ impl PickerModel {
     /// Home/End.
     pub fn jump(&mut self, results: &Results, edge: Edge) -> Option<usize> {
         self.keyboard_mode = true;
-        self.highlight.jump(&results.keys(), &results.enabled(), edge)
+        self.highlight
+            .jump(&results.keys(), &results.enabled(), edge)
     }
 
     /// Pointer motion over a row: moves the highlight and clears keyboard mode (R13).
@@ -426,7 +432,11 @@ mod tests {
         model.latch().reset();
         assert_eq!(model.enter_down(&list, false).as_deref(), Some("k0"));
         model.latch().reset();
-        assert_eq!(model.enter_down(&list, true), None, "a held first key-down never activates");
+        assert_eq!(
+            model.enter_down(&list, true),
+            None,
+            "a held first key-down never activates"
+        );
     }
 
     #[test]
@@ -446,9 +456,17 @@ mod tests {
         assert_eq!(model.highlight().key(), None, "the highlight reset");
         assert!(model.step_tab(true));
         assert!(model.step_tab(true));
-        assert_eq!(model.active_tab(), 0, "Tab wraps from the last tab to the first");
+        assert_eq!(
+            model.active_tab(),
+            0,
+            "Tab wraps from the last tab to the first"
+        );
         assert!(model.step_tab(false));
-        assert_eq!(model.active_tab(), 2, "Shift-Tab wraps from the first to the last");
+        assert_eq!(
+            model.active_tab(),
+            2,
+            "Shift-Tab wraps from the first to the last"
+        );
         assert!(model.select_tab_number(2));
         assert_eq!(model.active_tab(), 1);
         assert!(!model.select_tab_number(2), "the same tab is not a change");
@@ -472,7 +490,13 @@ mod tests {
     fn nth_visible_skips_disabled_rows() {
         let mut rows: Vec<Row> = (0..3).map(|ix| Row::new(format!("k{ix}"), "r")).collect();
         rows[0].enabled = false;
-        let list = Results::build(&[SectionSpec::new("s", rows)], &View::Summary, &Paging::default(), "", "");
+        let list = Results::build(
+            &[SectionSpec::new("s", rows)],
+            &View::Summary,
+            &Paging::default(),
+            "",
+            "",
+        );
         let model = PickerModel::default();
         assert_eq!(model.nth_visible(&list, 1).as_deref(), Some("k1"));
         assert_eq!(model.nth_visible(&list, 2).as_deref(), Some("k2"));
@@ -512,7 +536,11 @@ mod tests {
         assert_eq!(model.query(), "row");
         assert!(model.favorites().contains("k2"));
         assert_eq!(model.selected().map(|k| k.as_ref()), Some("k3"));
-        assert_eq!(model.reconcile(&list), Some(2), "the highlighted identity is restored");
+        assert_eq!(
+            model.reconcile(&list),
+            Some(2),
+            "the highlighted identity is restored"
+        );
     }
 
     #[test]
@@ -536,7 +564,10 @@ mod tests {
         assert!(model.keyboard_mode());
         model.open_panel("k0".into(), 0.0);
         model.pointer_over(&list, &"k1".into());
-        assert!(!model.keyboard_mode(), "pointer motion clears keyboard mode");
+        assert!(
+            !model.keyboard_mode(),
+            "pointer motion clears keyboard mode"
+        );
         model.escape();
         assert!(!model.keyboard_mode());
     }

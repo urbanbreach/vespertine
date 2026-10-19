@@ -59,7 +59,9 @@ impl<R: 'static> PickerSources<R> {
     }
 
     fn now(&self, cx: &App) -> Duration {
-        cx.background_executor().now().saturating_duration_since(self.origin)
+        cx.background_executor()
+            .now()
+            .saturating_duration_since(self.origin)
     }
 
     /// Opening: the default (empty-query) requests start immediately.
