@@ -820,9 +820,9 @@ impl Render for PaneExample {
             .on_action(cx.listener(|this, _: &ToggleDock, _, cx| this.toggle_dock(cx)))
             .child(
                 div()
-                    .flex()
-                    .gap_2()
                     .p_2()
+                    .gap_2()
+                    .flex()
                     .bg(rgb(0xaaaaaa))
                     .child(toggle("t-leading", "Sidebar (ctrl-1)"))
                     .child(toggle("t-trailing", "Detail (ctrl-2)"))

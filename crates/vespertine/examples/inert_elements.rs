@@ -27,19 +27,23 @@ struct CountingAllocator;
 
 // SAFETY: forwards every call to the system allocator unchanged.
 unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        unsafe { System.alloc(layout) }
-    }
-
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe { System.dealloc(ptr, layout) }
     }
 
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count_allocation();
+        unsafe { System.alloc(layout) }
+    }
+
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        count_allocation();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
+}
+
+fn count_allocation() {
+    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
 }
 
 #[global_allocator]

@@ -163,27 +163,30 @@ pub fn menu_entries(menu: &OwnedMenu, window: &Window, cx: &App) -> Vec<MenuEntr
     menu.items
         .iter()
         .filter_map(|item| match item {
-            OwnedMenuItem::Separator => Some(MenuEntry::Separator),
-            // Platform-provided lists have no effect on Linux.
-            OwnedMenuItem::SystemMenu(_) => None,
+            OwnedMenuItem::Action {
+                action,
+                name,
+                disabled,
+                checked,
+                ..
+            } => {
+                let enabled = !disabled && !menu.disabled && is_available(&**action, window, cx);
+                Some(MenuEntry::Item(ItemModel {
+                    action: action.boxed_clone(),
+                    checked: *checked,
+                    enabled,
+                    equivalent: displayed_equivalent(&**action, window, cx),
+                    label: name.clone().into(),
+                }))
+            }
             OwnedMenuItem::Submenu(submenu) => Some(MenuEntry::Submenu {
                 name: submenu.name.clone(),
                 disabled: submenu.disabled,
                 entries: menu_entries(submenu, window, cx),
             }),
-            OwnedMenuItem::Action {
-                name,
-                action,
-                checked,
-                disabled,
-                ..
-            } => Some(MenuEntry::Item(ItemModel {
-                label: name.clone().into(),
-                equivalent: displayed_equivalent(&**action, window, cx),
-                enabled: !disabled && !menu.disabled && is_available(&**action, window, cx),
-                checked: *checked,
-                action: action.boxed_clone(),
-            })),
+            // Platform-provided lists have no effect on Linux.
+            OwnedMenuItem::SystemMenu(_) => None,
+            OwnedMenuItem::Separator => Some(MenuEntry::Separator),
         })
         .collect()
 }
@@ -432,10 +435,10 @@ impl Render for MenuDemo {
             .child(bar)
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
                     .p_2()
+                    .gap_2()
+                    .flex_row()
+                    .flex()
                     .child(self.editor.clone())
                     .child(self.other_editor.clone())
                     .child(self.viewer.clone()),

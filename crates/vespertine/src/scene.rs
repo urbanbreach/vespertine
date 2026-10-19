@@ -49,10 +49,10 @@ pub struct Scene {
     pub quads: Vec<Quad>,
     pub paths: Vec<Path<ScaledPixels>>,
     pub underlines: Vec<Underline>,
-    pub monochrome_sprites: Vec<MonochromeSprite>,
-    pub subpixel_sprites: Vec<SubpixelSprite>,
-    pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
+    pub polychrome_sprites: Vec<PolychromeSprite>,
+    pub subpixel_sprites: Vec<SubpixelSprite>,
+    pub monochrome_sprites: Vec<MonochromeSprite>,
     /// Backdrop-blur effect records, ordered with the primitives (see [`BackdropBlur`]).
     pub backdrop_blurs: Vec<BackdropBlur>,
     /// Curved overflow clip shapes referenced by [`CurvedClipId`] (index + 1).
@@ -68,18 +68,18 @@ impl Scene {
         self.paint_operations.clear();
         self.order_index.begin_frame();
         self.layer_stack.clear();
-        self.paths.clear();
-        self.shadows.clear();
-        self.quads.clear();
-        self.underlines.clear();
-        self.monochrome_sprites.clear();
-        self.subpixel_sprites.clear();
-        self.polychrome_sprites.clear();
-        self.surfaces.clear();
-        self.backdrop_blurs.clear();
-        self.curved_clips.clear();
-        self.curved_clip_parents.clear();
         self.curved_clip_stack.clear();
+        self.curved_clip_parents.clear();
+        self.curved_clips.clear();
+        self.backdrop_blurs.clear();
+        self.surfaces.clear();
+        self.polychrome_sprites.clear();
+        self.subpixel_sprites.clear();
+        self.monochrome_sprites.clear();
+        self.underlines.clear();
+        self.paths.clear();
+        self.quads.clear();
+        self.shadows.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -327,15 +327,18 @@ impl Scene {
     /// (and other scope) markers recorded without any primitive between them never make a
     /// scene drawable, so a scene that only contains empty scopes is empty.
     pub fn is_empty(&self) -> bool {
-        self.shadows.is_empty()
-            && self.quads.is_empty()
-            && self.paths.is_empty()
-            && self.underlines.is_empty()
-            && self.monochrome_sprites.is_empty()
-            && self.subpixel_sprites.is_empty()
-            && self.polychrome_sprites.is_empty()
-            && self.surfaces.is_empty()
-            && self.backdrop_blurs.is_empty()
+        let primitive_counts = [
+            self.shadows.len(),
+            self.quads.len(),
+            self.paths.len(),
+            self.underlines.len(),
+            self.monochrome_sprites.len(),
+            self.subpixel_sprites.len(),
+            self.polychrome_sprites.len(),
+            self.surfaces.len(),
+            self.backdrop_blurs.len(),
+        ];
+        primitive_counts.iter().all(|&count| count == 0)
     }
 
     /// Replays `range` of `prev_scene`'s paint operations into this scene with its scopes
@@ -467,7 +470,7 @@ impl Scene {
         );
         sort_records(&mut self.surfaces, &mut gather.surfaces, index);
         // Stable: effects with equal order are processed in insertion order.
-        self.backdrop_blurs.sort_by_key(|blur| blur.order);
+        self.backdrop_blurs.sort_by_key(|effect| effect.order);
     }
 
     #[cfg_attr(
@@ -479,24 +482,24 @@ impl Scene {
     )]
     pub fn batches(&self) -> impl Iterator<Item = PrimitiveBatch> + '_ {
         BatchIterator {
-            shadows_start: 0,
-            shadows_iter: self.shadows.iter().peekable(),
-            quads_start: 0,
-            quads_iter: self.quads.iter().peekable(),
-            paths_start: 0,
-            paths_iter: self.paths.iter().peekable(),
-            underlines_start: 0,
-            underlines_iter: self.underlines.iter().peekable(),
-            monochrome_sprites_start: 0,
-            monochrome_sprites_iter: self.monochrome_sprites.iter().peekable(),
-            subpixel_sprites_start: 0,
-            subpixel_sprites_iter: self.subpixel_sprites.iter().peekable(),
-            polychrome_sprites_start: 0,
-            polychrome_sprites_iter: self.polychrome_sprites.iter().peekable(),
-            surfaces_start: 0,
-            surfaces_iter: self.surfaces.iter().peekable(),
             blurs: &self.backdrop_blurs,
             blur_cursor: 0,
+            surfaces_start: 0,
+            surfaces_iter: self.surfaces.iter().peekable(),
+            polychrome_sprites_start: 0,
+            polychrome_sprites_iter: self.polychrome_sprites.iter().peekable(),
+            subpixel_sprites_start: 0,
+            subpixel_sprites_iter: self.subpixel_sprites.iter().peekable(),
+            monochrome_sprites_start: 0,
+            monochrome_sprites_iter: self.monochrome_sprites.iter().peekable(),
+            underlines_start: 0,
+            underlines_iter: self.underlines.iter().peekable(),
+            paths_start: 0,
+            paths_iter: self.paths.iter().peekable(),
+            quads_start: 0,
+            quads_iter: self.quads.iter().peekable(),
+            shadows_start: 0,
+            shadows_iter: self.shadows.iter().peekable(),
         }
     }
 }
@@ -951,11 +954,12 @@ impl<'a> Iterator for BatchIterator<'a> {
             self.blur_cursor += 1;
         }
         let batch_kind = first.1;
-        let mut max_order_and_kind = (second.0.unwrap_or(u32::MAX), second.1);
-        if let Some(blur) = self.blurs.get(self.blur_cursor) {
-            // `Shadow` sorts first, so `(order, kind) < (limit, Shadow)` means `order < limit`.
-            max_order_and_kind = max_order_and_kind.min((blur.order, PrimitiveKind::Shadow));
-        }
+        let batch_limit = (second.0.unwrap_or(u32::MAX), second.1);
+        // `Shadow` sorts first, so `(order, kind) < (limit, Shadow)` means `order < limit`.
+        let max_order_and_kind = match self.blurs.get(self.blur_cursor) {
+            Some(blur) => batch_limit.min((blur.order, PrimitiveKind::Shadow)),
+            None => batch_limit,
+        };
 
         match batch_kind {
             PrimitiveKind::Shadow => {
@@ -1680,14 +1684,14 @@ impl PathVertex<Pixels> {
 pub struct BackdropBlur {
     /// Paint order (assigned on insertion).
     pub order: DrawOrder,
-    /// Gaussian standard deviation in device pixels.
-    pub blur_radius: ScaledPixels,
     /// Effect rectangle.
     pub bounds: Bounds<ScaledPixels>,
-    /// Rectangular content mask clipping both the snapshot envelope and the composite.
-    pub content_mask: ContentMask<ScaledPixels>,
     /// Per-corner radii of the effect's rounded rectangle.
     pub corner_radii: Corners<ScaledPixels>,
+    /// Gaussian standard deviation in device pixels.
+    pub blur_radius: ScaledPixels,
+    /// Rectangular content mask clipping both the snapshot envelope and the composite.
+    pub content_mask: ContentMask<ScaledPixels>,
 }
 
 impl Scene {

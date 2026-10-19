@@ -36,17 +36,21 @@ impl CustomChrome {
     ) -> impl IntoElement {
         div()
             .id(id)
-            .px_3()
-            .py_1()
-            .rounded_md()
             .border_1()
             .border_color(rgb(0xbbbbbb))
+            .rounded_md()
+            .px_3()
+            .py_1()
             .bg(rgb(0xffffff))
             .cursor(CursorStyle::PointingHand)
             .hover(|style| style.bg(rgb(0xeeeeee)))
             .active(|style| style.bg(rgb(0xdddddd)))
             .on_click(move |_, window, _| on_click(window))
             .child(label)
+    }
+
+    fn button_row(left: impl IntoElement, right: impl IntoElement) -> impl IntoElement {
+        div().gap_2().flex_row().flex().child(left).child(right)
     }
 
     fn describe(window: &Window) -> SharedString {
@@ -118,30 +122,22 @@ impl Render for CustomChrome {
             .p_4()
             .text_color(rgb(0x222222))
             .child(Self::describe(window))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .child(Self::button("server", "Request server-side", |window| {
-                        window.request_decorations(WindowDecorations::Server)
-                    }))
-                    .child(Self::button("client", "Request client-side", |window| {
-                        window.request_decorations(WindowDecorations::Client)
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .child(Self::button("opaque", "Opaque background", |window| {
-                        window.set_background_appearance(WindowBackgroundAppearance::Opaque)
-                    }))
-                    .child(Self::button("blurred", "Blurred background", |window| {
-                        window.set_background_appearance(WindowBackgroundAppearance::Blurred)
-                    })),
-            );
+            .child(Self::button_row(
+                Self::button("server", "Request server-side", |window| {
+                    window.request_decorations(WindowDecorations::Server)
+                }),
+                Self::button("client", "Request client-side", |window| {
+                    window.request_decorations(WindowDecorations::Client)
+                }),
+            ))
+            .child(Self::button_row(
+                Self::button("opaque", "Opaque background", |window| {
+                    window.set_background_appearance(WindowBackgroundAppearance::Opaque)
+                }),
+                Self::button("blurred", "Blurred background", |window| {
+                    window.set_background_appearance(WindowBackgroundAppearance::Blurred)
+                }),
+            ));
 
         div()
             .size_full()

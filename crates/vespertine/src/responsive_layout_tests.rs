@@ -94,11 +94,11 @@ impl Element for Displaced {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
-    fn id(&self) -> Option<ElementId> {
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+    fn id(&self) -> Option<ElementId> {
         None
     }
 
@@ -158,11 +158,11 @@ impl Element for Probe {
     type RequestLayoutState = LayoutId;
     type PrepaintState = ();
 
-    fn id(&self) -> Option<ElementId> {
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+    fn id(&self) -> Option<ElementId> {
         None
     }
 

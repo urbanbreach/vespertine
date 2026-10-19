@@ -801,31 +801,26 @@ struct ScrollView {
 
 impl Render for ScrollView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(
-                div()
-                    .id("scroller")
-                    .absolute()
-                    .top(px(0.))
-                    .left(px(0.))
-                    .w(px(200.))
-                    .h(px(200.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.handle)
-                    .flex()
-                    .flex_col()
-                    .children((0..100).map(|ix| div().id(ix).h(px(20.)).flex_none().w_full())),
-            )
-            .child(
-                div()
-                    .id("source")
-                    .absolute()
-                    .left(px(300.))
-                    .top(px(10.))
-                    .size(px(20.))
-                    .on_drag(Marker, |_, _, _, cx| cx.new(|_| Empty)),
-            )
+        let scroller = div()
+            .id("scroller")
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .w(px(200.))
+            .h(px(200.))
+            .overflow_y_scroll()
+            .track_scroll(&self.handle)
+            .flex()
+            .flex_col()
+            .children((0..100).map(|ix| div().id(ix).h(px(20.)).flex_none().w_full()));
+        let source = div()
+            .id("source")
+            .absolute()
+            .left(px(300.))
+            .top(px(10.))
+            .size(px(20.))
+            .on_drag(Marker, |_, _, _, cx| cx.new(|_| Empty));
+        div().size_full().child(scroller).child(source)
     }
 }
 

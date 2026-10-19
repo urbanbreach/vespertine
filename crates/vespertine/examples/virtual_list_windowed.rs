@@ -90,9 +90,9 @@ impl Render for WindowedList {
             .gap_2()
             .child(
                 div()
-                    .flex()
-                    .flex_row()
                     .gap_2()
+                    .flex_row()
+                    .flex()
                     .child(first)
                     .child(last)
                     .child(format!(

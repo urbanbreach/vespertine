@@ -220,102 +220,73 @@ fn node_to_json(
     // returning `None` past the last one - so this can't drift out of sync with
     // AccessKit's `Action` enum the way a hand-maintained list would.
     let mut next_action = 0u8;
-    let on_action: Vec<String> = std::iter::from_fn(move || {
+    let supported_actions = std::iter::from_fn(move || {
         let action = Action::n(next_action)?;
         next_action += 1;
         Some(action)
     })
     .filter(|action| node.supports_action(*action))
-    .map(|action| format!("{action:?}"))
-    .collect();
+    .map(|action| format!("{action:?}"));
+    let on_action: Vec<String> = supported_actions.collect();
     if !on_action.is_empty() {
         aria.insert("on_action".into(), json!(on_action));
     }
 
     // String properties.
     // Present exactly when an identifier was set, including an empty one.
-    if let Some(v) = node.author_id() {
-        aria.insert("author_id".into(), json!(v));
-    }
-    if let Some(v) = node.label() {
-        aria.insert("label".into(), json!(v));
-    }
-    if let Some(v) = node.description() {
-        aria.insert("description".into(), json!(v));
-    }
-    if let Some(v) = node.value() {
-        aria.insert("value".into(), json!(v));
-    }
-    if let Some(v) = node.keyboard_shortcut() {
-        aria.insert("keyboard_shortcut".into(), json!(v));
-    }
-    if let Some(v) = node.access_key() {
-        aria.insert("access_key".into(), json!(v));
-    }
-    if let Some(v) = node.placeholder() {
-        aria.insert("placeholder".into(), json!(v));
-    }
-    if let Some(v) = node.tooltip() {
-        aria.insert("tooltip".into(), json!(v));
-    }
-    if let Some(v) = node.role_description() {
-        aria.insert("role_description".into(), json!(v));
-    }
+    insert_if_some(&mut aria, "author_id", node.author_id());
+    insert_if_some(&mut aria, "label", node.label());
+    insert_if_some(&mut aria, "description", node.description());
+    insert_if_some(&mut aria, "value", node.value());
+    insert_if_some(&mut aria, "keyboard_shortcut", node.keyboard_shortcut());
+    insert_if_some(&mut aria, "access_key", node.access_key());
+    insert_if_some(&mut aria, "placeholder", node.placeholder());
+    insert_if_some(&mut aria, "tooltip", node.tooltip());
+    insert_if_some(&mut aria, "role_description", node.role_description());
 
     // Boolean / enum states.
-    if let Some(v) = node.is_selected() {
-        aria.insert("selected".into(), json!(v));
-    }
-    if let Some(v) = node.is_expanded() {
-        aria.insert("expanded".into(), json!(v));
-    }
-    if let Some(v) = node.toggled() {
-        aria.insert("toggled".into(), json!(format!("{v:?}")));
-    }
-    if let Some(v) = node.orientation() {
-        aria.insert("orientation".into(), json!(format!("{v:?}")));
-    }
+    insert_if_some(&mut aria, "selected", node.is_selected());
+    insert_if_some(&mut aria, "expanded", node.is_expanded());
+    insert_if_some(
+        &mut aria,
+        "toggled",
+        node.toggled().map(|v| format!("{v:?}")),
+    );
+    insert_if_some(
+        &mut aria,
+        "orientation",
+        node.orientation().map(|v| format!("{v:?}")),
+    );
 
     // Numeric properties.
-    if let Some(v) = node.numeric_value() {
-        aria.insert("numeric_value".into(), json!(v));
-    }
-    if let Some(v) = node.min_numeric_value() {
-        aria.insert("min_numeric_value".into(), json!(v));
-    }
-    if let Some(v) = node.max_numeric_value() {
-        aria.insert("max_numeric_value".into(), json!(v));
-    }
-    if let Some(v) = node.numeric_value_step() {
-        aria.insert("numeric_value_step".into(), json!(v));
-    }
+    insert_if_some(&mut aria, "numeric_value", node.numeric_value());
+    insert_if_some(&mut aria, "min_numeric_value", node.min_numeric_value());
+    insert_if_some(&mut aria, "max_numeric_value", node.max_numeric_value());
+    insert_if_some(&mut aria, "numeric_value_step", node.numeric_value_step());
 
     // Set / table properties.
-    if let Some(v) = node.level() {
-        aria.insert("level".into(), json!(v));
-    }
-    if let Some(v) = node.position_in_set() {
-        aria.insert("position_in_set".into(), json!(v));
-    }
-    if let Some(v) = node.size_of_set() {
-        aria.insert("size_of_set".into(), json!(v));
-    }
-    if let Some(v) = node.row_index() {
-        aria.insert("row_index".into(), json!(v));
-    }
-    if let Some(v) = node.column_index() {
-        aria.insert("column_index".into(), json!(v));
-    }
-    if let Some(v) = node.row_count() {
-        aria.insert("row_count".into(), json!(v));
-    }
-    if let Some(v) = node.column_count() {
-        aria.insert("column_count".into(), json!(v));
-    }
+    insert_if_some(&mut aria, "level", node.level());
+    insert_if_some(&mut aria, "position_in_set", node.position_in_set());
+    insert_if_some(&mut aria, "size_of_set", node.size_of_set());
+    insert_if_some(&mut aria, "row_index", node.row_index());
+    insert_if_some(&mut aria, "column_index", node.column_index());
+    insert_if_some(&mut aria, "row_count", node.row_count());
+    insert_if_some(&mut aria, "column_count", node.column_count());
 
     map.insert("aria".into(), serde_json::Value::Object(aria));
 
     serde_json::Value::Object(map)
+}
+
+/// Inserts `key` only when the property is set; an unset property leaves no entry.
+fn insert_if_some<V: serde::Serialize>(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<V>,
+) {
+    if let Some(value) = value {
+        map.insert(key.into(), serde_json::json!(value));
+    }
 }
 
 /// Maps a 0-based index to a short id in the sequence `a, b, ..., z, aa, ab,

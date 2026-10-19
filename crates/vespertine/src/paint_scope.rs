@@ -123,24 +123,24 @@ impl ScopeParams {
 pub struct EdgeFade {
     /// Fade region in window logical pixels.
     pub bounds: Bounds<Pixels>,
-    /// Common band width in logical pixels.
-    pub band: Pixels,
-    /// Optional band override for the top edge.
-    pub band_top: Option<Pixels>,
-    /// Optional band override for the bottom edge.
-    pub band_bottom: Option<Pixels>,
-    /// Optional band override for the left edge.
-    pub band_left: Option<Pixels>,
-    /// Optional band override for the right edge.
-    pub band_right: Option<Pixels>,
-    /// Whether the top edge fades.
-    pub top: bool,
-    /// Whether the bottom edge fades.
-    pub bottom: bool,
     /// Whether the left edge fades.
     pub left: bool,
     /// Whether the right edge fades.
     pub right: bool,
+    /// Whether the top edge fades.
+    pub top: bool,
+    /// Whether the bottom edge fades.
+    pub bottom: bool,
+    /// Common band width in logical pixels.
+    pub band: Pixels,
+    /// Optional band override for the left edge.
+    pub band_left: Option<Pixels>,
+    /// Optional band override for the right edge.
+    pub band_right: Option<Pixels>,
+    /// Optional band override for the top edge.
+    pub band_top: Option<Pixels>,
+    /// Optional band override for the bottom edge.
+    pub band_bottom: Option<Pixels>,
 }
 
 impl EdgeFade {
@@ -148,15 +148,15 @@ impl EdgeFade {
     pub fn new(bounds: Bounds<Pixels>, band: Pixels) -> Self {
         Self {
             bounds,
-            band,
-            band_top: None,
-            band_bottom: None,
-            band_left: None,
-            band_right: None,
-            top: false,
-            bottom: false,
             left: false,
             right: false,
+            top: false,
+            bottom: false,
+            band,
+            band_left: None,
+            band_right: None,
+            band_top: None,
+            band_bottom: None,
         }
     }
 

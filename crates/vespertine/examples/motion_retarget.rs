@@ -138,9 +138,9 @@ impl Render for MotionRetarget {
             .child(pane)
             .child(
                 div()
-                    .relative()
-                    .flex_1()
                     .h_full()
+                    .flex_1()
+                    .relative()
                     .child(slot(0))
                     .child(slot(1))
                     .child(input),

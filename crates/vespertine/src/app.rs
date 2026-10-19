@@ -1427,47 +1427,41 @@ impl App {
     }
 
     /// Arrange a callback to be invoked when the given entity calls `notify` on its respective context.
-    pub fn observe<W>(
+    pub fn observe<W: 'static>(
         &mut self,
         entity: &Entity<W>,
         mut on_notify: impl FnMut(Entity<W>, &mut App) + 'static,
-    ) -> Subscription
-    where
-        W: 'static,
-    {
-        self.observe_internal(entity, move |e, cx| {
-            on_notify(e, cx);
+    ) -> Subscription {
+        self.observe_internal(entity, move |observed, app| {
+            on_notify(observed, app);
             true
         })
     }
 
     pub(crate) fn record_entities_accessed(
         &mut self,
-        window_handle: AnyWindowHandle,
-        invalidator: WindowInvalidator,
+        window: AnyWindowHandle,
+        window_invalidator: WindowInvalidator,
         entities: &FxHashSet<EntityId>,
     ) {
-        let mut tracked_entities =
-            std::mem::take(self.tracked_entities.entry(window_handle.id).or_default());
-        for entity in tracked_entities.iter() {
-            self.window_invalidators_by_entity
-                .entry(*entity)
-                .and_modify(|windows| {
-                    windows.remove(&window_handle.id);
-                });
+        let window_id = window.id;
+        let mut previously_tracked =
+            std::mem::take(self.tracked_entities.entry(window_id).or_default());
+        for stale in previously_tracked.iter() {
+            if let Some(windows) = self.window_invalidators_by_entity.get_mut(stale) {
+                windows.remove(&window_id);
+            }
         }
         for entity in entities.iter() {
+            self.current_window_by_entity.insert(*entity, window_id);
             self.window_invalidators_by_entity
                 .entry(*entity)
                 .or_default()
-                .insert(window_handle.id, invalidator.clone());
-            self.current_window_by_entity
-                .insert(*entity, window_handle.id);
+                .insert(window_id, window_invalidator.clone());
         }
-        tracked_entities.clear();
-        tracked_entities.extend(entities.iter().copied());
-        self.tracked_entities
-            .insert(window_handle.id, tracked_entities);
+        previously_tracked.clear();
+        previously_tracked.extend(entities.iter().copied());
+        self.tracked_entities.insert(window_id, previously_tracked);
     }
 
     pub(crate) fn new_observer(&mut self, key: EntityId, value: Handler) -> Subscription {

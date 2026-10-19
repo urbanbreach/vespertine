@@ -192,13 +192,13 @@ impl WindowInvalidator {
             inner: Rc::new(RefCell::new(WindowInvalidatorInner {
                 #[cfg(feature = "profiler")]
                 window_id,
-                dirty: true,
-                draw_phase: DrawPhase::None,
-                dirty_views: FxHashSet::default(),
+                frame_requester: None,
                 update_count: 0,
+                dirty_views: FxHashSet::default(),
+                draw_phase: DrawPhase::None,
+                dirty: true,
                 #[cfg(feature = "profiler")]
                 frame_dirty: FrameDirtyAccumulator::default(),
-                frame_requester: None,
             })),
         }
     }
@@ -1058,21 +1058,19 @@ impl ElementIdStack {
     }
 
     pub(crate) fn pop(&mut self) -> Option<ElementId> {
+        let id = self.ids.pop();
         self.hashes.pop();
-        self.ids.pop()
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.ids.clear();
-        self.hashes.clear();
+        id
     }
 
     /// The hash of the whole path on the stack.
     pub(crate) fn hash(&self) -> u64 {
-        self.hashes
-            .last()
-            .copied()
-            .unwrap_or(crate::EMPTY_PATH_HASH)
+        *self.hashes.last().unwrap_or(&crate::EMPTY_PATH_HASH)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.hashes.clear();
+        self.ids.clear();
     }
 
     pub(crate) fn global_id(&self) -> GlobalElementId {
@@ -1183,6 +1181,36 @@ pub(crate) struct PaintIndex {
     effects_index: usize,
 }
 
+/// Moves one recorded index from a range that began at `from` to the copy that began at `to`.
+fn shift_index(index: usize, from: usize, to: usize) -> usize {
+    index - from + to
+}
+
+/// Adapts a typed key listener to the untyped form the dispatch tree stores; events of any
+/// other type are ignored.
+fn erase_key_listener<Event: KeyEvent>(
+    listener: impl Fn(&Event, DispatchPhase, &mut Window, &mut App) + 'static,
+) -> Rc<dyn Fn(&dyn Any, DispatchPhase, &mut Window, &mut App)> {
+    Rc::new(
+        move |event: &dyn Any, phase, window: &mut Window, cx: &mut App| {
+            if let Some(typed) = event.downcast_ref::<Event>() {
+                listener(typed, phase, window, cx)
+            }
+        },
+    )
+}
+
+/// The arguments every image paint resolves to.
+struct ImagePaint {
+    image: Arc<RenderImage>,
+    frame: usize,
+    grayscale: bool,
+    visible: Bounds<Pixels>,
+    fitted: Bounds<Pixels>,
+    radii: Corners<Pixels>,
+    effects: ImageEffects,
+}
+
 impl PrepaintStateIndex {
     /// The position in the dispatch tree.
     pub(crate) fn dispatch_tree_index(&self) -> usize {
@@ -1202,23 +1230,46 @@ impl PrepaintStateIndex {
     /// equivalent position inside a copy of that range that began at `to`.
     pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
         Self {
-            hitboxes_index: self.hitboxes_index - from.hitboxes_index + to.hitboxes_index,
-            tooltips_index: self.tooltips_index - from.tooltips_index + to.tooltips_index,
-            deferred_draws_index: self.deferred_draws_index - from.deferred_draws_index
-                + to.deferred_draws_index,
-            dispatch_tree_index: self.dispatch_tree_index - from.dispatch_tree_index
-                + to.dispatch_tree_index,
-            accessed_element_states_index: self.accessed_element_states_index
-                - from.accessed_element_states_index
-                + to.accessed_element_states_index,
-            tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
-            a11y_index: self.a11y_index - from.a11y_index + to.a11y_index,
+            hitboxes_index: shift_index(
+                self.hitboxes_index,
+                from.hitboxes_index,
+                to.hitboxes_index,
+            ),
+            tooltips_index: shift_index(
+                self.tooltips_index,
+                from.tooltips_index,
+                to.tooltips_index,
+            ),
+            deferred_draws_index: shift_index(
+                self.deferred_draws_index,
+                from.deferred_draws_index,
+                to.deferred_draws_index,
+            ),
+            dispatch_tree_index: shift_index(
+                self.dispatch_tree_index,
+                from.dispatch_tree_index,
+                to.dispatch_tree_index,
+            ),
+            accessed_element_states_index: shift_index(
+                self.accessed_element_states_index,
+                from.accessed_element_states_index,
+                to.accessed_element_states_index,
+            ),
+            tab_handle_index: shift_index(
+                self.tab_handle_index,
+                from.tab_handle_index,
+                to.tab_handle_index,
+            ),
+            a11y_index: shift_index(self.a11y_index, from.a11y_index, to.a11y_index),
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
-            hitbox_switches_index: self.hitbox_switches_index - from.hitbox_switches_index
-                + to.hitbox_switches_index,
-            effects_index: self.effects_index - from.effects_index + to.effects_index,
+            hitbox_switches_index: shift_index(
+                self.hitbox_switches_index,
+                from.hitbox_switches_index,
+                to.hitbox_switches_index,
+            ),
+            effects_index: shift_index(self.effects_index, from.effects_index, to.effects_index),
         }
     }
 }
@@ -1228,30 +1279,57 @@ impl PaintIndex {
     /// equivalent position inside a copy of that range that began at `to`.
     pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
         Self {
-            scene_index: self.scene_index - from.scene_index + to.scene_index,
+            scene_index: shift_index(self.scene_index, from.scene_index, to.scene_index),
             #[cfg(any(test, feature = "test-support"))]
-            debug_bounds_index: self.debug_bounds_index - from.debug_bounds_index
-                + to.debug_bounds_index,
-            mouse_listeners_index: self.mouse_listeners_index - from.mouse_listeners_index
-                + to.mouse_listeners_index,
-            input_handlers_index: self.input_handlers_index - from.input_handlers_index
-                + to.input_handlers_index,
-            cursor_styles_index: self.cursor_styles_index - from.cursor_styles_index
-                + to.cursor_styles_index,
-            present_callbacks_index: self.present_callbacks_index - from.present_callbacks_index
-                + to.present_callbacks_index,
-            surface_switches_index: self.surface_switches_index - from.surface_switches_index
-                + to.surface_switches_index,
-            accessed_element_states_index: self.accessed_element_states_index
-                - from.accessed_element_states_index
-                + to.accessed_element_states_index,
-            tab_handle_index: self.tab_handle_index - from.tab_handle_index + to.tab_handle_index,
-            a11y_listeners_index: self.a11y_listeners_index - from.a11y_listeners_index
-                + to.a11y_listeners_index,
+            debug_bounds_index: shift_index(
+                self.debug_bounds_index,
+                from.debug_bounds_index,
+                to.debug_bounds_index,
+            ),
+            mouse_listeners_index: shift_index(
+                self.mouse_listeners_index,
+                from.mouse_listeners_index,
+                to.mouse_listeners_index,
+            ),
+            input_handlers_index: shift_index(
+                self.input_handlers_index,
+                from.input_handlers_index,
+                to.input_handlers_index,
+            ),
+            cursor_styles_index: shift_index(
+                self.cursor_styles_index,
+                from.cursor_styles_index,
+                to.cursor_styles_index,
+            ),
+            present_callbacks_index: shift_index(
+                self.present_callbacks_index,
+                from.present_callbacks_index,
+                to.present_callbacks_index,
+            ),
+            surface_switches_index: shift_index(
+                self.surface_switches_index,
+                from.surface_switches_index,
+                to.surface_switches_index,
+            ),
+            accessed_element_states_index: shift_index(
+                self.accessed_element_states_index,
+                from.accessed_element_states_index,
+                to.accessed_element_states_index,
+            ),
+            tab_handle_index: shift_index(
+                self.tab_handle_index,
+                from.tab_handle_index,
+                to.tab_handle_index,
+            ),
+            a11y_listeners_index: shift_index(
+                self.a11y_listeners_index,
+                from.a11y_listeners_index,
+                to.a11y_listeners_index,
+            ),
             line_layout_index: self
                 .line_layout_index
                 .rebased(&from.line_layout_index, &to.line_layout_index),
-            effects_index: self.effects_index - from.effects_index + to.effects_index,
+            effects_index: shift_index(self.effects_index, from.effects_index, to.effects_index),
         }
     }
 }
@@ -1462,11 +1540,11 @@ pub struct Window {
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     focus_lost_path: SmallVec<[FocusId; 8]>,
     default_prevented: bool,
+    scale_factor: f32,
+    capslock: Capslock,
+    modifiers: Modifiers,
     mouse_position: Point<Pixels>,
     pub(crate) mouse_hit_test: HitTest,
-    modifiers: Modifiers,
-    capslock: Capslock,
-    scale_factor: f32,
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
@@ -4974,10 +5052,10 @@ impl Window {
             return f(self);
         };
 
-        let previous_opacity = self.element_opacity;
-        self.element_opacity = previous_opacity * opacity;
+        let enclosing_opacity = self.element_opacity;
+        self.element_opacity = enclosing_opacity * opacity;
         let result = f(self);
-        self.element_opacity = previous_opacity;
+        self.element_opacity = enclosing_opacity;
         result
     }
 
@@ -4999,20 +5077,20 @@ impl Window {
     /// This method should only be called during the prepaint or paint phase.
     pub fn with_edge_fade<R>(
         &mut self,
-        fade: Option<EdgeFade>,
-        f: impl FnOnce(&mut Self) -> R,
+        requested: Option<EdgeFade>,
+        paint: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
-        let Some(fade) = fade.filter(EdgeFade::is_enabled) else {
-            return f(self);
+        let Some(fade) = requested.filter(EdgeFade::is_enabled) else {
+            return paint(self);
         };
-        let previous_scope = self.paint_scope;
-        let previous_fade = self.edge_fade.replace(fade);
+        let enclosing_scope = self.paint_scope;
+        let enclosing_fade = self.edge_fade.replace(fade);
         fade.scaled(self.scale_factor(), &mut self.paint_scope);
-        let result = f(self);
-        self.paint_scope.fade_edges = previous_scope.fade_edges;
-        self.paint_scope.fade_bands = previous_scope.fade_bands;
-        self.edge_fade = previous_fade;
+        let result = paint(self);
+        self.paint_scope.fade_bands = enclosing_scope.fade_bands;
+        self.paint_scope.fade_edges = enclosing_scope.fade_edges;
+        self.edge_fade = enclosing_fade;
         result
     }
 
@@ -5053,22 +5131,22 @@ impl Window {
     pub fn with_rounded_clip<R>(
         &mut self,
         bounds: Bounds<Pixels>,
-        radius: Pixels,
+        corner_radius: Pixels,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
-        let previous_scope = self.paint_scope;
-        let scale_factor = self.scale_factor();
+        let enclosing = self.paint_scope;
+        let scale = self.scale_factor();
+        self.paint_scope.clip_radius = corner_radius.0 * scale;
         self.paint_scope.clip_bounds = [
-            bounds.left().0 * scale_factor,
-            bounds.top().0 * scale_factor,
-            bounds.right().0 * scale_factor,
-            bounds.bottom().0 * scale_factor,
+            bounds.left().0 * scale,
+            bounds.top().0 * scale,
+            bounds.right().0 * scale,
+            bounds.bottom().0 * scale,
         ];
-        self.paint_scope.clip_radius = radius.0 * scale_factor;
         let result = self.with_content_mask(Some(ContentMask { bounds }), f);
-        self.paint_scope.clip_bounds = previous_scope.clip_bounds;
-        self.paint_scope.clip_radius = previous_scope.clip_radius;
+        self.paint_scope.clip_radius = enclosing.clip_radius;
+        self.paint_scope.clip_bounds = enclosing.clip_bounds;
         result
     }
 
@@ -5465,24 +5543,22 @@ impl Window {
     pub fn paint_backdrop_blur(
         &mut self,
         bounds: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        blur_radius: Pixels,
+        radii: Corners<Pixels>,
+        sigma: Pixels,
     ) {
         self.invalidator.debug_assert_paint();
 
-        if blur_radius.0.is_nan() || blur_radius.0 <= 0.0 {
+        if sigma.0.is_nan() || sigma.0 <= 0.0 {
             return;
         }
         let scale_factor = self.scale_factor();
-        let bounds = bounds.scale(scale_factor);
-        let corner_radii = corner_radii.scale(scale_factor);
         let content_mask = self.content_mask().scale(scale_factor);
         self.next_frame.scene.insert_backdrop_blur(BackdropBlur {
             order: 0,
-            blur_radius: blur_radius.scale(scale_factor),
-            bounds,
+            bounds: bounds.scale(scale_factor),
+            corner_radii: radii.scale(scale_factor),
+            blur_radius: sigma.scale(scale_factor),
             content_mask,
-            corner_radii,
         });
     }
 
@@ -5934,22 +6010,20 @@ impl Window {
     }
 
     fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
-        if self.effective_background_appearance() != WindowBackgroundAppearance::Opaque {
+        let subpixel_capable = self.effective_background_appearance()
+            == WindowBackgroundAppearance::Opaque
+            && self.platform_window.is_subpixel_rendering_supported();
+        if !subpixel_capable {
             return false;
         }
 
-        if !self.platform_window.is_subpixel_rendering_supported() {
-            return false;
-        }
-
-        let mode = match self.text_rendering_mode.get() {
+        let resolved_mode = match self.text_rendering_mode.get() {
             TextRenderingMode::PlatformDefault => self
                 .text_system()
                 .recommended_rendering_mode(font_id, font_size),
-            mode => mode,
+            explicit => explicit,
         };
-
-        mode == TextRenderingMode::Subpixel
+        resolved_mode == TextRenderingMode::Subpixel
     }
 
     /// Paints a monochrome glyph with an affine transformation and a Gaussian blur applied at
@@ -5963,7 +6037,7 @@ impl Window {
     /// nothing is rasterized, allocated or uploaded. This always uses the monochrome mask,
     /// never the subpixel or emoji pipelines, even when subpixel text is enabled.
     ///
-    /// The y component of `origin` is the baseline of the glyph. Shaping, layout and hit
+    /// The y component of `baseline_origin` is the baseline of the glyph. Shaping, layout and hit
     /// testing are unaffected.
     ///
     /// `transformation` acts in **device pixels** (window coordinates after the scale factor
@@ -6001,68 +6075,67 @@ impl Window {
     /// element drawing.
     pub fn paint_glyph_transformed(
         &mut self,
-        origin: Point<Pixels>,
+        baseline_origin: Point<Pixels>,
         font_id: FontId,
         glyph_id: GlyphId,
-        font_size: Pixels,
-        color: Hsla,
+        size: Pixels,
+        fill: Hsla,
         transformation: TransformationMatrix,
         blur: Pixels,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
-        let sigma = if crate::GLYPH_BLUR_SUPPORTED {
+        let device_sigma = if crate::GLYPH_BLUR_SUPPORTED {
             crate::device_blur_sigma(blur, scale_factor)
         } else {
             0.0
         };
-        let glyph_origin = origin.scale(scale_factor);
-
-        let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
-        let dilation = self.text_system().glyph_dilation_for_color(color);
+        let (integer_origin, subpixel_variant) =
+            quantize_glyph_origin(baseline_origin.scale(scale_factor));
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
-            font_size,
-            subpixel_variant,
+            font_size: size,
             scale_factor,
-            is_emoji: false,
+            subpixel_variant,
             subpixel_rendering: false,
-            dilation,
+            is_emoji: false,
+            dilation: self.text_system().glyph_dilation_for_color(fill),
         };
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
-        if !raster_bounds.is_zero() {
-            let tile = self
-                .sprite_atlas
-                .get_or_insert_with(params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
-                .expect("Callback above only errors or returns Some");
-            let bounds = Bounds {
-                origin: integer_origin + raster_bounds.origin.map(Into::into),
-                size: tile.bounds.size.map(Into::into),
-            };
-            self.next_frame.scene.insert_primitive(MonochromeSprite {
-                order: 0,
-                blur: sigma,
-                bounds: crate::blur_expanded_bounds(bounds, sigma),
-                content_mask: self.snapped_content_mask(),
-                color: color.opacity(element_opacity),
-                tile,
-                transformation,
-                scope: self.paint_scope,
-            });
+        if raster_bounds.is_zero() {
+            return Ok(());
         }
+        let tile = self
+            .sprite_atlas
+            .get_or_insert_with(params.clone().into(), &mut || {
+                let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                Ok(Some((size, Cow::Owned(bytes))))
+            })?
+            .expect("Callback above only errors or returns Some");
+        let bounds = Bounds {
+            origin: integer_origin + raster_bounds.origin.map(Into::into),
+            size: tile.bounds.size.map(Into::into),
+        };
+        let color = fill.opacity(self.element_opacity());
+        self.next_frame.scene.insert_primitive(MonochromeSprite {
+            order: 0,
+            blur: device_sigma,
+            bounds: crate::blur_expanded_bounds(bounds, device_sigma),
+            content_mask: self.snapped_content_mask(),
+            color,
+            tile,
+            transformation,
+            scope: self.paint_scope,
+        });
         Ok(())
     }
 
     /// Paints an emoji glyph into the scene for the next frame at the current z-index.
     ///
-    /// The y component of the origin is the baseline of the glyph.
+    /// The y component of the baseline origin is the baseline of the glyph.
     /// You should generally prefer to use the [`ShapedLine::paint`](crate::ShapedLine::paint) or
     /// [`WrappedLine::paint`](crate::WrappedLine::paint) methods in the [`TextSystem`](crate::TextSystem).
     /// This method is only useful if you need to paint a single emoji that has already been shaped.
@@ -6070,15 +6143,15 @@ impl Window {
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_emoji(
         &mut self,
-        origin: Point<Pixels>,
+        baseline_origin: Point<Pixels>,
         font_id: FontId,
         glyph_id: GlyphId,
-        font_size: Pixels,
+        size: Pixels,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
-        let line = self.begin_glyph_line();
-        self.paint_line_emoji(&line, font_id, origin, glyph_id, font_size)
+        let glyph_line = self.begin_glyph_line();
+        self.paint_line_emoji(&glyph_line, font_id, baseline_origin, glyph_id, size)
     }
 
     /// Paints an emoji glyph using the decisions made for its line.
@@ -6192,12 +6265,12 @@ impl Window {
     }
 
     /// Paint an image into the scene for the next frame at the current z-index.
-    /// This method will panic if the frame_index is not valid
+    /// This method will panic if `frame` is not a valid frame index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     /// Paint an image into `bounds`, positioning and scaling it according to `image_bounds`.
     ///
-    /// The visible region rendered is `bounds.intersect(&image_bounds)`, with `corner_radii`
+    /// The visible region rendered is `bounds.intersect(&image_bounds)`, with `radii`
     /// applied to that region (clamped to half its shorter side). This is
     /// [`Window::paint_image_fitted`] with that visible region and `image_bounds` as the
     /// fitted rectangle. Sampling is linear.
@@ -6205,21 +6278,21 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         image_bounds: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        data: Arc<RenderImage>,
-        frame_index: usize,
+        radii: Corners<Pixels>,
+        image: Arc<RenderImage>,
+        frame: usize,
         grayscale: bool,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
-        self.paint_image_with_effects(
-            bounds.intersect(&image_bounds),
-            image_bounds,
-            corner_radii,
-            data,
-            frame_index,
+        self.paint_image_with_effects(ImagePaint {
+            image,
+            frame,
             grayscale,
-            ImageEffects::default(),
-        )
+            visible: bounds.intersect(&image_bounds),
+            fitted: image_bounds,
+            radii,
+            effects: ImageEffects::default(),
+        })
     }
 
     /// Paint an image with explicit nearest-neighbor texel selection (RND-007).
@@ -6237,53 +6310,44 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         image_bounds: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        data: Arc<RenderImage>,
-        frame_index: usize,
+        radii: Corners<Pixels>,
+        image: Arc<RenderImage>,
+        frame: usize,
         grayscale: bool,
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
-        let effects = ImageEffects {
-            flags: ImageEffects::NEAREST,
-            ..ImageEffects::default()
-        };
-        self.paint_image_with_effects(
-            bounds.intersect(&image_bounds),
-            image_bounds,
-            corner_radii,
-            data,
-            frame_index,
+        self.paint_image_with_effects(ImagePaint {
+            image,
+            frame,
             grayscale,
-            effects,
-        )
+            visible: bounds.intersect(&image_bounds),
+            fitted: image_bounds,
+            radii,
+            effects: ImageEffects {
+                flags: ImageEffects::NEAREST,
+                ..ImageEffects::default()
+            },
+        })
     }
 
     /// Paint an image into the `visible` rectangle while the whole image is laid out in the
     /// `fitted` rectangle (RND-004), for example an object-fit cover rectangle larger than the
     /// element. The painted sprite is exactly `visible` (snapped to device pixels), showing
-    /// the proportional crop of the image; `corner_radii` apply to `visible` and are clamped
+    /// the proportional crop of the image; `radii` apply to `visible` and are clamped
     /// to half its shorter side. A non-positive `visible` or `fitted` size paints nothing.
     ///
-    /// This method will panic if the frame_index is not valid. It should only be called as
+    /// This method will panic if `frame` is not a valid frame index. It should only be called as
     /// part of the paint phase of element drawing.
     pub fn paint_image_fitted(
         &mut self,
         visible: Bounds<Pixels>,
         fitted: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        data: Arc<RenderImage>,
-        frame_index: usize,
+        radii: Corners<Pixels>,
+        image: Arc<RenderImage>,
+        frame: usize,
         grayscale: bool,
     ) -> Result<()> {
-        self.paint_image_fitted_masked(
-            visible,
-            fitted,
-            corner_radii,
-            data,
-            frame_index,
-            grayscale,
-            None,
-        )
+        self.paint_image_fitted_masked(visible, fitted, radii, image, frame, grayscale, None)
     }
 
     /// [`Window::paint_image_fitted`] with an optional feathered inverse rounded-rectangle
@@ -6298,9 +6362,9 @@ impl Window {
         &mut self,
         visible: Bounds<Pixels>,
         fitted: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        data: Arc<RenderImage>,
-        frame_index: usize,
+        radii: Corners<Pixels>,
+        image: Arc<RenderImage>,
+        frame: usize,
         grayscale: bool,
         mask: Option<ImageAlphaMask>,
     ) -> Result<()> {
@@ -6308,47 +6372,47 @@ impl Window {
         let effects = mask
             .map(|mask| mask.to_effects(self.scale_factor()))
             .unwrap_or_default();
-        self.paint_image_with_effects(
+        self.paint_image_with_effects(ImagePaint {
+            image,
+            frame,
+            grayscale,
             visible,
             fitted,
-            corner_radii,
-            data,
-            frame_index,
-            grayscale,
+            radii,
             effects,
-        )
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn paint_image_with_effects(
-        &mut self,
-        visible: Bounds<Pixels>,
-        fitted: Bounds<Pixels>,
-        corner_radii: Corners<Pixels>,
-        data: Arc<RenderImage>,
-        frame_index: usize,
-        grayscale: bool,
-        effects: ImageEffects,
-    ) -> Result<()> {
-        if visible.size.width <= Pixels::ZERO || visible.size.height <= Pixels::ZERO {
-            return Ok(());
-        }
-        if fitted.size.width <= Pixels::ZERO || fitted.size.height <= Pixels::ZERO {
+    fn paint_image_with_effects(&mut self, request: ImagePaint) -> Result<()> {
+        let ImagePaint {
+            image,
+            frame,
+            grayscale,
+            visible,
+            fitted,
+            radii,
+            effects,
+        } = request;
+        let has_no_area = |bounds: Bounds<Pixels>| {
+            bounds.size.width <= Pixels::ZERO || bounds.size.height <= Pixels::ZERO
+        };
+        if has_no_area(visible) || has_no_area(fitted) {
             return Ok(());
         }
 
         let params = RenderImageParams {
-            image_id: data.id,
-            frame_index,
+            image_id: image.id,
+            frame_index: frame,
         };
 
         let tile = self
             .sprite_atlas
             .get_or_insert_with(params.into(), &mut || {
                 Ok(Some((
-                    data.size(frame_index),
+                    image.size(frame),
                     Cow::Borrowed(
-                        data.as_bytes(frame_index)
+                        image
+                            .as_bytes(frame)
                             .expect("It's the caller's job to pass a valid frame index"),
                     ),
                 )))
@@ -6359,7 +6423,7 @@ impl Window {
         let sub_tile = crate::image_fit::crop_tile(tile, visible, fitted);
 
         let content_mask = self.snapped_content_mask();
-        let corner_radii = corner_radii
+        let corner_radii = radii
             .clamp_radii_for_quad_size(visible.size)
             .scale(self.scale_factor());
         let opacity = self.element_opacity();
@@ -6583,8 +6647,8 @@ impl Window {
     ) -> LayoutId {
         self.invalidator.debug_assert_prepaint();
 
-        let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+        let rem_size = self.rem_size();
         let key = self.layout_keys.claim_key();
         let mut layout_engine = self.layout_engine.take().unwrap();
         let layout_id = layout_engine.request_measured_layout(
@@ -7019,13 +7083,9 @@ impl Window {
             return;
         }
 
-        self.next_frame.dispatch_tree.on_key_event(Rc::new(
-            move |event: &dyn Any, phase, window: &mut Window, cx: &mut App| {
-                if let Some(event) = event.downcast_ref::<Event>() {
-                    listener(event, phase, window, cx)
-                }
-            },
-        ));
+        self.next_frame
+            .dispatch_tree
+            .on_key_event(erase_key_listener(listener));
     }
 
     /// Register a typed key listener at the window's dispatch root for the next frame,
@@ -7050,13 +7110,9 @@ impl Window {
     ) {
         self.invalidator.debug_assert_paint();
 
-        self.next_frame.dispatch_tree.on_root_key_event(Rc::new(
-            move |event: &dyn Any, phase, window: &mut Window, cx: &mut App| {
-                if let Some(event) = event.downcast_ref::<Event>() {
-                    listener(event, phase, window, cx)
-                }
-            },
-        ));
+        self.next_frame
+            .dispatch_tree
+            .on_root_key_event(erase_key_listener(listener));
     }
 
     /// Register a modifiers changed event listener on the window for the next frame.
@@ -7563,10 +7619,9 @@ impl Window {
 
     fn dispatch_mouse_event(&mut self, event: &dyn Any, cx: &mut App) {
         self.note_pointer_event(event, cx);
-        let hit_test = if self.pointer.absent {
-            HitTest::default()
-        } else {
-            self.rendered_frame.hit_test(self.mouse_position())
+        let hit_test = match self.pointer.absent {
+            true => HitTest::default(),
+            false => self.rendered_frame.hit_test(self.mouse_position()),
         };
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
@@ -8597,6 +8652,13 @@ impl Window {
         self.platform_window.gpu_specs()
     }
 
+    /// Whether the window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
+    /// healthy, `None` when the platform cannot determine it (no GPU device, or the test
+    /// platform, macOS and Windows). Safe to call at any moment, including during recovery.
+    pub fn gpu_device_lost(&self) -> Option<bool> {
+        self.platform_window.gpu_device_lost()
+    }
+
     /// The GPU device and queue this window's renderer composites with, shared and
     /// type-erased. Create the textures you wrap with [`SurfaceSource::gpu_texture`] on this
     /// device.
@@ -8610,11 +8672,10 @@ impl Window {
         self.platform_window.gpu_context()
     }
 
-    /// Whether the window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
-    /// healthy, `None` when the platform cannot determine it (no GPU device, or the test
-    /// platform, macOS and Windows). Safe to call at any moment, including during recovery.
-    pub fn gpu_device_lost(&self) -> Option<bool> {
-        self.platform_window.gpu_device_lost()
+    /// Gets the window's title at the platform level.
+    /// This is macOS specific.
+    pub fn window_title(&self) -> String {
+        self.platform_window.get_title()
     }
 
     /// Perform titlebar double-click action.
@@ -8622,12 +8683,6 @@ impl Window {
     pub fn titlebar_double_click(&self) {
         self.platform_window
             .titlebar_double_click(self.is_resizable, self.is_minimizable);
-    }
-
-    /// Gets the window's title at the platform level.
-    /// This is macOS specific.
-    pub fn window_title(&self) -> String {
-        self.platform_window.get_title()
     }
 
     /// Returns a list of all tabbed windows and their titles.
@@ -8732,14 +8787,14 @@ impl Window {
         {
             cx.stop_active_drag(self);
         }
-        self.activation_observers
-            .clone()
-            .retain(&(), |callback| callback(self, cx));
+        let activation_observers = self.activation_observers.clone();
+        activation_observers.retain(&(), |callback| callback(self, cx));
 
         self.bounds_changed(cx);
         self.refresh();
 
-        SystemWindowTabController::update_last_active(cx, self.handle.id);
+        let window_id = self.handle.id;
+        SystemWindowTabController::update_last_active(cx, window_id);
     }
 
     /// Debug representation of the last frame's accessibility information.

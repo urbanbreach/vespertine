@@ -104,10 +104,10 @@ impl Render for Example {
             }))
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
                     .h(px(120.))
+                    .gap_2()
+                    .flex_row()
+                    .flex()
                     .child(pane("Pane A", &self.pane_a, window))
                     .child(pane("Pane B", &self.pane_b, window)),
             )

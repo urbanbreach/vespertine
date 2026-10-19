@@ -1438,11 +1438,11 @@ impl DimHarness {
                 window.simulate_mouse_move(position, cx);
                 window.dispatch_event(
                     PlatformInput::MouseDown(MouseDownEvent {
-                        button: MouseButton::Left,
-                        position,
-                        modifiers: Default::default(),
                         click_count: 1,
                         first_mouse: false,
+                        modifiers: Default::default(),
+                        button: MouseButton::Left,
+                        position,
                     }),
                     cx,
                 );

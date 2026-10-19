@@ -372,11 +372,11 @@ fn mouse_down(window: WindowHandle<FloatView>, cx: &mut TestAppContext, position
         window.draw(cx).clear(cx);
         window.dispatch_event(
             PlatformInput::MouseDown(MouseDownEvent {
-                button: MouseButton::Left,
-                position,
-                modifiers: Default::default(),
                 click_count: 1,
                 first_mouse: false,
+                modifiers: Default::default(),
+                button: MouseButton::Left,
+                position,
             }),
             cx,
         );

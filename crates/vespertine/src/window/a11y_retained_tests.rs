@@ -58,13 +58,13 @@ struct Dashboard {
 }
 
 impl Render for Dashboard {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .size_full()
             .id("dashboard")
             .role(Role::Group)
-            .flex()
             .flex_wrap()
-            .size_full()
+            .flex()
             .children(self.panels.iter().cloned())
     }
 }

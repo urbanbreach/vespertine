@@ -36,9 +36,9 @@ impl Render for ResponsiveLayout {
             let center_width = (container.width - px(224.)).max(px(0.));
             div()
                 .size_full()
+                .gap_4()
                 .flex()
                 .flex_col()
-                .gap_4()
                 .bg(rgb(0x1e1e2e))
                 .text_color(rgb(0xcdd6f4))
                 .text_sm()

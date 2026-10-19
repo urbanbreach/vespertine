@@ -422,11 +422,11 @@ impl PointerEvents {
 /// The value of the visibility property, similar to the CSS property `visibility`
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Visibility {
+    /// The element should not be drawn, but should still take up space in the layout.
+    Hidden,
     /// The element should be drawn as normal.
     #[default]
     Visible,
-    /// The element should not be drawn, but should still take up space in the layout.
-    Hidden,
 }
 
 /// A layout-neutral outline, the CSS `outline` of an element.
@@ -435,10 +435,10 @@ pub enum Visibility {
 /// `offset + width` on every side. It takes no layout space and never affects hit testing.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Outline {
-    /// Thickness of the ring in logical pixels. Zero or negative widths paint nothing.
-    pub width: Pixels,
     /// Color of the ring. A fully transparent color paints nothing.
     pub color: Hsla,
+    /// Thickness of the ring in logical pixels. Zero or negative widths paint nothing.
+    pub width: Pixels,
     /// Signed gap between the border box and the inner edge of the ring. Negative values draw
     /// the ring inside the border box.
     pub offset: Pixels,

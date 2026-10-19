@@ -176,7 +176,7 @@ impl EntityMap {
 
     fn assert_valid_context(&self, entity: &AnyEntity) {
         debug_assert!(
-            Weak::ptr_eq(&entity.entity_map, &Arc::downgrade(&self.ref_counts)),
+            Weak::ptr_eq(&Arc::downgrade(&self.ref_counts), &entity.entity_map),
             "used a entity with the wrong context"
         );
     }
@@ -186,9 +186,9 @@ impl EntityMap {
     }
 
     pub fn take_dropped(&mut self) -> Vec<(EntityId, Box<dyn Any>)> {
+        let accessed_entities = self.accessed_entities.get_mut();
         let mut ref_counts = &mut *self.ref_counts.write();
         let dropped_entity_ids = ref_counts.dropped_entity_ids.drain(..);
-        let mut accessed_entities = self.accessed_entities.get_mut();
 
         dropped_entity_ids
             .filter_map(|entity_id| {

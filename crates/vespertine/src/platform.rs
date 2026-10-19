@@ -1558,29 +1558,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_capabilities(&self) -> crate::WindowBackgroundCapabilities {
         crate::WindowBackgroundCapabilities::UNSUPPORTED
     }
-    fn gpu_specs(&self) -> Option<GpuSpecs>;
-
-    /// The shared GPU device and queue this window's renderer uses, type-erased.
-    ///
-    /// Backends without an application-reachable GPU device (the test platform, macOS and
-    /// Windows) keep this default and return `None`. Backends that have one also return `None`
-    /// while the device is lost or being recovered.
-    fn gpu_context(&self) -> Option<crate::SharedGpuContext> {
-        None
-    }
-
-    /// Whether this window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
-    /// healthy and `None` when the backend cannot determine it (the default, used by backends
-    /// with no application-reachable GPU device). Must be safe to call at any time,
-    /// including while the backend is recovering.
-    fn gpu_device_lost(&self) -> Option<bool> {
-        None
-    }
-
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>);
-
-    // Mobile platform methods.
-
     /// The regions of this window currently obscured or reserved by the
     /// system. Zero on platforms without such regions.
     fn insets(&self) -> WindowInsets {
@@ -1593,6 +1570,29 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// `WindowInsetsAnimation` progress; on iOS the platform interpolates
     /// the keyboard animation curve on frame ticks) and is exact at rest.
     fn on_insets_changed(&self, _callback: Box<dyn FnMut(WindowInsets)>) {}
+
+    fn gpu_specs(&self) -> Option<GpuSpecs>;
+
+    /// Whether this window's GPU device is lost: `Some(true)` when lost, `Some(false)` when
+    /// healthy and `None` when the backend cannot determine it (the default, used by backends
+    /// with no application-reachable GPU device). Must be safe to call at any time,
+    /// including while the backend is recovering.
+    fn gpu_device_lost(&self) -> Option<bool> {
+        None
+    }
+
+    /// The shared GPU device and queue this window's renderer uses, type-erased.
+    ///
+    /// Backends without an application-reachable GPU device (the test platform, macOS and
+    /// Windows) keep this default and return `None`. Backends that have one also return `None`
+    /// while the device is lost or being recovered.
+    fn gpu_context(&self) -> Option<crate::SharedGpuContext> {
+        None
+    }
+
+    fn update_ime_position(&self, _bounds: Bounds<Pixels>);
+
+    // Mobile platform methods.
 
     /// Sets the handler for the system back action (Android back
     /// button/gesture; no source on iOS or desktop).

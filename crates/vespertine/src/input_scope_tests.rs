@@ -836,26 +836,26 @@ impl InputHandler for ComposingSurface {
         None
     }
 
-    fn replace_text_in_range(
-        &mut self,
-        _: Option<Range<usize>>,
-        _: &str,
-        _: &mut Window,
-        _: &mut App,
-    ) {
-    }
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut App) {}
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        _: Option<Range<usize>>,
-        _: &str,
-        _: Option<Range<usize>>,
-        _: &mut Window,
-        _: &mut App,
+        _range: Option<Range<usize>>,
+        _text: &str,
+        _marked: Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut App,
     ) {
     }
 
-    fn unmark_text(&mut self, _: &mut Window, _: &mut App) {}
+    fn replace_text_in_range(
+        &mut self,
+        _range: Option<Range<usize>>,
+        _text: &str,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
 
     fn bounds_for_range(
         &mut self,

@@ -190,24 +190,24 @@ impl EntityInputHandler for Example {
 
     fn replace_text_in_range(
         &mut self,
-        _range: Option<Range<usize>>,
-        text: &str,
+        _replaced: Option<Range<usize>>,
+        inserted: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.text.push_str(text);
+        self.text += inserted;
         cx.notify();
     }
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        range: Option<Range<usize>>,
-        new_text: &str,
-        _new_selected_range: Option<Range<usize>>,
+        replaced: Option<Range<usize>>,
+        inserted: &str,
+        _marked_selection: Option<Range<usize>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.replace_text_in_range(range, new_text, window, cx);
+        self.replace_text_in_range(replaced, inserted, window, cx);
     }
 
     fn bounds_for_range(

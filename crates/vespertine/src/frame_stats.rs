@@ -155,12 +155,12 @@ mod tests {
     struct Rows;
 
     impl Render for Rows {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
-                .flex()
                 .flex_col()
-                .size_full()
+                .flex()
                 .children((0..6).map(|row| div().h(px(20.)).child(format!("row {row}"))))
+                .size_full()
         }
     }
 

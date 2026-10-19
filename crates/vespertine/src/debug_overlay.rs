@@ -34,19 +34,19 @@ impl DebugFrameOverlayMode {
 /// Obtain it with [`crate::Window::debug_frame_overlay_stats`].
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct DebugFrameOverlayStats {
-    /// The most recently recorded draw duration, in milliseconds.
-    pub current_ms: Option<f32>,
-    /// The 90th-percentile draw duration over the retained samples, in milliseconds.
-    pub p90_ms: Option<f32>,
-    /// The 99th-percentile draw duration over the retained samples, in milliseconds.
-    pub p99_ms: Option<f32>,
-    /// The largest retained draw duration, in milliseconds.
-    pub max_ms: Option<f32>,
     /// The total number of frames recorded, including those whose samples were evicted
     /// or cleared by a reset. This is never capped.
     pub frames: u64,
     /// The number of draw durations currently retained.
     pub samples: usize,
+    /// The largest retained draw duration, in milliseconds.
+    pub max_ms: Option<f32>,
+    /// The 99th-percentile draw duration over the retained samples, in milliseconds.
+    pub p99_ms: Option<f32>,
+    /// The 90th-percentile draw duration over the retained samples, in milliseconds.
+    pub p90_ms: Option<f32>,
+    /// The most recently recorded draw duration, in milliseconds.
+    pub current_ms: Option<f32>,
 }
 
 /// The number of most recent draw durations retained for percentile statistics.
@@ -204,30 +204,34 @@ impl DebugFrameOverlay {
         match self.mode {
             DebugFrameOverlayMode::Hidden => Vec::new(),
             DebugFrameOverlayMode::Minimal => {
-                vec![format_ms(
-                    self.draw_durations.back().copied().map(duration_ms),
-                )]
+                let latest = self.draw_durations.back().copied().map(duration_ms);
+                vec![format_ms(latest)]
             }
-            DebugFrameOverlayMode::Full => {
-                let stats = self.stats();
-                // Past five digits the count would break the column
-                // alignment, so it saturates instead.
-                let frame_count = if stats.frames > 99_999 {
-                    "LOTS".to_string()
-                } else {
-                    stats.frames.to_string()
-                };
-                // Labels are padded to a uniform width so the fixed-width
-                // durations start in the same column on every line.
-                vec![
-                    format!("CUR {}", format_ms(stats.current_ms)),
-                    format!("1%  {}", format_ms(stats.p99_ms)),
-                    format!("10% {}", format_ms(stats.p90_ms)),
-                    format!("MAX {}", format_ms(stats.max_ms)),
-                    format!("FRAMES {frame_count:>5}"),
-                ]
-            }
+            DebugFrameOverlayMode::Full => Self::full_lines(&self.stats()),
         }
+    }
+
+    fn full_lines(stats: &DebugFrameOverlayStats) -> Vec<String> {
+        // Past five digits the count would break the column alignment, so it
+        // saturates instead.
+        let frame_count = match stats.frames {
+            0..=99_999 => stats.frames.to_string(),
+            _ => "LOTS".to_string(),
+        };
+        // Labels are padded to a uniform width so the fixed-width durations
+        // start in the same column on every line.
+        let timings = [
+            ("CUR", stats.current_ms),
+            ("1% ", stats.p99_ms),
+            ("10%", stats.p90_ms),
+            ("MAX", stats.max_ms),
+        ];
+        let mut lines: Vec<String> = timings
+            .into_iter()
+            .map(|(label, ms)| format!("{label} {}", format_ms(ms)))
+            .collect();
+        lines.push(format!("FRAMES {frame_count:>5}"));
+        lines
     }
 }
 

@@ -84,12 +84,12 @@ trait AnyMeasure: 'static {
 impl<M: LayoutMeasure> AnyMeasure for M {
     fn measure(
         &mut self,
-        known_dimensions: Size<Option<Pixels>>,
-        available_space: Size<AvailableSpace>,
+        known: Size<Option<Pixels>>,
+        available: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        LayoutMeasure::measure(self, known_dimensions, available_space, window, cx)
+        LayoutMeasure::measure(self, known, available, window, cx)
     }
 
     fn reconcile_previous(&mut self, new: &mut dyn AnyMeasure) -> MeasureDecision {
@@ -114,12 +114,12 @@ where
 {
     fn measure(
         &mut self,
-        known_dimensions: Size<Option<Pixels>>,
-        available_space: Size<AvailableSpace>,
+        known: Size<Option<Pixels>>,
+        available: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        (self.0)(known_dimensions, available_space, window, cx)
+        (self.0)(known, available, window, cx)
     }
 
     fn reconcile(&mut self, _previous: &mut Self) -> MeasureDecision {
@@ -1150,15 +1150,15 @@ impl TaffyLayoutEngine {
         key: LayoutKey,
         style: &Style,
         rem_size: Pixels,
-        scale_factor: f32,
-        children: &[LayoutId],
+        scale: f32,
+        child_ids: &[LayoutId],
     ) -> LayoutId {
-        let fingerprint = self.fingerprint(style, rem_size, scale_factor);
+        let fingerprint = self.fingerprint(style, rem_size, scale);
         let index = match self.claim(key) {
             Claim::Reuse(index) => {
                 self.mark_claimed(index);
-                self.sync_style(index, style, fingerprint, rem_size, scale_factor);
-                self.sync_children(index, children);
+                self.sync_style(index, style, fingerprint, rem_size, scale);
+                self.sync_children(index, child_ids);
                 self.remove_measure(index);
                 index
             }
@@ -1167,9 +1167,9 @@ impl TaffyLayoutEngine {
                     Claim::Create(key) => Some(key),
                     _ => None,
                 };
-                let index = self.new_node(key, style, fingerprint, rem_size, scale_factor, None);
-                if !children.is_empty() {
-                    self.write_children(index, children);
+                let index = self.new_node(key, style, fingerprint, rem_size, scale, None);
+                if !child_ids.is_empty() {
+                    self.write_children(index, child_ids);
                 }
                 index
             }

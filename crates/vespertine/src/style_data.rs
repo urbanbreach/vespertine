@@ -73,30 +73,31 @@ fn parse_style_color(text: &str) -> Option<Rgba> {
 /// Maps a CSS cursor keyword to the cursor it selects. Matching is case-sensitive, and the
 /// diagonal resize keywords select the same cursors on every backend.
 pub fn cursor_style_from_keyword(keyword: &str) -> Option<CursorStyle> {
-    Some(match keyword {
+    let cursor = match keyword {
         "default" | "auto" => CursorStyle::Arrow,
-        "pointer" => CursorStyle::PointingHand,
         "text" => CursorStyle::IBeam,
         "vertical-text" => CursorStyle::IBeamCursorForVerticalLayout,
-        "crosshair" => CursorStyle::Crosshair,
+        "pointer" => CursorStyle::PointingHand,
         "grab" => CursorStyle::OpenHand,
         "grabbing" | "move" | "all-scroll" => CursorStyle::ClosedHand,
+        "crosshair" => CursorStyle::Crosshair,
+        "context-menu" => CursorStyle::ContextualMenu,
+        "copy" => CursorStyle::DragCopy,
+        "alias" => CursorStyle::DragLink,
+        "not-allowed" | "no-drop" => CursorStyle::OperationNotAllowed,
         "col-resize" => CursorStyle::ResizeColumn,
         "row-resize" => CursorStyle::ResizeRow,
         "ew-resize" => CursorStyle::ResizeLeftRight,
         "ns-resize" => CursorStyle::ResizeUpDown,
-        "nwse-resize" | "nw-resize" | "se-resize" => CursorStyle::ResizeUpLeftDownRight,
         "nesw-resize" | "ne-resize" | "sw-resize" => CursorStyle::ResizeUpRightDownLeft,
-        "w-resize" => CursorStyle::ResizeLeft,
+        "nwse-resize" | "nw-resize" | "se-resize" => CursorStyle::ResizeUpLeftDownRight,
         "e-resize" => CursorStyle::ResizeRight,
-        "n-resize" => CursorStyle::ResizeUp,
+        "w-resize" => CursorStyle::ResizeLeft,
         "s-resize" => CursorStyle::ResizeDown,
-        "not-allowed" | "no-drop" => CursorStyle::OperationNotAllowed,
-        "alias" => CursorStyle::DragLink,
-        "copy" => CursorStyle::DragCopy,
-        "context-menu" => CursorStyle::ContextualMenu,
+        "n-resize" => CursorStyle::ResizeUp,
         _ => return None,
-    })
+    };
+    Some(cursor)
 }
 
 /// Resolves a font weight given as a number or a string (R14). Numbers clamp to 1..=1000;

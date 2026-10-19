@@ -23,11 +23,11 @@ struct Dashboard {
 }
 
 impl Render for Dashboard {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .flex()
-            .flex_wrap()
             .size_full()
+            .flex_wrap()
+            .flex()
             .children(self.panels.iter().cloned())
     }
 }
@@ -551,9 +551,9 @@ fn retained_and_full_windows_agree(cx: &mut TestAppContext) {
                     cx.update_window(window, |_, window, cx| {
                         window.dispatch_event(
                             crate::MouseMoveEvent {
+                                modifiers: Default::default(),
                                 position: crate::point(px(x), px(20.)),
                                 pressed_button: None,
-                                modifiers: Default::default(),
                             }
                             .to_platform_input(),
                             cx,
@@ -942,19 +942,18 @@ impl Render for QueryField {
     }
 }
 impl crate::EntityInputHandler for QueryField {
-    fn text_for_range(
-        &mut self,
-        _: std::ops::Range<usize>,
-        _: &mut Option<std::ops::Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<String> {
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
         None
     }
     fn selected_text_range(
         &mut self,
-        _: bool,
-        _: &mut Window,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<crate::UTF16Selection> {
         // A read-only query that nevertheless takes `&mut self`.
@@ -964,46 +963,47 @@ impl crate::EntityInputHandler for QueryField {
         }
         None
     }
-    fn marked_text_range(
-        &self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<std::ops::Range<usize>> {
-        None
-    }
-    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {}
-    fn replace_text_in_range(
+    fn text_for_range(
         &mut self,
-        _: Option<std::ops::Range<usize>>,
-        _: &str,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) {
+        _range: std::ops::Range<usize>,
+        _adjusted: &mut Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        None
     }
     fn replace_and_mark_text_in_range(
         &mut self,
-        _: Option<std::ops::Range<usize>>,
-        _: &str,
-        _: Option<std::ops::Range<usize>>,
-        _: &mut Window,
-        _: &mut Context<Self>,
+        _range: Option<std::ops::Range<usize>>,
+        _text: &str,
+        _marked: Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
     ) {
     }
-    fn bounds_for_range(
+    fn replace_text_in_range(
         &mut self,
-        _: std::ops::Range<usize>,
-        _: crate::Bounds<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> Option<crate::Bounds<Pixels>> {
-        None
+        _range: Option<std::ops::Range<usize>>,
+        _text: &str,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
     }
     fn character_index_for_point(
         &mut self,
-        _: crate::Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
+        _point: crate::Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        None
+    }
+    fn bounds_for_range(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _element_bounds: crate::Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<crate::Bounds<Pixels>> {
         None
     }
 }
@@ -1243,18 +1243,18 @@ impl crate::Element for TokenScope {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
-    fn id(&self) -> Option<crate::ElementId> {
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
     }
 
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+    fn id(&self) -> Option<crate::ElementId> {
         None
     }
 
     fn request_layout(
         &mut self,
-        _: Option<&crate::GlobalElementId>,
-        _: Option<&crate::InspectorElementId>,
+        _id: Option<&crate::GlobalElementId>,
+        _inspector_id: Option<&crate::InspectorElementId>,
         window: &mut Window,
         cx: &mut crate::App,
     ) -> (crate::LayoutId, ()) {

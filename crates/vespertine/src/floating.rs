@@ -166,18 +166,18 @@ impl Default for FloatingOptions {
 
 /// The property names the anchored host reads (see [`FloatingOptions::from_properties`]).
 pub const FLOATING_PROPERTIES: &[&str] = &[
-    "position",
     "side",
     "align",
+    "position",
     "anchor",
-    "gap",
     "offset",
+    "gap",
     "fit",
     "snapMargin",
-    "deferred",
-    "priority",
-    "occlude",
     "fill",
+    "occlude",
+    "priority",
+    "deferred",
 ];
 
 fn finite_number(value: Option<&Value>) -> Option<f32> {
