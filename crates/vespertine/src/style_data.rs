@@ -796,6 +796,10 @@ fn parse_layer(reader: &Reader, is_base: bool) -> Parsed<StyleLayer> {
     layer.scrollbar_width = reader
         .number("scrollbarWidth")?
         .map(|width| pixels(width.max(0.)));
+    // The classic thumbs (CMP-031) are enabled by the style itself: applying the refinement to
+    // an element carries the color and the thickness.
+    layer.refinement.scrollbar_color = layer.scrollbar_color;
+    layer.refinement.scrollbar_width = layer.scrollbar_width.map(AbsoluteLength::Pixels);
     let r = &mut layer.refinement;
     if let Some(cursor) = reader.string("cursor")?.and_then(cursor_style_from_keyword) {
         r.mouse_cursor = Some(cursor);
