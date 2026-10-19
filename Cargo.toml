@@ -29,6 +29,7 @@ members = [
     "crates/vespertine_util",
     "crates/vespertine_util_core",
     "crates/vespertine_util_macros",
+    "crates/vespertine_webview",
     "crates/vespertine_wgpu",
     "crates/vespertine_windows",
     "crates/vespertine_zlog",
@@ -615,6 +616,9 @@ path = "crates/vespertine_util_core"
 
 [workspace.dependencies.vespertine_util_macros]
 path = "crates/vespertine_util_macros"
+
+[workspace.dependencies.vespertine_webview]
+path = "crates/vespertine_webview"
 
 [workspace.dependencies.vespertine_wgpu]
 path = "crates/vespertine_wgpu"

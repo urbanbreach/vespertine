@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Storage fixture</title></head><body>
+<script>
+window.result = null;
+(function () {
+  var write = location.search.indexOf('write') >= 0;
+  if (write) {
+    localStorage.setItem('k', 'ls-value');
+    document.cookie = 'js-persist=1; path=/; expires=Fri, 01 Jan 2100 00:00:00 GMT';
+  }
+  var req = indexedDB.open('vspdb', 1);
+  req.onupgradeneeded = function () { req.result.createObjectStore('s'); };
+  req.onerror = function () { window.result = {error: String(req.error)}; };
+  req.onsuccess = function () {
+    var db = req.result;
+    function read() {
+      var r = db.transaction('s').objectStore('s').get('k');
+      r.onsuccess = function () {
+        window.result = {ls: localStorage.getItem('k'), idb: r.result === undefined ? null : r.result, cookie: document.cookie};
+      };
+    }
+    if (write) {
+      var tx = db.transaction('s', 'readwrite');
+      tx.objectStore('s').put('idb-value', 'k');
+      tx.oncomplete = read;
+    } else {
+      read();
+    }
+  };
+})();
+</script></body></html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Policy fixture</title>
+<style>a{display:block;position:absolute;left:10px;width:300px;height:24px;background:#eee}
+</style></head>
+<body>
+<a id="js" style="top:10px" href="javascript:window.jsran=true">javascript</a>
+<a id="file" style="top:40px" href="file:///etc/hostname">file</a>
+<a id="custom" style="top:70px" href="vespertine-app://open/thing">custom</a>
+<a id="cred" style="top:100px" href="http://user:pass@127.0.0.1:1/x">credentials</a>
+<a id="blank" style="top:130px" target="_blank" href="/basic.html?newtab=1">new tab</a>
+<a id="blankfile" style="top:160px" target="_blank" href="file:///etc/hostname">new tab file</a>
+<a id="plain" style="top:190px" href="/basic.html?plain=1">plain http</a>
+<form id="fm" action="javascript:window.formran=true" style="position:absolute;left:400px;top:10px"><input id="sub" type="submit" value="send"></form>
+<button id="open" style="position:absolute;left:10px;top:230px">window.open</button>
+<iframe id="f1" style="position:absolute;left:10px;top:260px;width:100px;height:50px" src="data:text/html,<p id=d>data frame</p>"></iframe>
+<iframe id="f2" name="named" style="position:absolute;left:120px;top:260px;width:100px;height:50px" src="about:blank"></iframe>
+<iframe id="f3" name="named3" style="position:absolute;left:230px;top:260px;width:100px;height:50px" src="data:text/html,<p>named data</p>"></iframe>
+<iframe id="f4" style="position:absolute;left:340px;top:260px;width:100px;height:50px" srcdoc="<p>srcdoc</p>"></iframe>
+<iframe id="f5" name="named5" style="position:absolute;left:450px;top:260px;width:100px;height:50px" src="file:///etc/hostname"></iframe>
+<script>
+window.jsran=false;window.formran=false;
+document.getElementById('open').addEventListener('click',function(){window.open('/basic.html?opened=1');});
+setTimeout(function(){window.open('/basic.html?auto=1')},300);
+setTimeout(function(){
+  navigator.geolocation.getCurrentPosition(function(){window.geo='granted'},function(e){window.geo='denied:'+e.code});
+  Notification.requestPermission().then(function(p){window.notif=p});
+  navigator.mediaDevices&&navigator.mediaDevices.getUserMedia({video:true}).then(function(){window.media='granted'},function(e){window.media='denied:'+e.name});
+},100);
+</script>
+</body></html>

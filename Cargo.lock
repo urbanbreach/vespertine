@@ -7623,6 +7623,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "vespertine_webview"
+version = "0.1.0"
+dependencies = [
+ "async-channel 2.5.0",
+ "futures",
+ "image",
+ "libc",
+ "log",
+ "parking_lot",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "url",
+ "vespertine",
+ "vespertine_platform",
+ "vespertine_wgpu",
+]
+
+[[package]]
 name = "vespertine_wgpu"
 version = "0.1.0"
 dependencies = [

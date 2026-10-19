@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Input fixture</title>
+<style>
+html,body{margin:0;padding:0;background:#fff;font:16px sans-serif}
+#t{position:absolute;left:10px;top:10px;width:300px;height:30px;font-size:16px}
+#pw{position:absolute;left:10px;top:50px;width:300px;height:30px;font-size:16px}
+#ta{position:absolute;left:10px;top:90px;width:300px;height:60px;font-size:16px}
+#sel{position:absolute;left:10px;top:160px;width:200px;height:30px;font-size:16px}
+#btn{position:absolute;left:10px;top:200px;width:100px;height:40px}
+#lnk{position:absolute;left:150px;top:200px;width:120px;height:30px;display:block}
+#hover{position:absolute;left:300px;top:200px;width:60px;height:60px;background:#00f}
+#hover:hover{background:#f00}
+#txt{position:absolute;left:10px;top:250px;font-size:20px}
+#tall{position:absolute;left:0;top:300px;width:10px;height:3000px}
+</style></head>
+<body>
+<input id="t" type="text" value="">
+<input id="pw" type="password" value="">
+<textarea id="ta"></textarea>
+<select id="sel"><option value="a">Alpha</option><option value="b">Beta</option><option value="c" disabled>Gamma</option><option value="d">Delta</option></select>
+<button id="btn">click</button>
+<a id="lnk" href="/basic.html">a link</a>
+<div id="hover"></div>
+<div id="txt">selectable words here</div>
+<div id="tall"></div>
+<script>
+window.clicks=0; window.events=[]; window.hover=false; window.wheels=0; window.mdowns=[];
+document.getElementById('btn').addEventListener('click',function(){window.clicks++});
+document.getElementById('hover').addEventListener('mouseenter',function(){window.hover=true});
+document.getElementById('hover').addEventListener('mouseleave',function(){window.hover=false});
+document.addEventListener('mousedown',function(e){window.mdowns.push([e.button,e.clientX,e.clientY,e.shiftKey,e.ctrlKey])});
+document.addEventListener('wheel',function(e){window.wheels++});
+['t','pw','ta'].forEach(function(id){
+  var el=document.getElementById(id);
+  ['compositionstart','compositionupdate','compositionend'].forEach(function(n){
+    el.addEventListener(n,function(e){window.events.push(n+':'+e.data)});});
+  el.addEventListener('keydown',function(e){window.events.push('keydown:'+e.key+':'+e.code+':'+e.keyCode)});
+});
+window.frames_=0;(function f(){window.frames_++;requestAnimationFrame(f)})();
+</script>
+</body></html>
