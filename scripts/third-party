@@ -8,8 +8,8 @@
 Policy: every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause,
 ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016 or OFL-1.1 (fonts). An SPDX `OR` expression is satisfied
 when one alternative is allowed (that alternative is the elected license); an `AND` expression
-needs every part allowed. Anything else, in particular any copyleft license (MPL, GPL, LGPL, ...),
-fails the audit and has to be replaced, not excepted.
+needs every part allowed. MPL-2.0 is accepted for unmodified crates used as ordinary dependencies.
+Anything else, in particular GPL, AGPL or LGPL, fails the audit and has to be replaced.
 
 Sources of the list:
   * Rust: `cargo tree --workspace --target all -e normal,build,dev` (every crate that any build,
@@ -40,6 +40,9 @@ ALLOWED = [
     "Unicode-DFS-2016",
     "OFL-1.1",
     "Apache-2.0 WITH LLVM-exception",
+    # File-level copyleft: acceptable only as an ordinary, unmodified dependency (never vendored or
+    # patched in this repository); GPL, AGPL and LGPL are never accepted.
+    "MPL-2.0",
 ]
 
 # Dependencies outside the policy list that are accepted, with the reason. Nothing copyleft is ever
@@ -278,8 +281,10 @@ def render(rust, lock_only, npm_rows, npm_first):
         "Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, "
         "ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, or OFL-1.1 for fonts. A dual-licensed crate "
         "(`A OR B`) is used under an allowed alternative, shown as the *used under* column. "
-        "Copyleft licenses (MPL-2.0, LGPL, GPL, ...) are not accepted: a crate that needed one "
-        "was replaced or vendored with the dependency removed (see *Vendored crates*). "
+        "MPL-2.0 (file-level copyleft) is accepted for unmodified crates used as ordinary "
+        "dependencies; GPL, AGPL and LGPL are not. Some crates that needed MPL-2.0 or other "
+        "licenses outside the list were replaced or vendored with the dependency removed (see "
+        "*Vendored crates*; done before this rule was set, and kept). "
         "**No dependency is under an incompatible license.**\n"
     )
     out.append("## Summary\n")
@@ -356,7 +361,7 @@ def main():
     problems = find_violations(rust, npm_rows, npm_first)
     # Lock-only crates are not compiled; a violation there is reported but only as a warning
     # unless it is copyleft, which must not be in the lockfile either.
-    copyleft = re.compile(r"\b(MPL|GPL|LGPL|AGPL|EPL|CDDL|OSL|SSPL)")
+    copyleft = re.compile(r"\b(GPL|LGPL|AGPL|EPL|CDDL|OSL|SSPL)")
     for name, version, license, source in lock_only:
         if elect(license) is None:
             if not license or copyleft.search(license):
