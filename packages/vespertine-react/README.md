@@ -30,6 +30,15 @@ render(React.createElement(App), { window: { title: "Hello", width: 640, height:
   loop. It also installs the runtime error display (DEV-010): an uncaught failure replaces the tree
   with a readable error view and a Reload control that remounts the last submitted tree.
 * Hooks: `useWindowSize`, `useWindowInsets`, `useTextSearch` and the shared `findRanges`.
+* Headless components (CMP-001, CMP-002, CMP-004, CMP-005): `Button` and `buttonProps`
+  (role, tab index and Enter/Space/click activation for any control), `asChild` composition for
+  every part (`renderSlot`), `FloatingLayer` and `DismissableLayer` (window-scoped Escape and
+  focus ownership), the compound `Tooltip` (Provider, Root, Trigger, Content) and `Select` (Root,
+  Trigger, Value, Content, Item, Group, Label, Separator, ScrollUpButton, ScrollDownButton).
+  Popup content accepts a native exit target (`exit`, `transition`) and stays mounted, inert,
+  until it completes. React-specific behavior: opacity and radii of a floating surface reach its
+  outer anchored surface, Ctrl-N/Ctrl-P step a select, a disabled select blocks navigation and
+  selection, and tooltip scheduling replaces the earlier timer of the same kind.
 * `@vespertine/react/testing` mounts trees in the offscreen native test host.
 
 Tests: `npm test` (Node) or `bun test`; `cargo test -p vespertine_js_node --test adapters` runs both.

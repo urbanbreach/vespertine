@@ -141,3 +141,137 @@ declare module "react" {
     }
   }
 }
+
+// ---- Headless components (CMP-001, CMP-002, CMP-004, CMP-005) ----------------------------------
+
+export type StyleOrFunction<State> = Record<string, unknown> | ((state: State) => Record<string, unknown> | undefined);
+
+/** Properties of a part that can merge onto its single element child. */
+export interface SlotProps extends HostProps {
+  asChild?: boolean;
+}
+
+export interface ButtonProps extends SlotProps {
+  disabled?: boolean;
+  focusableWhenDisabled?: boolean;
+  style?: StyleOrFunction<{ disabled: boolean }>;
+  onClick?(event: NativeEvent): void;
+}
+/** A style-free button: role `button`, tab index 0 (-1 while disabled unless focusable), click, Enter and Space activation. */
+export const Button: React.ForwardRefExoticComponent<ButtonProps & React.RefAttributes<HostRef>>;
+
+export interface ButtonLatch {
+  enter: boolean;
+}
+/** The behavior of a button for any control: `role`, `tabIndex`, `onClick`, `onKeyDown`, `onKeyUp`. */
+export function buttonProps(options?: {
+  disabled?: boolean;
+  focusableWhenDisabled?: boolean;
+  tabIndex?: number;
+  onClick?(event: NativeEvent): void;
+  onKeyDown?(event: NativeEvent): void;
+  onKeyUp?(event: NativeEvent): void;
+  latch?: ButtonLatch;
+}): {
+  role: "button";
+  tabIndex: number;
+  onClick(event: NativeEvent): void;
+  onKeyDown(event: NativeEvent): void;
+  onKeyUp(event: NativeEvent): void;
+};
+export function useButtonLatch(): ButtonLatch;
+
+export function mergeStyles(...styles: unknown[]): Record<string, unknown>;
+export function resolveStyle<State>(style: StyleOrFunction<State> | undefined, state: State): Record<string, unknown> | undefined;
+export function composeHandlers<A extends unknown[]>(first?: (...args: A) => void, second?: (...args: A) => void): ((...args: A) => void) | undefined;
+export function renderSlot(part: {
+  asChild?: boolean;
+  children?: ReactNode;
+  type?: string;
+  props: Record<string, unknown>;
+  defaults?: { tabIndex?: number };
+  ref?: Ref<HostRef>;
+}): ReactNode;
+
+/** `[value, request]`: an undefined `value` is uncontrolled; a request calls `onChange` only for a different value. */
+export function useControllableState<T>(options: { value?: T; defaultValue?: T; onChange?(value: T): void }): [T, (next: T) => boolean];
+
+export type FocusTarget = boolean | HostRef | { current: HostRef | null } | (() => HostRef | boolean | null | undefined);
+
+export interface FloatingLayerProps extends SlotProps {
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+  sideOffset?: number;
+  alignOffset?: number;
+  collisionPadding?: number;
+}
+/** Content positioned against the nearest enclosing floating root (React routes opacity and radii to the outer surface). */
+export const FloatingLayer: React.ForwardRefExoticComponent<FloatingLayerProps & React.RefAttributes<HostRef>>;
+
+export interface DismissableLayerProps extends HostProps {
+  open?: boolean;
+  onEscapeKeyDown?(event: { key: "escape"; preventDefault(): void; readonly defaultPrevented: boolean }): void;
+  onDismiss?(reason: "escape" | "outside"): void;
+  initialFocus?: FocusTarget;
+  finalFocus?: boolean | HostRef | { current: HostRef | null } | ((previous: number | null) => HostRef | boolean | null | undefined);
+  defaultFocus?(node: HostRef | null): number | null;
+  trigger?(): HostRef | null;
+  pressFlag?: { consumes(): boolean; defer(fn: () => void): void };
+}
+export const DismissableLayer: React.ForwardRefExoticComponent<DismissableLayerProps & React.RefAttributes<HostRef>>;
+
+/** Native exit target of popup content (CMP-002 R17): the content stays mounted, inert, until the exit completes. */
+export interface ExitProps {
+  initial?: false | Record<string, number>;
+  animate?: Record<string, number>;
+  exit?: Record<string, number>;
+  transition?: { duration?: number; delay?: number; ease?: string | [number, number, number, number] };
+}
+
+export namespace Tooltip {
+  function Provider(props: { delayDuration?: number; skipDelayDuration?: number; disableHoverableContent?: boolean; children?: ReactNode }): ReactNode;
+  const Root: React.ForwardRefExoticComponent<
+    HostProps & { open?: boolean; defaultOpen?: boolean; onOpenChange?(open: boolean): void; delayDuration?: number; disableHoverableContent?: boolean } & React.RefAttributes<HostRef>
+  >;
+  const Trigger: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Content: React.ForwardRefExoticComponent<
+    FloatingLayerProps & ExitProps & { onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"] } & React.RefAttributes<HostRef>
+  >;
+}
+
+export namespace Select {
+  type ItemMetadata = Record<string, string> | { value: string; label: string }[];
+  const Root: React.ForwardRefExoticComponent<
+    HostProps & {
+      value?: string;
+      defaultValue?: string;
+      onValueChange?(value: string): void;
+      open?: boolean;
+      defaultOpen?: boolean;
+      onOpenChange?(open: boolean): void;
+      disabled?: boolean;
+      items?: ItemMetadata;
+    } & React.RefAttributes<HostRef>
+  >;
+  const Trigger: React.ForwardRefExoticComponent<
+    Omit<SlotProps, "style"> & { disabled?: boolean; style?: StyleOrFunction<{ open: boolean; disabled: boolean; placeholder: boolean }> } & React.RefAttributes<HostRef>
+  >;
+  const Value: React.ForwardRefExoticComponent<HostProps & { placeholder?: ReactNode } & React.RefAttributes<HostRef>>;
+  const Content: React.ForwardRefExoticComponent<
+    FloatingLayerProps & ExitProps & { onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"] } & React.RefAttributes<HostRef>
+  >;
+  const Item: React.ForwardRefExoticComponent<
+    Omit<SlotProps, "style" | "children"> & {
+      value: string;
+      disabled?: boolean;
+      textValue?: string;
+      style?: StyleOrFunction<{ selected: boolean; highlighted: boolean; disabled: boolean }>;
+      children?: ReactNode | ((state: { selected: boolean; highlighted: boolean; disabled: boolean }) => ReactNode);
+    } & React.RefAttributes<HostRef>
+  >;
+  const Group: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Label: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Separator: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const ScrollUpButton: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const ScrollDownButton: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+}

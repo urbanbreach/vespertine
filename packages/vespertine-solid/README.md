@@ -31,6 +31,17 @@ render(() => <Counter />, { window: { title: "Counter" } });
 * Primitives: `createWindowSize`, `createWindowInsets`, `createSelectedText`, `createTextSearch` and the
   shared `findRanges`. Context access: `useOptionalRendererContext` (undefined outside a root) and
   `useRendererContext` (throws).
+* Headless components (CMP-001, CMP-002, CMP-004, CMP-005): `Button` and `buttonProps` with
+  `createButtonLatch`, `renderSlot` (`asChild` composition), `createControllableState` (returns
+  `[accessor, request]`), `FloatingLayer`, `DismissableLayer`, `createPresence`, the compound
+  `Tooltip` (Provider, Root, Trigger, Content) and `Select` (Root, Trigger, Value, Content, Item,
+  Group, Label, Separator, ScrollUpButton, ScrollDownButton). Components never destructure props, so
+  reactive getters stay reactive. Solid-specific behavior: `asChild` needs exactly one intrinsic host
+  element child and its properties (style included) replace the child's, only handlers composing;
+  the caller style of a floating layer applies to the inner container only; tooltip provider
+  settings and root hoverability are captured at construction and a newer timer overwrites the
+  tracked handle without cancelling the earlier one; a select binds no Ctrl-N/Ctrl-P, keeps popup
+  navigation while disabled (selection stays blocked) and initializes its highlight on an open request.
 * `@vespertine/solid/testing` mounts trees in the offscreen native test host.
 
 Tests: `npm test` (Node) or `bun test`; `cargo test -p vespertine_js_node --test adapters` runs both.
