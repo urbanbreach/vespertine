@@ -1001,7 +1001,8 @@ mod tests {
         assert_eq!(range.normalize(1199.0), 1200.0);
         // A step that does not divide the range: the snapped value is clamped back.
         let odd = SliderRange::new(0.0, 10.0).with_step(4.0);
-        assert_eq!(odd.normalize(9.9), 10.0);
+        assert_eq!(odd.normalize(9.9), 8.0);
+        assert_eq!(odd.normalize(10.0), 10.0, "12 clamped back into the range");
         assert_eq!(odd.normalize(7.0), 8.0);
         // No step: the clamped input itself.
         let continuous = SliderRange::new(0.0, 1.0);
