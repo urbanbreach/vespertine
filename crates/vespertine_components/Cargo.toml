@@ -144,3 +144,7 @@ path = "examples/status_kit.rs"
 [[example]]
 name = "text_field"
 path = "examples/text_field.rs"
+
+[[example]]
+name = "text_area"
+path = "examples/text_area.rs"

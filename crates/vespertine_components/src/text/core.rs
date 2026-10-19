@@ -122,6 +122,8 @@ pub struct EditCore {
     pending: VecDeque<String>,
     composition_base: Option<Snapshot>,
     allow_tab_text: bool,
+    atomics: Vec<Range<usize>>,
+    last_edit: Option<(Range<usize>, usize)>,
     movement_epoch: u64,
     edit_epoch: u64,
 }
@@ -144,6 +146,8 @@ impl EditCore {
             pending: VecDeque::new(),
             composition_base: None,
             allow_tab_text: false,
+            atomics: Vec::new(),
+            last_edit: None,
             movement_epoch: 0,
             edit_epoch: 0,
         };
@@ -222,6 +226,65 @@ impl EditCore {
     /// never consumed by an editor, so they traverse focus (CMP-007 R8).
     pub fn set_allow_tab_text(&mut self, allow: bool) {
         self.allow_tab_text = allow;
+    }
+
+    /// The last text change as (replaced byte range of the old text, inserted byte length),
+    /// cleared by this call. Undo, redo and whole-value replacement report the whole text.
+    pub fn take_edit(&mut self) -> Option<(Range<usize>, usize)> {
+        self.last_edit.take()
+    }
+
+    /// Sets the atomic ranges: sorted, non-overlapping source ranges (projected chips) that
+    /// carets never sit inside. Carets snap to the nearer end, selections widen, movement and
+    /// deletion cross a range in one step (CMP-008 R16).
+    pub fn set_atomic_ranges(&mut self, ranges: Vec<Range<usize>>) {
+        self.atomics = ranges;
+    }
+
+    /// The atomic ranges.
+    pub fn atomic_ranges(&self) -> &[Range<usize>] {
+        &self.atomics
+    }
+
+    /// The atomic range containing `offset` (its start included, its end excluded).
+    pub fn atomic_at(&self, offset: usize) -> Option<Range<usize>> {
+        self.atomics
+            .iter()
+            .find(|range| range.start <= offset && offset < range.end)
+            .cloned()
+    }
+
+    /// A caret offset: snapped to a grapheme boundary and, inside an atomic range, to the nearer
+    /// end by midpoint (below 50% to the start).
+    pub fn snap_caret(&self, offset: usize) -> usize {
+        let offset = snap_grapheme_boundary(&self.text, offset);
+        match self
+            .atomics
+            .iter()
+            .find(|range| range.start < offset && offset < range.end)
+        {
+            Some(range) if (offset - range.start) * 2 < range.end - range.start => range.start,
+            Some(range) => range.end,
+            None => offset,
+        }
+    }
+
+    /// An offset moved in a direction: inside an atomic range it goes to the end it moves toward.
+    fn snap_directed(&self, offset: usize, toward_end: bool) -> usize {
+        match self
+            .atomics
+            .iter()
+            .find(|range| range.start < offset && offset < range.end)
+        {
+            Some(range) if toward_end => range.end,
+            Some(range) => range.start,
+            None => offset,
+        }
+    }
+
+    /// Widens a range so it never cuts an atomic range.
+    pub fn expand_atomic(&self, range: Range<usize>) -> Range<usize> {
+        self.snap_directed(range.start, false)..self.snap_directed(range.end, true)
     }
 
     /// Sets the read-only flag.
@@ -319,7 +382,17 @@ impl EditCore {
     pub fn set_selection(&mut self, range: Range<usize>, reversed: bool) {
         let start = snap_grapheme_boundary(&self.text, range.start);
         let end = snap_grapheme_boundary(&self.text, range.end);
-        self.selection = start.min(end)..start.max(end);
+        let (start, end) = (start.min(end), start.max(end));
+        let (start, end) = if start == end {
+            let caret = self.snap_caret(start);
+            (caret, caret)
+        } else {
+            (
+                self.snap_directed(start, false),
+                self.snap_directed(end, true),
+            )
+        };
+        self.selection = start..end;
         self.reversed = reversed && self.selection.start != self.selection.end;
         self.affinity = Affinity::Downstream;
         self.touch_movement();
@@ -333,12 +406,14 @@ impl EditCore {
     /// Moves the caret to `offset`, collapsing or (with `extend`) extending the selection from
     /// its anchor; extension past the anchor flips the reversed flag (R7).
     pub fn move_to(&mut self, offset: usize, extend: bool) {
-        let offset = snap_grapheme_boundary(&self.text, offset);
         if extend {
             let anchor = self.anchor();
+            let offset = snap_grapheme_boundary(&self.text, offset);
+            let offset = self.snap_directed(offset, offset >= anchor);
             self.selection = anchor.min(offset)..anchor.max(offset);
             self.reversed = offset < anchor;
         } else {
+            let offset = self.snap_caret(offset);
             self.selection = offset..offset;
             self.reversed = false;
         }
@@ -351,11 +426,14 @@ impl EditCore {
     pub fn move_left(&mut self, extend: bool) {
         if extend {
             let target = prev_grapheme(&self.text, self.cursor());
+            let target = self.snap_directed(target, false);
             self.move_to(target, true);
         } else if !self.selection.is_empty() {
             self.move_to(self.selection.start, false);
         } else {
-            self.move_to(prev_grapheme(&self.text, self.cursor()), false);
+            let target = prev_grapheme(&self.text, self.cursor());
+            let target = self.snap_directed(target, false);
+            self.move_to(target, false);
         }
     }
 
@@ -363,23 +441,28 @@ impl EditCore {
     pub fn move_right(&mut self, extend: bool) {
         if extend {
             let target = next_grapheme(&self.text, self.cursor());
+            let target = self.snap_directed(target, true);
             self.move_to(target, true);
         } else if !self.selection.is_empty() {
             self.move_to(self.selection.end, false);
         } else {
-            self.move_to(next_grapheme(&self.text, self.cursor()), false);
+            let target = next_grapheme(&self.text, self.cursor());
+            let target = self.snap_directed(target, true);
+            self.move_to(target, false);
         }
     }
 
     /// Word left.
     pub fn move_word_left(&mut self, extend: bool) {
         let target = word_left(&self.text, self.cursor());
+        let target = self.snap_directed(target, false);
         self.move_to(target, extend);
     }
 
     /// Word right.
     pub fn move_word_right(&mut self, extend: bool) {
         let target = word_right(&self.text, self.cursor());
+        let target = self.snap_directed(target, true);
         self.move_to(target, extend);
     }
 
@@ -424,6 +507,7 @@ impl EditCore {
         shift: bool,
         triple_all: bool,
     ) -> DragAnchor {
+        let raw = hit;
         let hit = snap_grapheme_boundary(&self.text, hit);
         match clicks {
             0 | 1 => {
@@ -435,14 +519,17 @@ impl EditCore {
                     }
                 } else {
                     self.move_to(hit, false);
+                    let caret = self.selection.start;
                     DragAnchor {
                         unit: Unit::Char,
-                        range: hit..hit,
+                        range: caret..caret,
                     }
                 }
             }
             2 => {
-                let range = word_at(&self.text, hit);
+                let range = self
+                    .atomic_at(raw)
+                    .unwrap_or_else(|| word_at(&self.text, hit));
                 self.set_selection(range.clone(), false);
                 DragAnchor {
                     unit: Unit::Word,
@@ -471,10 +558,16 @@ impl EditCore {
     /// Extends a drag that started with [`EditCore::press`] to the hit index, keeping its unit
     /// (the union of the anchor unit and the unit under the pointer).
     pub fn drag_to(&mut self, anchor: &DragAnchor, hit: usize, triple_all: bool) {
+        let raw = hit;
         let hit = snap_grapheme_boundary(&self.text, hit);
         let target = match anchor.unit {
-            Unit::Char => hit..hit,
-            Unit::Word => word_at(&self.text, hit),
+            Unit::Char => {
+                let caret = self.snap_directed(hit, hit >= anchor.range.start);
+                caret..caret
+            }
+            Unit::Word => self
+                .atomic_at(raw)
+                .unwrap_or_else(|| word_at(&self.text, hit)),
             Unit::Line => self.line_unit(hit, triple_all),
         };
         let (selection, reversed) = if target.start < anchor.range.start {
@@ -483,10 +576,10 @@ impl EditCore {
             (anchor.range.start..target.end.max(anchor.range.end), false)
         };
         let (selection, reversed) = if anchor.unit == Unit::Char {
-            if hit < anchor.range.start {
-                (hit..anchor.range.end, true)
+            if target.start < anchor.range.start {
+                (target.start..anchor.range.end, true)
             } else {
-                (anchor.range.start..hit, false)
+                (anchor.range.start..target.start, false)
             }
         } else {
             (selection, reversed)
@@ -545,7 +638,7 @@ impl EditCore {
         if self.read_only {
             return false;
         }
-        let range = self.clamp(range);
+        let range = self.expand_atomic(self.clamp(range));
         let text = self.normalize(text).into_owned();
         if range.is_empty() && text.is_empty() {
             return false;
@@ -575,7 +668,7 @@ impl EditCore {
         if self.read_only {
             return false;
         }
-        let range = self.clamp(range);
+        let range = self.expand_atomic(self.clamp(range));
         let text = self.normalize(text).into_owned();
         if range.is_empty() && text.is_empty() {
             return false;
@@ -596,6 +689,7 @@ impl EditCore {
     }
 
     fn splice(&mut self, range: Range<usize>, text: &str) {
+        self.last_edit = Some((range.clone(), text.len()));
         self.text.replace_range(range.clone(), text);
         let end = ceil_char_boundary(&self.text, range.start + text.len());
         let end = ceil_grapheme_boundary(&self.text, end);
@@ -612,7 +706,7 @@ impl EditCore {
             return self.apply(self.selection.clone(), "", EditKind::Other, now_ms);
         }
         let caret = self.cursor();
-        let start = prev_grapheme(&self.text, caret);
+        let start = self.snap_directed(prev_grapheme(&self.text, caret), false);
         self.apply(start..caret, "", EditKind::DeleteBackward, now_ms)
     }
 
@@ -622,7 +716,7 @@ impl EditCore {
             return self.apply(self.selection.clone(), "", EditKind::Other, now_ms);
         }
         let caret = self.cursor();
-        let end = next_grapheme(&self.text, caret);
+        let end = self.snap_directed(next_grapheme(&self.text, caret), true);
         self.apply(caret..end, "", EditKind::DeleteForward, now_ms)
     }
 
@@ -633,7 +727,7 @@ impl EditCore {
         }
         let caret = self.cursor();
         self.apply(
-            word_left(&self.text, caret)..caret,
+            self.snap_directed(word_left(&self.text, caret), false)..caret,
             "",
             EditKind::Other,
             now_ms,
@@ -647,7 +741,7 @@ impl EditCore {
         }
         let caret = self.cursor();
         self.apply(
-            caret..word_right(&self.text, caret),
+            caret..self.snap_directed(word_right(&self.text, caret), true),
             "",
             EditKind::Other,
             now_ms,
@@ -704,6 +798,7 @@ impl EditCore {
     // ---- history ---------------------------------------------------------------------------------------
 
     fn restore(&mut self, snapshot: Snapshot) {
+        self.last_edit = Some((0..self.text.len(), snapshot.text.len()));
         self.text = snapshot.text;
         self.selection = snapshot.selection;
         self.reversed = snapshot.reversed;
@@ -745,6 +840,7 @@ impl EditCore {
     // ---- whole-value replacement and controlled sync ------------------------------------------------------
 
     fn reset_document(&mut self, text: String) {
+        self.last_edit = Some((0..self.text.len(), text.len()));
         self.text = text;
         let end = self.text.len();
         self.selection = end..end;
@@ -831,13 +927,14 @@ impl EditCore {
                 .clone()
                 .unwrap_or_else(|| self.selection.clone()),
         };
-        if self.composition_base.is_some() {
+        let range = if self.composition_base.is_some() {
             range
         } else {
             let start = floor_grapheme_boundary(&self.text, range.start);
             let end = ceil_grapheme_boundary(&self.text, range.end);
             start..end
-        }
+        };
+        self.expand_atomic(range)
     }
 
     /// `replace_text_in_range`: inserts text, commits any composition (R18, R20).
@@ -892,6 +989,7 @@ impl EditCore {
         self.run = None;
         self.redo.clear();
         let start = range.start;
+        self.last_edit = Some((range.clone(), text.len()));
         self.text.replace_range(range, &text);
         self.marked = (!text.is_empty()).then(|| start..start + text.len());
         let inserted_len16 = utf16::len_utf16(&text);
@@ -1333,5 +1431,57 @@ mod tests {
         core.replace_text(Some(6..11), "there", 0.0);
         assert_eq!(core.text(), "hello there");
         assert_eq!(core.selection(), 11..11);
+    }
+
+    fn chip_core() -> EditCore {
+        // "ab" + a 10-byte atomic range + "cd".
+        let mut core = EditCore::new("ab0123456789cd", true);
+        core.set_atomic_ranges(vec![2..12]);
+        core
+    }
+
+    #[test]
+    fn atomic_carets_snap_to_the_nearer_end_by_midpoint() {
+        let mut core = chip_core();
+        core.move_to(6, false);
+        assert_eq!(core.selection(), 2..2, "40% snaps to the start");
+        core.move_to(8, false);
+        assert_eq!(core.selection(), 12..12, "60% snaps to the end");
+        core.move_to(7, false);
+        assert_eq!(core.selection(), 12..12, "the midpoint snaps to the end");
+    }
+
+    #[test]
+    fn atomic_selections_widen_and_movement_crosses_in_one_step() {
+        let mut core = chip_core();
+        core.set_selection(0..5, false);
+        assert_eq!(core.selection(), 0..12);
+        core.set_selection(5..14, false);
+        assert_eq!(core.selection(), 2..14);
+        core.set_selection(0..2, false);
+        assert_eq!(core.selection(), 0..2, "touching an end does not widen");
+        core.move_to(2, false);
+        core.move_right(false);
+        assert_eq!(core.selection(), 12..12);
+        core.move_left(false);
+        assert_eq!(core.selection(), 2..2);
+        core.move_to(12, false);
+        core.delete_backward(0.0);
+        assert_eq!(core.text(), "abcd", "Backspace after a chip deletes it whole");
+        core.undo();
+        assert_eq!(core.text(), "ab0123456789cd");
+        core.move_to(2, false);
+        core.delete_forward(1.0);
+        assert_eq!(core.text(), "abcd");
+    }
+
+    #[test]
+    fn double_click_selects_the_chip_and_ime_ranges_are_normalized() {
+        let mut core = chip_core();
+        core.press(5, 2, false, false);
+        assert_eq!(core.selection(), 2..12);
+        core.set_selection(0..0, false);
+        core.replace_text(Some(4..6), "X", 0.0);
+        assert_eq!(core.text(), "abXcd");
     }
 }

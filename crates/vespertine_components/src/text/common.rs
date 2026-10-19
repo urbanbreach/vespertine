@@ -225,6 +225,26 @@ impl Blink {
     }
 }
 
+/// The byte index of the character boundary of `line` closest to `x` (relative to the line
+/// origin): the nearest glyph start, or the line end when that is nearer (CMP-007 R15).
+pub fn closest_boundary(line: &vespertine::ShapedLine, x: Pixels) -> usize {
+    let mut best = 0;
+    let mut best_distance = x.abs();
+    for run in &line.runs {
+        for glyph in &run.glyphs {
+            let distance = (glyph.position.x - x).abs();
+            if distance < best_distance {
+                best = glyph.index;
+                best_distance = distance;
+            }
+        }
+    }
+    if (line.width() - x).abs() < best_distance {
+        best = line.len();
+    }
+    best
+}
+
 /// Placeholder text accessor used by accessibility (kept as a shared type for both editors).
 pub type Placeholder = SharedString;
 

@@ -146,6 +146,11 @@ fn area_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-down", SelectDown, c),
         KeyBinding::new("shift-enter", Newline, c),
     ]);
+    // Tab indents list items only while a Markdown layer is attached (CMP-009 R13).
+    out.extend([
+        KeyBinding::new("tab", Indent, Some("TextArea && Markdown")),
+        KeyBinding::new("shift-tab", Outdent, Some("TextArea && Markdown")),
+    ]);
     for modifier in ["ctrl", "super"] {
         out.extend([
             KeyBinding::new(&format!("{modifier}-home"), DocumentStart, c),

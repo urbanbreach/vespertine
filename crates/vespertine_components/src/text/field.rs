@@ -469,7 +469,7 @@ impl TextField {
             return 0;
         }
         let local = x - bounds.left() + self.scroll_x;
-        let index = line.closest_index_for_x(local);
+        let index = super::common::closest_boundary(line, local);
         super::boundaries::snap_grapheme_boundary(self.core.text(), index)
     }
 

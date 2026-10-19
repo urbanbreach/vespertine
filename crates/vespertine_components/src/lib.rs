@@ -49,3 +49,4 @@ pub mod tokens;
 pub mod tooltip;
 pub mod tree;
 pub use text::{TextField, TextFieldEvent};
+pub use text::{SubmitMode, TextArea, TextAreaEvent, TextField, TextFieldEvent};

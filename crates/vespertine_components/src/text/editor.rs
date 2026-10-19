@@ -120,14 +120,30 @@ pub trait EditorHost: EntityInputHandler + Sized {
         self.finish_move(window, cx);
     }
 
-    /// Copy (R16): writes the selection; a no-op for an empty selection.
-    fn act_copy(&mut self, cx: &mut Context<Self>) {
+    /// Copy (R16): writes the selection; a no-op for an empty selection. Returns whether the
+    /// action was handled: `false` lets an editor with an empty selection fall through to a
+    /// document selection behind it (CMP-008 R20 `copies_background_selection`).
+    fn act_copy(&mut self, cx: &mut Context<Self>) -> bool {
         if self.is_disabled() {
-            return;
+            return true;
+        }
+        if self.copy_falls_through() {
+            return false;
         }
         if let Some(item) = self.copy_item(cx) {
             cx.write_to_clipboard(item);
         }
+        true
+    }
+
+    /// Whether an empty-selection copy falls through to the surrounding document.
+    fn copy_falls_through(&self) -> bool {
+        false
+    }
+
+    /// End and Shift+End: to the content end of the logical line.
+    fn act_line_end(&mut self, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_with(window, cx, |core| core.move_line_end(extend));
     }
 
     /// Cut (R16): copy then delete; rejected when read-only.
@@ -259,13 +275,13 @@ macro_rules! editor_action_listeners {
                 this.move_with(window, cx, |core| core.move_line_start(false))
             }))
             .on_action($cx.listener(|this: &mut $ty, _: &End, window, cx| {
-                this.move_with(window, cx, |core| core.move_line_end(false))
+                this.act_line_end(false, window, cx)
             }))
             .on_action($cx.listener(|this: &mut $ty, _: &SelectHome, window, cx| {
                 this.move_with(window, cx, |core| core.move_line_start(true))
             }))
             .on_action($cx.listener(|this: &mut $ty, _: &SelectEnd, window, cx| {
-                this.move_with(window, cx, |core| core.move_line_end(true))
+                this.act_line_end(true, window, cx)
             }))
             .on_action($cx.listener(|this: &mut $ty, _: &WordLeft, window, cx| {
                 this.move_with(window, cx, |core| core.move_word_left(false))
@@ -286,7 +302,11 @@ macro_rules! editor_action_listeners {
             .on_action($cx.listener(|this: &mut $ty, _: &SelectAll, window, cx| {
                 this.move_with(window, cx, |core| core.select_all())
             }))
-            .on_action($cx.listener(|this: &mut $ty, _: &Copy, _window, cx| this.act_copy(cx)))
+            .on_action($cx.listener(|this: &mut $ty, _: &Copy, _window, cx| {
+                if !this.act_copy(cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action($cx.listener(|this: &mut $ty, _: &Cut, window, cx| this.act_cut(window, cx)))
             .on_action(
                 $cx.listener(|this: &mut $ty, _: &Paste, window, cx| this.act_paste(window, cx)),
