@@ -477,4 +477,97 @@ fn controls_a11_focus_indicator_follows_keyboard_modality() {
     // Keyboard modality again (a key press) brings it back on the still-focused control.
     host.key_down("a", false, None).unwrap();
     assert!(is_color(edge(&mut host), 0x7AA7FF, 3), "after a key press");
+
+    // Small pointer jitter after typing keeps the indicator: at most 8 logical px from the
+    // position where typing started (INP-001), measured from that origin every time.
+    host.mouse_move(250.0, 150.0, None, "").unwrap();
+    host.key_down("a", false, None).unwrap();
+    assert!(
+        is_color(edge(&mut host), 0x7AA7FF, 3),
+        "keyboard modality at the origin"
+    );
+    host.mouse_move(255.0, 155.0, None, "").unwrap();
+    assert!(
+        is_color(edge(&mut host), 0x7AA7FF, 3),
+        "a 7 px move keeps it"
+    );
+    host.mouse_move(258.0, 150.0, None, "").unwrap();
+    assert!(
+        is_color(edge(&mut host), 0x7AA7FF, 3),
+        "exactly 8 px keeps it"
+    );
+    host.mouse_move(259.0, 150.0, None, "").unwrap();
+    host.paint_frame();
+    assert!(
+        is_color(edge(&mut host), 0x30343D, 3),
+        "9 px leaves keyboard modality"
+    );
+}
+
+/// A host with one button whose busy flag the test owns.
+fn busy_host(busy: &Rc<Cell<bool>>) -> vespertine_test_host::TestHost {
+    let busy = busy.clone();
+    host(300.0, 120.0, move |_, _| {
+        div()
+            .p(px(20.))
+            .child(
+                Button::new("sync")
+                    .label("Sync")
+                    .w(px(120.))
+                    .busy(busy.get()),
+            )
+            .into_any_element()
+    })
+}
+
+fn leases(host: &mut vespertine_test_host::TestHost) -> usize {
+    host.app().update(|cx| cx.animation_lease_count())
+}
+
+#[test]
+fn controls_busy_indicator_runs_on_the_shared_clock_only_while_painted_and_not_reduced() {
+    require_backend!();
+    // Not busy: no animation interest at all.
+    let busy = Rc::new(Cell::new(false));
+    let mut host = busy_host(&busy);
+    assert_eq!(leases(&mut host), 0);
+    // Busy under normal motion: the painted indicator holds a lease on the shared clock.
+    busy.set(true);
+    host.paint_frame();
+    assert!(
+        leases(&mut host) >= 1,
+        "a painted busy indicator renews a lease"
+    );
+    // The indicator moves with the shared clock: a quarter of a sweep later the frame differs.
+    let before = host.screenshot_image().unwrap();
+    host.advance_executor_time(300.0).unwrap();
+    host.paint_frame();
+    let after = host.screenshot_image().unwrap();
+    assert_ne!(
+        before.as_raw(),
+        after.as_raw(),
+        "the busy indicator animates"
+    );
+
+    // Forced reduction: static, and no lease is renewed.
+    let still = Rc::new(Cell::new(false));
+    let mut reduced = busy_host(&still);
+    reduced.app().update(|cx| {
+        cx.set_motion_preference(vespertine::MotionPreference::On);
+    });
+    still.set(true);
+    reduced.paint_frame();
+    assert_eq!(leases(&mut reduced), 0, "forced reduction renews no lease");
+    let first = {
+        reduced.paint_frame();
+        reduced.screenshot_image().unwrap()
+    };
+    reduced.advance_executor_time(700.0).unwrap();
+    reduced.paint_frame();
+    let later = reduced.screenshot_image().unwrap();
+    assert_eq!(
+        first.as_raw(),
+        later.as_raw(),
+        "a reduced busy indicator is still"
+    );
 }

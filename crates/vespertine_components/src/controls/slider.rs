@@ -762,6 +762,9 @@ impl RenderOnce for Slider {
             surface = surface
                 .track_focus(&focus)
                 .cursor_pointer()
+                // Pointer capture (INP-001): after a left press the drag follows this element
+                // wherever the pointer goes in the window, until the button is released.
+                .capture_pointer()
                 .on_mouse_down(MouseButton::Left, {
                     let state = state.clone();
                     let bounds = bounds.clone();
@@ -770,7 +773,6 @@ impl RenderOnce for Slider {
                     let focus = focus.clone();
                     move |event, window, cx| {
                         window.prevent_default();
-                        cx.stop_propagation();
                         focus.focus(window, cx);
                         state.update(cx, |state, cx| {
                             state.dragging = true;
@@ -939,7 +941,21 @@ impl RenderOnce for Slider {
             })
             .when(disabled, |root| root.opacity(tokens.disabled_opacity))
             .children(header)
-            .child(surface)
+            .child(
+                // The press is consumed here, outside the surface: bubbling visits the
+                // surface's own listeners (which include pointer capture) before its
+                // ancestors', so stopping propagation from this wrapper cannot prevent the
+                // capture, yet controls beneath never see the press.
+                div()
+                    .id((self.id.clone(), "press"))
+                    .flex_none()
+                    .w(width)
+                    .h(SLIDER_HEIGHT)
+                    .when(!disabled, |wrapper| {
+                        wrapper.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    })
+                    .child(surface),
+            )
             .children(footer)
     }
 }

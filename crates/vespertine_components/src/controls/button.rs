@@ -11,6 +11,9 @@
 //!   inside the content box as an overlay; hover and press change only the fill.
 //! * **Focus indicator** only for keyboard-originated focus (INP-001 modality): a control focused
 //!   by a mouse press shows none.
+//! * **Busy indicator** drawn from the shared activity-indicator clock (ANM-004): it animates
+//!   only while painted, shows a uniform brightness cue under system-only reduced motion and is
+//!   still under forced reduction.
 //! * **Disabled and busy**: a disabled button keeps its role, label and disabled state in the
 //!   accessibility tree, leaves sequential focus traversal (unless
 //!   [`Button::focusable_when_disabled`], which keeps it focusable but never activatable) and
@@ -27,9 +30,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use vespertine::{
-    AnyElement, App, Bounds, ClickEvent, Context, ElementId, FocusHandle, Hsla, InteractiveElement,
-    IntoElement, KeyDownEvent, KeyboardButton, KeyboardClickEvent, MotionClock, ParentElement,
-    Pixels, Refineable, RenderOnce, Role, SharedString, StatefulInteractiveElement,
+    ActivityIndicator, AnyElement, App, Bounds, ClickEvent, Context, ElementId, FocusHandle, Hsla,
+    InteractiveElement, IntoElement, KeyDownEvent, KeyboardButton, KeyboardClickEvent,
+    ParentElement, Pixels, Refineable, RenderOnce, Role, SharedString, StatefulInteractiveElement,
     StyleRefinement, Styled, Subscription, Toggled, Window, div, hsla, prelude::FluentBuilder, px,
 };
 
@@ -269,10 +272,42 @@ impl Styled for Button {
     }
 }
 
-/// Eight dots on a circle whose brightness trails around it once per second. `phase` is the
-/// fractional part of the elapsed seconds; under reduced motion the caller passes 0, which
-/// leaves a still ring.
-fn busy_indicator(size: Pixels, phase: f32, color: Hsla) -> impl IntoElement {
+/// What the busy indicator shows (ANM-004 R4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum IndicatorFrame {
+    /// A trail of brightness running around the dots; `lead` is the fraction of the circle at
+    /// which it currently is (0 under forced reduction, which freezes it).
+    Spinning(f32),
+    /// Under system-only reduced motion: every dot in phase at one uniform opacity, with no
+    /// spatial movement.
+    Uniform(f32),
+}
+
+impl IndicatorFrame {
+    /// The frame for the shared activity-indicator phase: two sweeps per 2.4 s period.
+    pub(crate) fn from_activity(activity: ActivityIndicator) -> Self {
+        if activity.gentle_cue {
+            Self::Uniform(activity.opacity)
+        } else {
+            Self::Spinning((activity.phase * 2.0).fract())
+        }
+    }
+
+    /// Opacity of dot `index` of `count`.
+    pub(crate) fn dot_opacity(self, index: usize, count: usize) -> f32 {
+        match self {
+            Self::Uniform(opacity) => opacity,
+            Self::Spinning(lead) => {
+                let behind =
+                    (lead * count as f32 - index as f32).rem_euclid(count as f32) / count as f32;
+                0.25 + 0.75 * (1.0 - behind)
+            }
+        }
+    }
+}
+
+/// Eight dots on a circle drawn inside the content box of a busy control.
+fn busy_indicator(size: Pixels, frame: IndicatorFrame, color: Hsla) -> impl IntoElement {
     const DOTS: usize = 8;
     let dot = size * 0.2;
     let radius = (size - dot) * 0.5;
@@ -280,7 +315,6 @@ fn busy_indicator(size: Pixels, phase: f32, color: Hsla) -> impl IntoElement {
     let mut ring = div().relative().flex_none().size(size);
     for index in 0..DOTS {
         let angle = std::f32::consts::TAU * index as f32 / DOTS as f32;
-        let lead = (phase * DOTS as f32 - index as f32).rem_euclid(DOTS as f32) / DOTS as f32;
         ring = ring.child(
             div()
                 .absolute()
@@ -288,7 +322,7 @@ fn busy_indicator(size: Pixels, phase: f32, color: Hsla) -> impl IntoElement {
                 .top(center - radius * angle.cos() - dot * 0.5)
                 .size(dot)
                 .rounded_full()
-                .bg(with_opacity(color, 0.25 + 0.75 * (1.0 - lead))),
+                .bg(with_opacity(color, frame.dot_opacity(index, DOTS))),
         );
     }
     ring
@@ -328,13 +362,11 @@ impl RenderOnce for Button {
                 .flatten()
         });
 
+        // The busy indicator draws from the shared activity-indicator clock (ANM-004): it
+        // renews a lease only while painted, parks otherwise and honors reduced motion.
         let show_indicator = busy && !disabled;
-        let phase = if show_indicator && !cx.reduce_motion() {
-            window.request_animation_frame();
-            ((MotionClock::now_ms(cx) / 1000.0).fract()) as f32
-        } else {
-            0.0
-        };
+        let indicator =
+            show_indicator.then(|| IndicatorFrame::from_activity(window.activity_indicator(cx)));
 
         let mut content = div()
             .flex()
@@ -399,7 +431,7 @@ impl RenderOnce for Button {
             .child(content)
             .child(track_bounds(bounds));
 
-        if show_indicator {
+        if let Some(frame) = indicator {
             button = button.child(
                 div()
                     .absolute()
@@ -409,7 +441,7 @@ impl RenderOnce for Button {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(busy_indicator(px(14.), phase, text_color)),
+                    .child(busy_indicator(px(14.), frame, text_color)),
             );
         }
 
@@ -442,5 +474,90 @@ impl RenderOnce for Button {
         }
         button.style().refine(&self.style);
         latch.bind(button, interactive, activate)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_precedence_is_disabled_then_busy_then_pressed_then_hovered_then_default() {
+        use SurfaceState::*;
+        for (disabled, busy, pressed, hovered, expected) in [
+            (true, true, true, true, Disabled),
+            (true, false, true, true, Disabled),
+            (false, true, true, true, Busy),
+            (false, true, false, true, Busy),
+            (false, false, true, true, Pressed),
+            (false, false, true, false, Pressed),
+            (false, false, false, true, Hovered),
+            (false, false, false, false, Default),
+        ] {
+            assert_eq!(
+                SurfaceState::resolve(disabled, busy, pressed, hovered),
+                expected,
+                "disabled={disabled} busy={busy} pressed={pressed} hovered={hovered}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_fill_is_the_accent_and_keeps_hover_and_press_distinguishable() {
+        let tokens = ComponentTokens::neutral();
+        assert_eq!(SurfaceState::Default.fill(&tokens, true), tokens.accent);
+        assert_eq!(SurfaceState::Busy.fill(&tokens, true), tokens.accent);
+        assert_eq!(SurfaceState::Disabled.fill(&tokens, true), tokens.accent);
+        let hovered = SurfaceState::Hovered.fill(&tokens, true);
+        let pressed = SurfaceState::Pressed.fill(&tokens, true);
+        assert_ne!(hovered, tokens.accent);
+        assert_ne!(pressed, tokens.accent);
+        assert_ne!(hovered, pressed);
+        assert_eq!(
+            SurfaceState::Pressed.fill(&tokens, false),
+            tokens.control_surface_pressed
+        );
+        assert_eq!(
+            SurfaceState::Hovered.fill(&tokens, false),
+            tokens.control_surface_hover
+        );
+        assert_eq!(
+            SurfaceState::Default.fill(&tokens, false),
+            tokens.control_surface
+        );
+    }
+
+    #[test]
+    fn busy_indicator_spins_normally_and_pulses_uniformly_under_the_gentle_cue() {
+        let spinning = IndicatorFrame::from_activity(ActivityIndicator {
+            phase: 0.25,
+            gentle_cue: false,
+            opacity: 1.0,
+        });
+        assert_eq!(spinning, IndicatorFrame::Spinning(0.5));
+        let opacities: Vec<f32> = (0..8).map(|index| spinning.dot_opacity(index, 8)).collect();
+        assert!(
+            opacities.windows(2).any(|pair| pair[0] != pair[1]),
+            "a trail"
+        );
+        assert!(
+            opacities
+                .iter()
+                .all(|opacity| (0.25..=1.0).contains(opacity))
+        );
+        // Under system-only reduction every dot has the same opacity: no spatial chase.
+        let cue = IndicatorFrame::from_activity(ActivityIndicator {
+            phase: 0.5,
+            gentle_cue: true,
+            opacity: 0.8,
+        });
+        assert!((0..8).all(|index| cue.dot_opacity(index, 8) == 0.8));
+        // Frozen (forced reduction): the trail at phase zero, still.
+        let frozen = IndicatorFrame::from_activity(ActivityIndicator {
+            phase: 0.0,
+            gentle_cue: false,
+            opacity: 1.0,
+        });
+        assert_eq!(frozen, IndicatorFrame::Spinning(0.0));
     }
 }

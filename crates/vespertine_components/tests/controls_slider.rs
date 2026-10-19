@@ -259,6 +259,72 @@ fn controls_a8_a_press_focuses_the_slider_and_applies_the_value_at_once() {
 }
 
 #[test]
+fn controls_a8_a_drag_leaving_the_surface_keeps_updating_until_release() {
+    require_backend!();
+    let owner = Owner::new(736.0);
+    let mut host = slider_host(pixels(), &owner, |slider| slider);
+    let y = TOP + 14.0;
+    host.mouse_down(at(60.0), y, 0, "").unwrap();
+    next_frame(&mut host);
+    // Far outside the 28 px tall surface, and outside its horizontal extent.
+    host.mouse_move(at(150.0), 200.0, Some(0), "").unwrap();
+    next_frame(&mut host);
+    host.mouse_move(at(WIDTH + 60.0), 215.0, Some(0), "")
+        .unwrap();
+    next_frame(&mut host);
+    assert_eq!(
+        owner.value.get(),
+        1200.0,
+        "the drag follows the pointer beyond the surface"
+    );
+    host.mouse_move(at(0.0) - 30.0, 230.0, Some(0), "").unwrap();
+    next_frame(&mut host);
+    assert_eq!(owner.value.get(), 560.0);
+    host.mouse_up(at(100.0), 230.0, 0, "").unwrap();
+    // Released: further moves do nothing.
+    let before = owner.notifications().len();
+    host.mouse_move(at(180.0), TOP + 14.0, None, "").unwrap();
+    next_frame(&mut host);
+    assert_eq!(owner.notifications().len(), before);
+}
+
+#[test]
+fn controls_a8_press_and_drag_are_consumed_from_controls_beneath() {
+    require_backend!();
+    let owner = Owner::new(736.0);
+    let beneath = Rc::new(Cell::new(0u32));
+    let range = pixels();
+    let counter = beneath.clone();
+    let mut host = host(320.0, 240.0, {
+        move |_, _| {
+            let counter = counter.clone();
+            div()
+                .id("beneath")
+                .size_full()
+                .p(px(20.))
+                .on_mouse_down(vespertine::MouseButton::Left, move |_, _, _| {
+                    counter.set(counter.get() + 1)
+                })
+                .child(
+                    Slider::new("slider", range.clone())
+                        .value(owner.value.get())
+                        .on_change(owner.notify()),
+                )
+                .into_any_element()
+        }
+    });
+    let y = TOP + 14.0;
+    host.mouse_down(at(100.0), y, 0, "").unwrap();
+    host.mouse_move(at(140.0), 200.0, Some(0), "").unwrap();
+    host.mouse_up(at(140.0), 200.0, 0, "").unwrap();
+    assert_eq!(beneath.get(), 0, "the control beneath never saw the press");
+    // Sanity: a press elsewhere does reach it.
+    host.mouse_down(at(100.0), 150.0, 0, "").unwrap();
+    host.mouse_up(at(100.0), 150.0, 0, "").unwrap();
+    assert_eq!(beneath.get(), 1);
+}
+
+#[test]
 fn controls_a8_two_pointer_moves_inside_one_frame_notify_the_owner_once() {
     require_backend!();
     let owner = Owner::new(736.0);
@@ -503,6 +569,7 @@ fn controls_a9_furniture_is_revealed_by_interaction_and_keeps_its_layout_space()
     // Dragged: visible while the press is held, even with the pointer elsewhere.
     host.mouse_down(x, y, 0, "").unwrap();
     host.mouse_move(300.0, 230.0, Some(0), "").unwrap();
+    next_frame(&mut host);
     assert!(
         furniture_visible(&mut host, &owner),
         "visible during a drag"
