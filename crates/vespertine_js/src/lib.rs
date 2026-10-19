@@ -8,6 +8,7 @@
 
 mod automation;
 mod error;
+mod hosts;
 mod link;
 mod options;
 mod prompt;

@@ -7774,10 +7774,12 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "vespertine",
+ "vespertine_components",
  "vespertine_host_tree",
  "vespertine_platform",
  "vespertine_richtext",
  "vespertine_test_host",
+ "vespertine_theme",
 ]
 
 [[package]]

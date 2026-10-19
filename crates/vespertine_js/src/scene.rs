@@ -461,7 +461,11 @@ impl HostScene {
                 washes: None,
                 me: me.clone(),
                 tree,
-                registry: Rc::new(RefCell::new(CustomElementRegistry::default())),
+                registry: Rc::new(RefCell::new({
+                    let mut registry = CustomElementRegistry::default();
+                    crate::hosts::register_builtin_hosts(&mut registry);
+                    registry
+                })),
                 quit: None,
                 focus_path: None,
             })

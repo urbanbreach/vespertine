@@ -384,3 +384,52 @@ native("anchored hosts render through the adapter registry: placement properties
   assert.equal(host.renderer.findByTestId("pop").length, 0);
   assert.deepEqual(host.errors, []);
 });
+
+const PATCH = `diff --git a/src/a.js b/src/a.js
+index 111..222 100644
+--- a/src/a.js
++++ b/src/a.js
+@@ -1,3 +1,3 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
+ const c = 4;
+`;
+
+native("the diff host renders a patch through its adapter and reports toggleFile and lineClick (CMP-015 host, ELM-007)", () => {
+  const events = [];
+  const host = createTestHost({ width: 600, height: 300 });
+  const tree = (props) =>
+    h(
+      "div",
+      { style: { width: 600, height: 300 } },
+      h("diff", {
+        testId: "diff",
+        patch: PATCH,
+        style: { width: 600 },
+        onToggleFile: (event) => events.push(["toggleFile", event.value]),
+        onLineClick: (event) => events.push(["lineClick", event.text, event.old, event.new]),
+        ...props,
+      }),
+    );
+  host.render(tree({}));
+  const painted = host.renderer.getPaintedText();
+  assert.ok(painted.includes("src/a.js"), "the file header");
+  assert.ok(painted.includes("const b = 3;") && painted.includes("const b = 2;"), "both sides of the change");
+  const bounds = byTestId(host, "diff").bounds;
+  assert.equal(bounds.width, 600);
+  assert.ok(bounds.height > 100);
+  host.renderer.nativeSimulateClick(20, 110);
+  assert.deepEqual(events, [["lineClick", "const b = 3;", null, 2]], "activating a line reports its text and the numbers it has");
+  events.length = 0;
+  host.renderer.nativeSimulateClick(100, 10);
+  assert.deepEqual(events, [["toggleFile", "src/a.js"]], "activating the header reports the path");
+  host.render(tree({ collapsedPaths: ["src/a.js"] }));
+  // Collapsing folds the body over a short tween on the motion clock.
+  host.renderer.clockPause();
+  host.renderer.clockFastForward(2000);
+  assert.equal(host.renderer.getPaintedText().includes("const b = 3;"), false, "a collapsed file shows only its header");
+  host.render(tree({ patch: "" }));
+  assert.ok(host.renderer.getPaintedText().includes("No changes"), "an empty patch shows No changes");
+  assert.deepEqual(host.errors, []);
+});
