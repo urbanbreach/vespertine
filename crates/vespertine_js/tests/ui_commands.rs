@@ -218,3 +218,19 @@ fn files_and_directories_together_reject_where_the_platform_cannot_mix_them() {
         assert!(matches!(error, HostError::Invalid(_)), "{error}");
     }
 }
+
+#[test]
+fn registering_invalid_font_bytes_returns_an_error_naming_the_failed_check() {
+    let rig = rig();
+    let error = rig.serve(|renderer| renderer.register_font(vec![1, 2, 3, 4]).unwrap_err());
+    assert!(matches!(error, HostError::Failed(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("not a TrueType or OpenType font"),
+        "{error}"
+    );
+    // The runtime still works after a rejected buffer.
+    let size = rig.serve(|renderer| renderer.window_size().unwrap());
+    assert_eq!(size.width, 320.0);
+}

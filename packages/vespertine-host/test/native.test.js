@@ -84,3 +84,7 @@ test("a batch before initialization is applied, and then the repaint request fai
     [],
   );
 });
+
+test("registerFont is available and rejects before initialization", () => {
+  assert.throws(() => new native.Renderer().registerFont(new Uint8Array([1, 2, 3, 4])), /not initialized/);
+});

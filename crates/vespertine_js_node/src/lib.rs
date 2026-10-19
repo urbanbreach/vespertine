@@ -150,6 +150,13 @@ impl Renderer {
         })
     }
 
+    /// Registers font bytes (TrueType/OpenType) with the text system; throws when the bytes are
+    /// rejected or the UI thread does not answer within 2 seconds.
+    #[napi]
+    pub fn register_font(&self, data: Uint8Array) -> Result<()> {
+        self.inner.register_font(data.to_vec()).map_err(to_napi)
+    }
+
     /// Queues a repaint request: the window rebuilds its elements and paints a frame.
     #[napi]
     pub fn request_repaint(&self) -> Result<()> {

@@ -348,6 +348,17 @@ impl HostRenderer {
         })
     }
 
+    /// Registers TrueType/OpenType font bytes with the window's text system (TXT-003). The bytes
+    /// are validated before they reach the text backend; the font is then addressable by the
+    /// family name declared in the font and the window is refreshed. Waits for the UI thread
+    /// like every result-returning command, so an unresponsive loop yields the timeout error.
+    pub fn register_font(&self, data: Vec<u8>) -> Result<(), HostError> {
+        self.query("font registration", move |cx, _| {
+            cx.register_font(&data)
+                .map_err(|error| HostError::Failed(error.to_string()))
+        })?
+    }
+
     /// Asks the window to rebuild its elements and repaint.
     pub fn request_repaint(&self) -> Result<(), HostError> {
         self.post(|cx, window| {

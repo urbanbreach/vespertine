@@ -144,3 +144,15 @@ fn a_prompt_whose_loop_stops_rejects_with_the_stopped_error() {
         "The GPUI UI thread stopped during path prompt"
     );
 }
+
+#[test]
+fn txt003_a6_font_registration_with_an_unresponsive_ui_loop_errors_after_the_timeout() {
+    let (renderer, _tasks, _alive) = renderer_with_silent_loop();
+    let started = Instant::now();
+    let error = renderer.register_font(vec![1, 2, 3, 4]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Timed out after 2 seconds waiting for font registration"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+}

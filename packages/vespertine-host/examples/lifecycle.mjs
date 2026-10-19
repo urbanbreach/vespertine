@@ -4,7 +4,7 @@
 //   node examples/lifecycle.mjs
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createNativeRenderer, createMutationQueue, startFrameLoop } from "../src/index.js";
 
@@ -94,6 +94,24 @@ const after = renderer.getWindowSize();
 assert.ok(after.width > 0 && after.height > 0);
 assert.equal(renderer.tick(), true);
 step("window still alive after the commands");
+
+// TXT-003: font registration through the UI thread (bad bytes error, a real font registers).
+assert.throws(() => renderer.registerFont(new Uint8Array([1, 2, 3, 4])), /not a TrueType or OpenType font/);
+{
+  let file = null;
+  try {
+    file = execFileSync("fc-match", ["-f", "%{file}", "monospace"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    // no fontconfig
+  }
+  if (file && /\.(ttf|otf)$/i.test(file)) {
+    renderer.registerFont(new Uint8Array(readFileSync(file)));
+    step(`registerFont accepted ${file} and rejected invalid bytes`);
+  } else {
+    step("registerFont rejected invalid bytes (no TrueType/OpenType file found to register)");
+  }
+}
+assert.equal(renderer.tick(), true);
 
 // An unanswered prompt does not block JavaScript.
 const pending = renderer.promptForPaths({ prompt: "Choose" });
