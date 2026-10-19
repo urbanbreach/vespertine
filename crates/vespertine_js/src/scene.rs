@@ -6,6 +6,7 @@
 //! `img` and `svg` through the image hosts (ELM-004). The scene is shared by the live window view
 //! and by the offscreen test host.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -21,6 +22,11 @@ use vespertine::{
     point, px,
 };
 use vespertine_host_tree::{HostTree, NodeId, NodeRef};
+use vespertine_richtext::{
+    RichText, RunKey, TextService, UserSelect, highlight,
+    search::spec::{HighlightDeclaration, default_hex_color},
+    selection_color, text_root, user_select,
+};
 
 /// Receives the events of the scene: `(app, element id, event type, payload fields)`. The
 /// payload is a JSON object merged into the event the JavaScript side receives.
@@ -28,6 +34,21 @@ pub type EmitEvent = Rc<dyn Fn(&App, u64, &str, Value)>;
 
 /// Called with the painted border-box of a node, after it painted.
 pub type PaintedHook = Rc<dyn Fn(u64, Bounds<Pixels>, &mut App)>;
+
+/// A search wash a text run painted: the owning node, the run's full text, the UTF-16 range and
+/// one rectangle `(x, y, width, height)` per visual row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneWash {
+    pub element_id: NodeId,
+    pub text: String,
+    pub start_utf16: usize,
+    pub end_utf16: usize,
+    pub active: bool,
+    pub rects: Vec<[f32; 4]>,
+}
+
+/// Called after a frame painted with the washes it painted, in paint order.
+pub type WashesHook = Rc<dyn Fn(&[SceneWash], &mut App)>;
 
 /// Element types that scroll their content by default.
 const SCROLL_STYLE_KEYS: [(&str, &str); 3] = [
@@ -60,6 +81,13 @@ pub struct HostScene {
     styles: HashMap<usize, ParsedStyle>,
     /// Style payloads that failed to decode, reported once.
     rejected: HashSet<usize>,
+    /// The window's text service (selection, search washes), known after the first render.
+    service: Option<TextService>,
+    /// Whether selection changes are reported as `windowSelectionChange` events.
+    selection_notifications: Rc<Cell<bool>>,
+    /// The node each text run (identified by its hashed owner) belongs to.
+    run_owners: Rc<RefCell<HashMap<u64, NodeId>>>,
+    washes: Option<WashesHook>,
 }
 
 fn mods(event: &HostPointerEvent) -> [(&'static str, bool); 4] {
@@ -147,12 +175,44 @@ impl HostScene {
             painted: None,
             styles: HashMap::new(),
             rejected: HashSet::new(),
+            service: None,
+            selection_notifications: Rc::new(Cell::new(false)),
+            run_owners: Rc::new(RefCell::new(HashMap::new())),
+            washes: None,
         }
     }
 
     /// Installs the hook that learns each node's painted bounds.
     pub fn set_painted_hook(&mut self, hook: Option<PaintedHook>) {
         self.painted = hook;
+    }
+
+    /// Installs the hook that learns the search washes each frame painted.
+    pub fn set_washes_hook(&mut self, hook: Option<WashesHook>) {
+        self.washes = hook;
+    }
+
+    /// Enables or disables `windowSelectionChange` events (identified by the window generation).
+    pub fn set_selection_notifications(&self, enabled: bool) {
+        self.selection_notifications.set(enabled);
+    }
+
+    /// The flag behind [`Self::set_selection_notifications`], for owners that outlive access to
+    /// the scene (the test host owns the tree it renders).
+    pub fn selection_notifications(&self) -> Rc<Cell<bool>> {
+        self.selection_notifications.clone()
+    }
+
+    /// The selected document text, `None` when nothing is selected.
+    pub fn selected_text(&self) -> Option<String> {
+        self.service.as_ref()?.selected_text()
+    }
+
+    /// Clears the document selection.
+    pub fn clear_selection(&self, window: &mut Window, cx: &mut App) {
+        if let Some(service) = &self.service {
+            service.clear_selection(window, cx);
+        }
     }
 
     /// The identity window-level events currently carry.
@@ -176,15 +236,63 @@ impl HostScene {
     /// Builds the elements of one frame from `tree`.
     pub fn render(&mut self, tree: &HostTree, window: &mut Window, cx: &mut App) -> AnyElement {
         self.sync(tree, window, cx);
+        self.install_text_service(window, cx);
+        self.run_owners.borrow_mut().clear();
         let content = match tree.root() {
             Some(root) => self.build(tree, root, window, cx),
             None => div().into_any_element(),
         };
-        div()
-            .size_full()
-            .child(self.context.window_hooks())
-            .child(content)
-            .into_any_element()
+        let service = self.service.clone();
+        let washes = self.washes.clone();
+        let owners = self.run_owners.clone();
+        // Painted last: reports the washes the frame's text runs painted.
+        let report = vespertine::canvas(
+            |_, _, _| (),
+            move |_, _, _, cx| {
+                let (Some(service), Some(hook)) = (service, washes) else { return };
+                let owners = owners.borrow();
+                let painted: Vec<SceneWash> = service
+                    .painted_highlights()
+                    .into_iter()
+                    .filter_map(|wash| {
+                        Some(SceneWash {
+                            element_id: *owners.get(&wash.key.owner)?,
+                            text: wash.text,
+                            start_utf16: wash.start,
+                            end_utf16: wash.end,
+                            active: wash.active,
+                            rects: wash.rects,
+                        })
+                    })
+                    .collect();
+                hook(&painted, cx);
+            },
+        );
+        text_root(
+            div()
+                .size_full()
+                .child(self.context.window_hooks())
+                .child(content)
+                .child(report),
+        )
+        .into_any_element()
+    }
+
+    /// Looks up the window's text service and reports selection changes through the emitter.
+    fn install_text_service(&mut self, window: &Window, cx: &mut App) {
+        if self.service.is_some() {
+            return;
+        }
+        let service = TextService::of(window, cx);
+        let emit = self.emit.clone();
+        let generation = self.generation.clone();
+        let enabled = self.selection_notifications.clone();
+        service.on_selection_change(move |text, _, cx| {
+            if enabled.get() {
+                emit(cx, generation.load(Ordering::SeqCst), "windowSelectionChange", json!({ "text": text }));
+            }
+        });
+        self.service = Some(service);
     }
 
     /// Creates host nodes for new tree nodes, drops those of destroyed nodes and brings every
@@ -344,14 +452,42 @@ impl HostScene {
         }
 
         if let Some(text) = node.text() {
-            host = host.child(text.to_string());
+            // The run is selectable and searchable; its key addresses it for the wash report.
+            let key = RunKey::new(id, 0);
+            self.run_owners.borrow_mut().insert(key.owner, id);
+            host = host.child(RichText::new(ElementId::NamedInteger("text".into(), id), text.to_string()).key(key));
         }
         let children: Vec<NodeId> = node.children().collect();
         for child in children {
             let element = self.build(tree, child, window, cx);
             host = host.child(element);
         }
-        host.into_any_element()
+        let mut element = host.into_any_element();
+        // `userSelect` and `selectionColor` are inherited by the subtree's text runs.
+        if let Some(Value::Object(style)) = node.style().map(|style| &**style) {
+            if let Some(color) = style
+                .get("selectionColor")
+                .and_then(Value::as_str)
+                .and_then(vespertine::css_color_to_rgba)
+            {
+                element = selection_color(vespertine::Hsla::from(color), element).into_any_element();
+            }
+            match style.get("userSelect").and_then(Value::as_str) {
+                Some("none") => element = user_select(UserSelect::None, element).into_any_element(),
+                Some("text") => element = user_select(UserSelect::Text, element).into_any_element(),
+                _ => {}
+            }
+        }
+        let Some(declaration) = node.prop("highlight") else {
+            return element;
+        };
+        let declaration = HighlightDeclaration::from_value(declaration, &default_hex_color);
+        let mut scope = highlight(ElementId::NamedInteger("highlight".into(), id), declaration, element);
+        if node.listeners().any(|name| name == "highlight") {
+            let emit = self.emit.clone();
+            scope = scope.on_match_count(move |count, _, cx| emit(cx, id, "highlight", json!({ "matchCount": count })));
+        }
+        scope.into_any_element()
     }
 
     // ---- ref-like operations --------------------------------------------------------------

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import React from "react";
-import { render, resetRender } from "../src/index.js";
+import { render, resetRender, useTextSearch } from "../src/index.js";
 import { createTestHost, testHostAvailable } from "../src/testing.js";
 import { settle } from "./helpers.js";
 
@@ -206,4 +206,58 @@ native("the runtime error view shows in the same window and Reload remounts the 
     console.error = originalError;
     resetRender();
   }
+});
+
+native("a drag selects painted text, reports it to the root and the selection can be cleared (APP-010 A4)", () => {
+  const changes = [];
+  const host = createTestHost({ width: 400, height: 200, onSelectionChange: (event) => changes.push(event.text) });
+  host.render(h("div", { style: { width: 400, height: 100, padding: 10 } }, h("text", { testId: "line", style: { fontSize: 16 } }, "hello selectable world")));
+  const line = byTestId(host, "line");
+  assert.equal(host.renderer.getSelectedText(), null);
+  const y = line.bounds.y + line.bounds.height / 2;
+  const selected = host.renderer.dragSelect(line.bounds.x + 1, y, line.bounds.x + line.bounds.width, y);
+  assert.equal(selected, "hello selectable world");
+  assert.equal(host.renderer.getSelectedText(), "hello selectable world");
+  assert.deepEqual(changes, ["hello selectable world"]);
+  host.renderer.clearSelection();
+  assert.equal(host.renderer.getSelectedText(), null);
+  assert.deepEqual(changes, ["hello selectable world", null]);
+});
+
+native("userSelect none text paints but cannot be selected", () => {
+  const host = createTestHost({ width: 400, height: 200 });
+  host.render(h("div", { style: { width: 400, height: 100, padding: 10, userSelect: "none" } }, h("text", { testId: "line", style: { fontSize: 16 } }, "locked text")));
+  const line = byTestId(host, "line");
+  const y = line.bounds.y + line.bounds.height / 2;
+  assert.equal(host.renderer.dragSelect(line.bounds.x + 1, y, line.bounds.x + line.bounds.width, y), null);
+  assert.ok(host.renderer.getPaintedText().includes("locked text"));
+});
+
+native("text search washes follow the match count and the active index (APP-010 A1)", () => {
+  let search;
+  function Searchable({ query }) {
+    search = useTextSearch({ query });
+    return h("text", { testId: "doc", style: { fontSize: 16 }, ...search.props }, "Red red and RED, not blue");
+  }
+  const host = createTestHost({ width: 500, height: 100 });
+  host.render(h(Searchable, { query: "red" }));
+  const washes = () => host.renderer.getPaintedHighlights();
+  assert.equal(washes().length, 3);
+  assert.deepEqual(washes().map((wash) => [wash.startUtf16, wash.endUtf16, wash.active]), [
+    [0, 3, true],
+    [4, 7, false],
+    [12, 15, false],
+  ]);
+  host.render(h(Searchable, { query: "red" }));
+  assert.equal(search.total, 3, "the native match count reaches the controller");
+  search.next();
+  host.render(h(Searchable, { query: "red" }));
+  assert.equal(search.active, 1);
+  assert.deepEqual(washes().map((wash) => wash.active), [false, true, false]);
+  search.goTo(2);
+  host.render(h(Searchable, { query: "red" }));
+  assert.deepEqual(washes().map((wash) => wash.active), [false, false, true]);
+  host.render(h(Searchable, { query: "blue" }));
+  assert.equal(washes().length, 1);
+  assert.equal(host.renderer.findByTestId("doc")[0].id, washes()[0].elementId);
 });

@@ -8,7 +8,9 @@ use std::sync::atomic::AtomicU64;
 use serde_json::{Map, Value};
 use vespertine::{AnyElement, App, FocusHandle, Window};
 use vespertine_host_tree::{HostTree, NodeRef, TreeOptions};
-use vespertine_test_host::{HostError, HostEvents, HostResult, NativeEvent, PaintLog, RetainedHost, TreeNode};
+use vespertine_test_host::{
+    HostError, HostEvents, HostResult, NativeEvent, PaintLog, PaintedWash, Rect, RetainedHost, TreeNode,
+};
 
 use crate::scene::{EmitEvent, HostScene};
 
@@ -42,6 +44,32 @@ impl HostTreeHost {
         scene.set_painted_hook(Some(Rc::new(|id, bounds, cx| {
             PaintLog::record_bounds(cx, id, bounds);
         })));
+        scene.set_washes_hook(Some(Rc::new(|washes, cx| {
+            for wash in washes {
+                PaintLog::record_wash(
+                    cx,
+                    PaintedWash {
+                        element_id: wash.element_id,
+                        // Every text node paints one run, with sub-index 0.
+                        run_index: 0,
+                        text: wash.text.clone(),
+                        start_utf16: wash.start_utf16,
+                        end_utf16: wash.end_utf16,
+                        active: wash.active,
+                        rects: wash
+                            .rects
+                            .iter()
+                            .map(|[x, y, width, height]| Rect {
+                                x: f64::from(*x),
+                                y: f64::from(*y),
+                                width: f64::from(*width),
+                                height: f64::from(*height),
+                            })
+                            .collect(),
+                    },
+                );
+            }
+        })));
         Self {
             tree: HostTree::with_options(TreeOptions {
                 style_validator: validate_style,
@@ -50,6 +78,11 @@ impl HostTreeHost {
             scene,
             generation,
         }
+    }
+
+    /// The flag that enables `windowSelectionChange` events; shared with the scene.
+    pub fn selection_notifications(&self) -> Rc<std::cell::Cell<bool>> {
+        self.scene.selection_notifications()
     }
 
     /// The identity window-level key events carry.
@@ -158,6 +191,15 @@ impl RetainedHost for HostTreeHost {
                 "element {id} has no scrolling ancestor"
             )))
         }
+    }
+
+    fn selected_text(&self, _cx: &App) -> Option<String> {
+        self.scene.selected_text()
+    }
+
+    fn clear_selection(&mut self, window: &mut Window, cx: &mut App) -> HostResult<()> {
+        self.scene.clear_selection(window, cx);
+        Ok(())
     }
 
     fn set_image_bytes(

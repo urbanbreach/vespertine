@@ -472,6 +472,21 @@ impl HostRenderer {
             .unwrap_or(false))
     }
 
+    /// Enables or disables `windowSelectionChange` events (carrying the selected text).
+    pub fn set_selection_notifications(&self, enabled: bool) -> Result<(), HostError> {
+        self.with_scene("selection notifications", move |view, _, _| {
+            view.scene().set_selection_notifications(enabled);
+        })?;
+        Ok(())
+    }
+
+    /// The selected document text, `None` when nothing is selected.
+    pub fn selected_text(&self) -> Result<Option<String>, HostError> {
+        Ok(self
+            .with_scene("selected text", |view, _, _| view.scene().selected_text())?
+            .flatten())
+    }
+
     /// The scroll offset `(x, y)` of a scrolling element (zero at the start, negative toward the
     /// far side), `None` for elements that do not scroll.
     pub fn scroll_offset(&self, id: u64) -> Result<Option<(f32, f32)>, HostError> {

@@ -7778,6 +7778,7 @@ dependencies = [
  "vespertine",
  "vespertine_host_tree",
  "vespertine_platform",
+ "vespertine_richtext",
  "vespertine_test_host",
 ]
 

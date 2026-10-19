@@ -17,6 +17,7 @@ doctest = false
 vespertine = { workspace = true, features = ["font-kit", "profiler", "wayland", "x11"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_host_tree.workspace = true
+vespertine_richtext.workspace = true
 vespertine_test_host = { path = "../vespertine_test_host" }
 anyhow.workspace = true
 async-channel = { workspace = true, features = ["std"] }

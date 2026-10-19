@@ -71,6 +71,7 @@ pub struct TestRenderer {
     host: RefCell<TestHost>,
     generation: Arc<AtomicU64>,
     callback: Option<Callback>,
+    selection_notifications: Rc<std::cell::Cell<bool>>,
     pending: Rc<RefCell<VecDeque<NativeEvent>>>,
 }
 
@@ -94,13 +95,16 @@ impl TestRenderer {
         if let Some(scale) = dimension(&options, "scaleFactor")? {
             host_options.scale_factor = scale as f32;
         }
-        let mut host = TestHost::with_tree(host_options, HostTreeHost::new(generation.clone())).map_err(fail)?;
+        let tree = HostTreeHost::new(generation.clone());
+        let selection_notifications = tree.selection_notifications();
+        let mut host = TestHost::with_tree(host_options, tree).map_err(fail)?;
         let queue = pending.clone();
         host.set_event_dispatcher(Some(Box::new(move |event| queue.borrow_mut().push_back(event))));
         Ok(Self {
             host: RefCell::new(host),
             generation,
             callback: callback.map(|callback| callback.create_ref()).transpose()?,
+            selection_notifications,
             pending,
         })
     }
@@ -393,6 +397,12 @@ impl TestRenderer {
     #[napi]
     pub fn get_selected_text(&self) -> Result<Option<String>> {
         self.host.borrow_mut().selected_text().map_err(fail)
+    }
+
+    /// Enables or disables `windowSelectionChange` events.
+    #[napi]
+    pub fn set_selection_notifications(&self, enabled: bool) {
+        self.selection_notifications.set(enabled);
     }
 
     #[napi]

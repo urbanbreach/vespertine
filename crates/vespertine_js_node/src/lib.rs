@@ -189,6 +189,18 @@ impl Renderer {
         self.inner.set_debug_overlay(&mode).map_err(to_napi)
     }
 
+    /// Enables or disables selection-change events; enabled only while a subscriber exists.
+    #[napi]
+    pub fn set_selection_notifications(&self, enabled: bool) -> Result<()> {
+        self.inner.set_selection_notifications(enabled).map_err(to_napi)
+    }
+
+    /// The selected document text, or null.
+    #[napi]
+    pub fn get_selected_text(&self) -> Result<Option<String>> {
+        self.inner.selected_text().map_err(to_napi)
+    }
+
     /// Focuses an element; false when it does not exist or cannot take focus.
     #[napi]
     pub fn focus_element(&self, id: f64) -> Result<bool> {
