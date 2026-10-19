@@ -91,11 +91,11 @@ use self::a11y::A11y;
 use self::a11y::ROOT_NODE_ID;
 pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
 use self::pointer::{PointerState, pointer_within_keyboard_slop};
+use self::present::PresentCallback;
 use crate::text_system::glyph_store::{
     GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
     quantize_emoji_origin, quantize_glyph_origin,
 };
-use self::present::PresentCallback;
 use crate::util::{
     atomic_incr_if_not_zero, ceil_to_device_pixel, floor_to_device_pixel, round_half_toward_zero,
     round_half_toward_zero_f64, round_stroke_to_device_pixel, round_to_device_pixel,
