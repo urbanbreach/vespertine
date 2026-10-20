@@ -2165,6 +2165,97 @@ mod element_tests {
         assert_eq!(requested, 0);
     }
 
+    fn fid_card(top: f32, fill: u32, label: &'static str, selector: &'static str) -> crate::Div {
+        div()
+            .absolute()
+            .left(px(280.0))
+            .top(px(top))
+            .w(px(240.0))
+            .h(px(48.0))
+            .pl(px(16.0))
+            .pt(px(14.0))
+            .rounded(px(8.0))
+            .bg(crate::rgb(fill))
+            .text_size(px(14.0))
+            .line_height(px(20.0))
+            .text_color(crate::rgb(0xf0f1f3))
+            .whitespace_nowrap()
+            .debug_selector(move || selector.into())
+            .child(label)
+    }
+
+    /// A8: FID-ANM-002-2 at its frozen sample point: both cards sit at the specified geometry,
+    /// the moving card's fill primitive is painted at exactly 0.5 alpha (per primitive, no group
+    /// fade) and the stationary card's at 1, and the frozen clock requests no frames.
+    #[vespertine::test]
+    fn fid_anm_002_2_frozen_opacity_card_geometry_and_alpha(cx: &mut TestAppContext) {
+        let window = cx.open_window(size(px(800.0), px(480.0)), |_, _| TestView {
+            build: Box::new(|_, _| {
+                let description = MotionDescription::new(MotionProps::new().opacity(1.0))
+                    .initial(MotionInitial::Style(MotionProps::new().opacity(0.0)))
+                    .transition(linear_one_second());
+                div()
+                    .size_full()
+                    .bg(crate::rgb(0x181a1f))
+                    .child(
+                        fid_card(216.0, 0x405470, "Moving input", "moving")
+                            .with_motion("opacity-track", description)
+                            .frozen_at(ms(500)),
+                    )
+                    .child(fid_card(300.0, 0x30343d, "Stationary", "stationary"))
+                    .into_any_element()
+            }),
+        });
+        cx.run_until_parked();
+        for (selector, top) in [("moving", 216.0), ("stationary", 300.0)] {
+            assert_eq!(
+                bounds_of(&window, cx, selector),
+                Some(crate::Bounds::new(
+                    point(px(280.0), px(top)),
+                    size(px(240.0), px(48.0))
+                )),
+                "{selector}"
+            );
+        }
+
+        let (quads, scale) = window
+            .update(cx, |_, window, _| {
+                (window.painted_quads(), window.scale_factor())
+            })
+            .unwrap();
+        let card_quad = |top: f32| {
+            quads
+                .iter()
+                .find(|quad| {
+                    quad.bounds.origin.y.0 == top * scale
+                        && quad.bounds.size.width.0 == 240.0 * scale
+                })
+                .unwrap_or_else(|| panic!("no card quad at y = {top}: {quads:?}"))
+        };
+        let moving = card_quad(216.0);
+        let stationary = card_quad(300.0);
+        assert_eq!(moving.bounds.origin.x.0, 280.0 * scale);
+        assert_eq!(moving.bounds.size.height.0, 48.0 * scale);
+        assert_eq!(moving.corner_radii.top_left.0, 8.0 * scale);
+        let fill = |quad: &crate::Quad| quad.background.as_solid().expect("solid fill");
+        let (moving_fill, stationary_fill) = (fill(moving), fill(stationary));
+        assert_eq!(moving_fill.a, 0.5);
+        assert_eq!(stationary_fill.a, 1.0);
+        let fill_rgb = |color: crate::Hsla| {
+            let rgba = crate::Rgba::from(color);
+            [rgba.r, rgba.g, rgba.b].map(|channel| (channel * 255.0).round() as u8)
+        };
+        assert_eq!(fill_rgb(moving_fill), [0x40, 0x54, 0x70]);
+        assert_eq!(fill_rgb(stationary_fill), [0x30, 0x34, 0x3d]);
+
+        // The label glyph alpha is checked on real pixels by the vespertine_wgpu scene test.
+
+        let requested = window
+            .update(cx, |_, window, cx| window.simulate_next_frame(cx))
+            .unwrap();
+        assert_eq!(requested, 0, "the frozen clock requests no frames");
+    }
+
     #[vespertine::test]
     fn live_motion_track_requests_frames_while_active_and_reports_completion_once(
         cx: &mut TestAppContext,
