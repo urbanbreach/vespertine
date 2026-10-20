@@ -1,9 +1,9 @@
 # vespertine_scenes
 
-Scenes and the scene runner for fidelity (`FID-<ID>-<n>`) and performance (`PERF-<ID>`) measurement.
-The runner binary `vsp-scene-runner` implements the runner protocol (`specs/scenes/PROTOCOL.md`); the
-driver (`vsp-driver`, in the harness under `~/Projects/vespertine-cleanroom/clean/harness/`) builds it,
-captures scenes and measures CPU time per frame.
+Scenes and a scene runner for fidelity (`FID-<ID>-<n>`) and performance (`PERF-<ID>`) measurement.
+A scene is a fixed-size window whose content is a pure function of a frame index. The runner binary
+`vsp-scene-runner` opens one scene in a real window and either measures CPU time per frame or holds
+a settled frame on screen for an external screenshot tool.
 
 ```
 src/
@@ -17,12 +17,12 @@ src/
 build.rs            declares every src/perf/*.rs and src/fid/*.rs as a module
 ```
 
-`scene.rs`, `runner.rs`, `common.rs`, `corpus.rs` and the six baseline `perf/*.rs` files are the
-**single source of truth** shared with the upstream baseline runner: the driver copies them into
-the upstream workspace and compiles them unchanged against upstream GPUI (where the `vespertine`
-dependency name is bound to upstream). Keep them using only `vespertine::...`, `inventory` (through
-`register_scene!`) and `libc`, with no proc/derive macros. Do not add Vespertine-only API to them.
-Vespertine-only scenes go in new files.
+`scene.rs`, `runner.rs`, `common.rs`, `corpus.rs` and the six baseline `perf/*.rs` files (`list`, `flex`,
+`text`, `quads`, `stream`, `idle`) are written so that they also compile unchanged against upstream
+GPUI, with the `vespertine` dependency name bound to upstream, which keeps the baselines comparable
+with it. Keep them using only `vespertine::...`, `inventory` (through `register_scene!`) and `libc`,
+with no proc/derive macros, and do not add Vespertine-only API to them. Vespertine-only scenes go in
+new files.
 
 ## Adding a scene
 
@@ -48,57 +48,49 @@ register_scene!("FID-RND-001-1", || Rnd001);
 ```
 
 A scene's per-frame update must be a pure function of the frame index `f`. Capture mode renders
-`capture_frame()` (default 0). Scenes that need more than the base window setup should say so in the
-spec and the runner core, not in the scene. A scene the build cannot render is simply not registered;
-asking for an unregistered id exits with code 3 (the driver records N/A).
+`capture_frame()` (default 0). A scene the build cannot render is simply not registered; asking
+for an unregistered id exits with code 3.
 
-## Building the runner
+Scene ids are the strings passed to `register_scene!`; `grep -rho 'register_scene!(\s*"[A-Z0-9-]*"' src`
+lists most of them (a few registrations span lines). The runner has no listing option.
 
-Use the driver's builder, which applies the shared release settings (opt-level 3, thin LTO,
-codegen-units 1, no debug assertions, `-C symbol-mangling-version=v0`, toolchain 1.98.1) identically
-for the upstream and the Vespertine runner:
+## Running the runner
 
 ```sh
-export RUSTC_WRAPPER=$HOME/Projects/vespertine-cleanroom/tools/bin/sccache SCCACHE_DIR=$HOME/Projects/vespertine-cleanroom/tools/sccache-cache SCCACHE_CACHE_SIZE=80G
-H=~/Projects/vespertine-cleanroom/clean/harness
-D=$H/driver/vsp-driver/target/release/vsp-driver     # (cd $H/driver/vsp-driver && cargo build --release)
-R=$($D build-vespertine --repo ~/Projects/vespertine/.worktrees/<owner>)   # prints <worktree>/target/release/vsp-scene-runner
-U=$($D build-upstream --repo ~/Projects/vespertine)                         # baseline (shared sources from the repo's main checkout)
+cargo run --release -p vespertine_scenes --bin vsp-scene-runner -- \
+    --scene PERF-LIST --mode perf --out target/perf-list.json
+cat target/perf-list.json
 ```
 
-(`build-upstream --repo <worktree>` builds the baseline from your worktree's copy of the shared files.)
-Plain `cargo build -p vespertine_scenes` works for quick checks but is not comparable for timing.
+Options: `--scene <ID>` and `--mode <perf|idle|capture>` and `--out <result.json>` are required;
+`--warmup <N>` (default 120), `--frames <N>` (default 600), `--ready <file>` (required in capture
+mode) and `--label <text>` (copied into the result). The window is `vsp-scene:<ID>` with app id
+`vsp-scene`, unfocused, not resizable, with server-side decorations and the scene's logical size, and it requests
+animation frames at the display rate. Exit codes: 0 success, 1 runtime failure, 2 bad command line,
+3 unregistered scene, 4 capture lifetime expired.
 
-## Capturing a scene and comparing with the reference
-
-The driver needs the Hyprland session (it creates a temporary headless output; see the harness README).
-Fidelity scene sizes come from `reports/fidelity/SIZES.tsv`.
+- **perf**: renders `--warmup` frames, then times `--frames` frames and writes
+  `{"scene", "mode", "label", "frames", "cpu_ns", "wall_ns"}` (process CPU time of all threads and
+  wall time) to `--out`.
+- **idle**: renders the warmup frames, then measures the CPU time of an idle interval of `--frames`
+  display slots (60 Hz) during which nothing is requested; used by `PERF-IDLE`.
+- **capture**: renders 60 frames of `capture_frame()`, waits 500 ms, writes `--out`, creates the
+  `--ready` file and stays open for 30 seconds so that a screenshot tool can capture the window; the
+  runner then exits with code 4. A capturing tool should wait for the ready file, take the
+  screenshot and terminate the runner.
 
 ```sh
-REP=~/Projects/vespertine-cleanroom/reports/fidelity
-$D capture --runner vsp=$R --scene FID-RND-001-1 --scene-sizes $REP/SIZES.tsv --out-dir target/scene-out/cap
-$D compare target/scene-out/cap/vsp-FID-RND-001-1.png $REP/ref/FID-RND-001-1.png --diff target/scene-out/cap/diff.png
+cargo run --release -p vespertine_scenes --bin vsp-scene-runner -- \
+    --scene FID-RND-001-1 --mode capture --out target/capture.json --ready target/capture.ready
 ```
 
-A scene passes when at most 0.5 % of pixels differ by more than 8/255 in any channel (`compare` exits
-0); the diff image shows differing pixels in red.
-
-## Measuring against the upstream runner
-
-```sh
-$D perf --runner upstream=$U --runner vsp=$R --scene PERF-LIST --runs 10 --out-dir target/scene-out/perf
-cat target/scene-out/perf/results.md          # median/min/max CPU µs per frame and the ratio to the first runner
-```
-
-Omit `--scene` for all six baseline scenes (`PERF-IDLE` runs in idle mode). Other ids need
-`--scene-size ID=WxH` (or `--scene-sizes FILE`) and run in perf mode. Runners are interleaved with
-rotated order within one invocation; measurements are only comparable within one invocation, and
-the machine is shared, so note its load.
+Timings are only comparable within one machine state: measure several runs in alternation, note the
+machine load, and compare release builds only.
 
 ## Profiling
 
-`--features profile` builds the Vespertine runner with measurement aids that are inert unless their
-environment variable is set (pass them through the driver with `--runner-env KEY=VALUE`):
+`--features profile` builds the runner with measurement aids that are inert unless their environment
+variable is set:
 
 - `VSP_IPROF=<file>`: samples the instruction pointer of the main thread every `VSP_IPROF_PERIOD`
   (default 100 000) user instructions through the kernel's performance counters and, when the runner
@@ -115,12 +107,11 @@ environment variable is set (pass them through the driver with `--runner-env KEY
   `VSP_PROFILE_HZ` (default 500), reporting inclusive and self cost per function, self cost per
   source line and per caller chain.
 
-Build with the driver's release settings (plus line tables for the profilers) in a separate target
-directory, and never compare timings of this binary with the driver's builds:
+The release profile already carries line tables. Build with the feature, run, and rebuild without it
+before taking timings: a binary with the profilers must never be compared with one without.
 
 ```sh
-CARGO_TARGET_DIR=target/prof RUSTFLAGS="-C symbol-mangling-version=v0" RUSTUP_TOOLCHAIN=1.98.1 \
-CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build --release -p vespertine_scenes --features profile
-$D perf --runner vsp=target/prof/release/vsp-scene-runner --scene PERF-LIST --runs 1 --frames 1200 \
-    --runner-env 'VK_LOADER_DRIVERS_SELECT=*intel_icd*' --runner-env VSP_IPROF=$PWD/list.prof
+cargo build --release -p vespertine_scenes --features profile
+VSP_PROFILE=$PWD/target/list.prof target/release/vsp-scene-runner \
+    --scene PERF-LIST --mode perf --frames 1200 --out target/prof-list.json
 ```

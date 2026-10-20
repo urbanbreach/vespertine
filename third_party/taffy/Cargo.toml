@@ -1,5 +1,6 @@
 # Vendored copy of taffy 0.13.0 (MIT, https://github.com/DioxusLabs/taffy) with a
-# key-matched nine-entry measurement cache (LAY-001 R4). See src/tree/cache.rs.
+# key-matched sixteen-entry measurement cache (LAY-001 R4) and a subtree layout method. See
+# src/tree/cache.rs and src/tree/taffy_tree.rs.
 
 [package]
 edition = "2021"

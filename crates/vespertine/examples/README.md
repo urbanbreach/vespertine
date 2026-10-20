@@ -59,6 +59,42 @@ cargo run -p vespertine --example hello_world
 - `painting` demonstrates custom drawing with paths and canvas.
 - `svg` shows SVG rendering.
 
+## Rendering effects and surfaces
+
+- `backdrop_blur` builds a frosted-glass panel that blurs the content painted before it.
+- `rounded_clip` sweeps text, an image and a gradient past the corners of a rounded content clip;
+  `rounded_clip_limits` shows what the clip does not round (paths, decorations, shadows) and
+  `rounded_clip_plain_solid` shows the plain-solid fill case.
+- `gpu_surface` composites a texture that is filled on the renderer's own GPU device every frame,
+  with no readback.
+- `surface_plate` paints a layered surface plate (shadows, fill, inset shadows, border) as a styled
+  element and from a canvas.
+- `canvas_text` paints polylines, shapes and text from one canvas.
+- `nearest_blocks` paints a raw BGRA image with nearest-neighbor sampling next to a linear copy.
+- `image_fit`, `image_crop_mask`, `image_mask_resize` and `image_treatments` cover image fitting,
+  cropping, feathered masks and cached source-space treatments.
+- `dynamic_image` and `live_image` update image pixels in place; `media_icons` compares
+  color-preserving and monochrome vector images.
+- `outline` shows layout-neutral element outlines; `style_data` renders panels described by JSON
+  styles (`examples/style_data/coverage.json`).
+- `renderer_memory` prints renderer memory reports when `VESPERTINE_RENDERER_MEMORY=1` is set.
+
+## Lists, layout and input
+
+- `virtual_list_windowed` mounts a window of rows from a 100,000-row variable-height list;
+  `list_transcript` and `list_trailing_reservation` cover a transcript with a back-to-bottom
+  control and trailing viewport reservation.
+- `responsive_layout` composes responsive layouts; `floating_layers` places floating layers on
+  every side and alignment of a trigger.
+- `inert_elements` reports what thousands of inert elements cost; `keyboard_focus_dim` shows
+  keyboard focus-visible styling; `focus_scoped_shortcuts` binds one shortcut to different actions
+  in two panes; `touch_fling` replays scripted touch gestures; `rich_clipboard` copies and pastes
+  scoped structured clipboard items.
+- `animation_clock` shows the shared parked animation clock; `reactive_background` publishes
+  background work into a view while an unrelated counter keeps updating.
+- `a11y` and `a11y_declarative` demonstrate AccessKit integration and declarative accessibility
+  properties.
+
 ## Windows and application behavior
 
 - `custom_chrome` demonstrates client-side window chrome on Wayland and X11: a drag-region titlebar, caption controls in the desktop's button order, resize from all eight edges, and the opaque fallback when blur is unavailable. Run it with `cargo run -p vespertine --example custom_chrome`.
@@ -70,6 +106,12 @@ cargo run -p vespertine --example hello_world
 - `window` demonstrates creating normal, dialog, popup, and floating windows.
 - `window_positioning` demonstrates window bounds and placement.
 - `window_shadow` demonstrates window shadow styling.
+- `window_geometry` saves and restores window geometry across launches.
+- `window_movable` opens windows with different `is_movable` and titlebar-drag settings.
+- `x11_toolkit_scale` shows an explicit toolkit scale on X11.
+- `present_sync` synchronizes presentation with a native X11 child window.
+- `menus_in_window` renders the application menus inside the window.
+- `notifications_and_sounds` posts desktop notifications and plays feedback sounds.
 
 ## Diagnostics and benchmarks
 

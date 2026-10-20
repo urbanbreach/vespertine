@@ -17,7 +17,7 @@ Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Cl
 
 | Crate | Version | License | Change from the published crate |
 | --- | --- | --- | --- |
-| taffy | 0.13.0 | MIT | modified measurement cache for persistent layout nodes (LAY-001) |
+| taffy | 0.13.0 | MIT | modified measurement cache and added subtree-layout method for persistent layout nodes (LAY-001) |
 
 ## Bundled fonts
 

@@ -3,16 +3,17 @@
 VESPERTINE is a hybrid immediate and retained mode, GPU accelerated, UI framework
 for Rust, designed to support a wide variety of applications.
 
-VESPERTINE targets Linux, macOS, and Windows desktops. Linux is the verified
-platform for this fork; the upstream macOS and Windows backends are preserved.
+VESPERTINE is a fork of upstream GPUI. Linux (Wayland and X11) is the verified platform; the
+upstream macOS and Windows backends are preserved but have not been built or verified in this
+repository.
 
 ## Getting Started
 
-VESPERTINE is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions. You'll also need to use the latest version of stable Rust. Add `vespertine`, and optionally `vespertine_platform`, to your `Cargo.toml`:
+VESPERTINE is pre-1.0 and its crates are not published; depend on them by path or git from a checkout of this repository, which pins its Rust toolchain in `rust-toolchain.toml`. Add `vespertine`, and optionally `vespertine_platform`, to your `Cargo.toml`:
 
 ```toml
-vespertine = { version = "*" }
-vespertine_platform = { version = "*", features = ["font-kit", "wayland", "x11"] }
+vespertine = { path = "crates/vespertine" }
+vespertine_platform = { path = "crates/vespertine_platform", features = ["font-kit", "wayland", "x11"] }
 ```
 
 Everything in a standalone VESPERTINE app starts with an `Application`. You can create one with `vespertine_platform::application()`, which picks the windowing and text backends for the host OS, and kick off your application by passing a callback to `Application::run()`. Inside this callback, you can create a new window with `App::open_window()` and register your first root view.
@@ -53,6 +54,10 @@ The features on `vespertine_platform` are platform-specific, so the list above i
 ### Dependencies
 
 VESPERTINE has various system dependencies that it needs in order to work.
+
+#### Linux
+
+The `hello_world` example links dynamically only against `libxcb`, `libxkbcommon` and `libxkbcommon-x11` (install their development packages), and needs a working Vulkan driver at run time. The `vespertine_webview` crate additionally needs `pkg-config` modules `webkit2gtk-4.1` and `json-glib-1.0` to build its helper (Debian/Ubuntu: `libwebkit2gtk-4.1-dev`, `libjson-glib-dev`; Fedora: `webkit2gtk4.1-devel`, `json-glib-devel`).
 
 #### macOS
 
@@ -98,4 +103,4 @@ In addition to the systems above, VESPERTINE provides a range of smaller service
 
 - The `[vespertine::test]` macro provides a convenient way to write tests for your VESPERTINE applications. Tests also have their own kind of context, a `TestAppContext` which provides ways of simulating common platform input. See `app::test_context` and `test` modules for more details.
 
-Currently, the best way to learn about these APIs is to read the Zed source code or drop a question in the [Zed Discord](https://zed.dev/community-links). We're working on improving the documentation, creating more examples, and will be publishing more guides to VESPERTINE on our [blog](https://zed.dev/blog).
+The repository README lists the crates and the examples that exercise each capability.

@@ -12,7 +12,7 @@ Row syntax (one spec per row, rows in ascending spec order):
 
 - `test:<crate>:<name>` is a test exactly as printed by `cargo test -p <crate> -- --list`
   (without the `: test` suffix).
-- `example:<crate>:<name>` is a cargo example of the crate. It is built in release mode and run
+- `example:<crate>:<name>` is a cargo example of the crate. It is built (dev profile) and run
   for 10 seconds in the current graphical session; it passes if it exits 0 or is still running
   at the timeout.
 - Verifiers are separated by ` ; `. A row lists every acceptance item (`A1`, `A2`, ...) of its spec.

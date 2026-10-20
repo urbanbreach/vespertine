@@ -1,4 +1,4 @@
-//! Vespertine scene runner (`specs/scenes/PROTOCOL.md`).
+//! Vespertine scene runner (see the crate README for the command line and modes).
 
 #[cfg(feature = "profile")]
 #[path = "vsp-scene-runner/profile.rs"]

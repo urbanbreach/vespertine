@@ -6,7 +6,10 @@ The first commit imports the tracked files of the Linux GPUI dependency closure
 verbatim; a second verbatim import adds the Apple, macOS, and Windows crates after
 the requested desktop scope expansion. Development, benchmark, and example
 dependencies are included. Every imported workspace crate declares
-`license = "Apache-2.0"`.
+`license = "Apache-2.0"`. Everything added since those two commits (the crates
+listed under "Crates without an upstream counterpart", the `packages/` npm
+workspace, the scripts, and changes inside the imported crates) is Vespertine's
+own work, also under Apache-2.0.
 
 ## Crate mapping
 
@@ -50,14 +53,31 @@ and IBM Plex Sans Regular font fixtures. These are copied under `assets/fonts/`
 with their original SIL Open Font License 1.1 notices. They are assets, not
 workspace crates; the crate code remains Apache-2.0.
 
+## Crates without an upstream counterpart
+
+These workspace crates exist only in Vespertine; there is nothing to compare them with
+when synchronizing:
+
+`vespertine_bench`, `vespertine_components`, `vespertine_desktop`, `vespertine_host_tree`,
+`vespertine_js`, `vespertine_js_node`, `vespertine_public_image_loader`,
+`vespertine_residency`, `vespertine_richtext`, `vespertine_scenes`, `vespertine_test_host`,
+`vespertine_theme`, `vespertine_updater` and `vespertine_webview`.
+
+The npm packages under `packages/` and the scripts under `scripts/` are likewise
+Vespertine's own. The README lists what each crate does.
+
+Beyond these crates, the imported crates carry Vespertine changes (most of them in
+`vespertine`, `vespertine_wgpu`, `vespertine_linux` and `vespertine_platform`); expect every
+mapped directory to differ from its upstream counterpart by more than renames.
+
 ## Platform scope
 
-Linux (Wayland and X11) is the verified platform. macOS and Windows backends,
-platform APIs, target dependencies, features, and build-script branches are
-preserved from upstream and are checked through cross-target `cargo check`
-where the Linux host's SDK/C compiler support permits. The macOS check enables
-`vespertine_platform/runtime_shaders` to avoid build-time Metal compilation.
-Native macOS and Windows runtime behavior has not been exercised here.
+Linux (Wayland and X11) is the verified platform: its backends are exercised by the test
+suite, the examples and the scenes. The macOS and Windows backends, platform APIs, target
+dependencies, features and build-script branches are preserved from upstream and have never
+been built or run in this repository. Where Vespertine extended a cross-platform trait or
+shared API, the macOS and Windows code was edited to match, without being compiled. Treat
+those backends as unverified.
 
 The `gpui_ios` and `gpui_web` crates are excluded, along with iOS and browser/wasm
 code paths, dependencies, features, and platform-specific tests. The shared
@@ -92,13 +112,17 @@ source pin even when resolving the Linux build.
   `util` uses the approved collision-resolution name `vespertine_util_core`.
 - Excluded iOS and browser/WebAssembly support, including browser entrypoints,
   browser threading/tracing features, and WebGL-specific instance transport.
-- Included only required font fixtures, preserving their original licenses.
+- Included only required font fixtures (Lilex and IBM Plex Sans under `assets/fonts/`),
+  preserving their original licenses. Vespertine adds the six math faces bundled by
+  `vespertine_components` (`crates/vespertine_components/src/math/fonts/`); THIRD_PARTY.md
+  lists them with their licenses.
 - Preserved macOS/Windows tests, `windows-manifest`, and runtime Metal shaders.
-- Vendored taffy 0.13.0 under `third_party/taffy` (MIT; `[patch.crates-io]`), changed
-  only in `src/tree/cache.rs`: each node retains sixteen measurement results (at least
-  nine, LAY-001 R4) found by key and replaced with a second-chance policy, instead of
-  one result per constraint kind. Layout results are unchanged; taffy 0.14 was not
-  adopted because it changes flex/grid/block results.
+- Vendored taffy 0.13.0 under `third_party/taffy` (MIT; `[patch.crates-io]`), changed in
+  two files. `src/tree/cache.rs`: each node retains sixteen measurement results (at least
+  nine, LAY-001 R4) found by key and replaced with a second-chance policy, instead of one
+  result per constraint kind; layout results are unchanged. `src/tree/taffy_tree.rs`: adds
+  `TaffyTree::compute_subtree_layout_with_measure`, which recomputes one subtree with its own
+  size fixed. Taffy 0.14 was not adopted because it changes flex/grid/block results.
 - Removed features `vespertine_platform/multithreaded`,
   `vespertine_scheduler/wasm-threads`, and `vespertine_ztracing/web`.
 - Removed only these browser-transport tests:
@@ -118,47 +142,25 @@ source pin even when resolving the Linux build.
   a byte sequence rejected by the repository naming gate. Coalesced frame pixel
   hashes and frame delays are identical.
 - Upstream's already-ignored timing-printing tests (`frame_cost`, `hash_cost`)
-  and macOS-main-thread-only tests retain their original annotations; no new
-  tests are ignored.
+  and macOS-main-thread-only tests retain their original annotations. Vespertine adds
+  two ignored benchmark-style tests that print timings or counters (in
+  `crates/vespertine/src/scene_order/tests.rs` and
+  `crates/vespertine/src/taffy/persistence_tests.rs`); no other tests are ignored.
 
 ## Cross-target verification limitations
 
-Both Rust standard-library targets installed successfully. The Linux host could
-not complete either cross-target check, so neither backend is claimed fully
-type-checked or runtime-verified:
-
-- Windows (`x86_64-pc-windows-msvc`): Cargo exited 101. `ring 0.17.14` and
-  `zstd-sys 2.0.16+zstd.1.5.7` fail in their C build scripts because `lib.exe`
-  is unavailable (`failed to find tool "lib.exe": No such file or directory`).
-  `aws-lc-sys 0.45.0` also encounters host-C-compiler target incompatibilities.
-- macOS (`aarch64-apple-darwin`, with `runtime_shaders`): Cargo exited 101.
-  `ring 0.17.14` and `aws-lc-sys 0.45.0` encounter a host C compiler that rejects
-  `-arch arm64` and `-mmacosx-version-min=11.0` (and `-gfull` for ring).
-  No Apple cross-C-toolchain/SDK is configured on this host.
-
-These are toolchain failures, not Rust diagnostics in the preserved backends.
-No dependency or build-script behavior was disabled to bypass them.
-
-Library-only workspace checks were also attempted on both targets and exited
-101 with the same toolchain limitations (Windows additionally reports missing
-`lib.exe` in `alloca 0.4.0`). Dependency-tree inspection confirms these are not
-merely example/test edges: workspace member `vespertine_http_client_tls` normally
-depends on `rustls` with default `aws_lc_rs`, and `vespertine_reqwest_client`
-normally depends on reqwest's `rustls-tls-native-roots`/`ring` transport.
-`vespertine_util_core` normally depends on `rust-embed` with `compression`, which
-pulls `include-flate`/`include-flate-compress`, `zstd`, `zstd-safe`, and `zstd-sys`
-(also through the include-flate codegen proc macro). Consequently `--lib` does
-not remove these C prerequisites from the workspace graph.
+The macOS (`aarch64-apple-darwin`, with `vespertine_platform/runtime_shaders`) and Windows
+(`x86_64-pc-windows-msvc`) standard-library targets can be installed with `rustup`, but at
+import time `cargo check --workspace --target <target>` could not complete on the Linux host:
+the C build scripts of `ring`, `zstd-sys` and `aws-lc-sys` need a target C toolchain (an
+Apple SDK and cross compiler, or MSVC's `lib.exe`) that the host lacks. These are toolchain
+failures, not Rust diagnostics in the preserved backends; no dependency or build-script
+behavior was disabled to bypass them. Library-only checks fail for the same reason because
+`vespertine_http_client_tls`, `vespertine_reqwest_client` and `vespertine_util_core` pull
+those crates into every workspace graph. Neither backend is claimed to type-check or run.
 
 ## Linux verification
 
-The root formatting, Clippy (`--workspace --all-targets -- -D warnings`),
-workspace test, and release all-target build gates completed successfully.
-The test suite reports 901 passed and 16 upstream-ignored tests/doctests.
-After prebuilding the executable, both Wayland and forced-X11
-(`env -u WAYLAND_DISPLAY DISPLAY=:0`) `hello_world` smoke commands launched
-`target/release/examples/hello_world` and remained alive until the 8-second
-timeout (exit 124). The desktop observation API exposed no windows, so visual
-appearance was not independently confirmed.
-
-
+The landing gates (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo test --workspace`, `./scripts/check-features`) run on Linux against the
+Wayland and X11 backends; see the README for commands.
