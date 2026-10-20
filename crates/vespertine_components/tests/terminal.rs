@@ -9,6 +9,7 @@ use vespertine::{
     IntoElement, KeyBinding, Modifiers, MouseButton, MouseDownEvent, ParentElement, Render,
     ScrollDelta, ScrollWheelEvent, Styled, TouchPhase, Window, actions, canvas, div, point, px,
 };
+use vespertine_components::tabs::model::TAB_HEIGHT;
 use vespertine_components::terminal::{
     BottomDock, DockGeometry, GridGeometry, TabId, TerminalPanel, TerminalTheme, exit_status_line,
     row_segments, terminal_font, terminal_font_features,
@@ -888,8 +889,8 @@ fn the_dock_clamps_its_height_and_the_content_above_tracks_it_in_the_same_frame(
             .update(|cx| panel.read(cx).geometry())
             .expect("measured");
         assert!(
-            (f32::from(measured.bounds.size.height) - expected).abs() < 0.01,
-            "the terminal is laid out in exactly the reserved height"
+            (f32::from(measured.bounds.size.height) - (expected - TAB_HEIGHT)).abs() < 0.01,
+            "the tab strip and the grid fill exactly the reserved height"
         );
         let record = record.borrow();
         assert_eq!(
@@ -1139,6 +1140,7 @@ fn the_selection_wash_is_painted_between_backgrounds_and_glyphs() {
         .filter(|glyph| {
             glyph.x >= f32::from(geometry.origin.x)
                 && glyph.x < f32::from(geometry.origin.x) + geometry.cell_width * 3.0
+                && glyph.y >= f32::from(geometry.origin.y) - 2.0
                 && glyph.y < f32::from(geometry.origin.y) + geometry.line_height
         })
         .map(|glyph| glyph.order)

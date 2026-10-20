@@ -1,13 +1,15 @@
 //! The terminal view: tabbed retained emulators with input coalescing, resize debouncing,
-//! selection gestures, wheel scrolling and focus routing (CMP-021 R11-R14, R16-R22).
+//! selection gestures, wheel scrolling and focus routing (CMP-021 R11-R14, R16-R22), and the
+//! closable, reorderable tab strip drawn above the grid (R20, CMP-017).
 
 use std::rc::Rc;
 use std::time::Duration;
 
 use vespertine::{
-    App, Bounds, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, ScrollDelta, ScrollWheelEvent, Styled, Task, TouchPhase, Window, div,
+    App, AppContext, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Styled,
+    Task, TouchPhase, Window, div,
 };
 
 use super::element::TerminalElement;
@@ -17,6 +19,7 @@ use super::input::{
     ClipboardShortcut, InputCoalescer, clipboard_shortcut, keystroke_to_bytes, paste_bytes,
 };
 use super::theme::TerminalTheme;
+use crate::tabs::{ClosePolicy, TabId as StripTabId, TabSpec, TabStrip, cycle_on};
 
 /// Delay before a changed grid size is reported (R5).
 pub const RESIZE_DEBOUNCE: Duration = Duration::from_millis(80);
@@ -79,11 +82,17 @@ type ResizeCallback = Rc<dyn Fn(TabId, usize, usize, &mut App)>;
 type TitleCallback = Rc<dyn Fn(TabId, Option<&str>, &mut App)>;
 type BellCallback = Rc<dyn Fn(TabId, &mut App)>;
 type SelectCallback = Rc<dyn Fn(TabId, &str, &mut App)>;
+type NewTabCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+type TabClosedCallback = Rc<dyn Fn(TabId, usize, &mut Window, &mut App)>;
 
 /// The tabbed terminal view (R20-R22).
 ///
-/// Callbacks run inside an update of the panel and must not update it. A tab strip is drawn by
-/// the host (the tab components of CMP-017); this entity owns the tab model.
+/// Callbacks run inside an update of the panel and must not update it, except
+/// [`on_new_tab`](Self::on_new_tab) and [`on_tab_closed`](Self::on_tab_closed), which run after
+/// the strip's update has finished and may call back into the panel. The panel owns the tab
+/// model and draws it as a CMP-017 tab strip above the grid: selecting, closing, reordering and
+/// adding tabs on the strip act on the model, and every change of the model (by the host or the
+/// strip) is mirrored into the strip.
 pub struct TerminalPanel {
     tabs: Vec<Tab>,
     active: usize,
@@ -99,6 +108,9 @@ pub struct TerminalPanel {
     on_title: Option<TitleCallback>,
     on_bell: Option<BellCallback>,
     on_select: Option<SelectCallback>,
+    on_new_tab: Option<NewTabCallback>,
+    on_tab_closed: Option<TabClosedCallback>,
+    strip: Entity<TabStrip>,
 }
 
 /// The new active index after closing tab `closed` while `active` was active (R20): `active - 1`
@@ -129,6 +141,7 @@ pub fn active_after_move(active: usize, from: usize, to: usize) -> usize {
 impl TerminalPanel {
     /// An empty panel; open tabs with [`open_tab`](Self::open_tab).
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let strip = Self::build_strip(cx);
         Self {
             tabs: Vec::new(),
             active: 0,
@@ -144,7 +157,90 @@ impl TerminalPanel {
             on_title: None,
             on_bell: None,
             on_select: None,
+            on_new_tab: None,
+            on_tab_closed: None,
+            strip,
         }
+    }
+
+    /// The tab strip: its callbacks translate user gestures into updates of the panel's model.
+    /// Select, close and reorder notices arrive after the strip has already applied them to its
+    /// own list, so the panel's reaction (which mirrors the model back) is idempotent.
+    fn build_strip(cx: &mut Context<Self>) -> Entity<TabStrip> {
+        let panel = cx.weak_entity();
+        let key = format!("terminal-tabs:{}", cx.entity_id().as_u64());
+        let on_select = panel.clone();
+        let on_close = panel.clone();
+        let on_reorder = panel.clone();
+        let on_add = panel;
+        cx.new(|_| {
+            TabStrip::new(key)
+                .close_policy(ClosePolicy::NearestIndex)
+                .on_select(move |id, window, cx| {
+                    let Some(tab) = parse_strip_id(id) else {
+                        return;
+                    };
+                    on_select
+                        .update(cx, |panel, cx| {
+                            panel.select_tab_id(tab, cx);
+                            window.focus(&panel.focus_handle, cx);
+                        })
+                        .ok();
+                })
+                .on_close(move |id, window, cx| {
+                    let Some(tab) = parse_strip_id(id) else {
+                        return;
+                    };
+                    let closed = on_close.update(cx, |panel, cx| {
+                        let remaining = panel.close_tab(tab, cx);
+                        window.focus(&panel.focus_handle, cx);
+                        (remaining, panel.on_tab_closed.clone())
+                    });
+                    if let Ok((remaining, Some(callback))) = closed {
+                        callback(tab, remaining, window, cx);
+                    }
+                })
+                .on_reorder(move |from, to, _window, cx| {
+                    on_reorder
+                        .update(cx, |panel, cx| panel.move_tab(from, to, cx))
+                        .ok();
+                })
+                .on_add(move |window, cx| {
+                    let Ok(callback) = on_add.update(cx, |panel, _| panel.on_new_tab.clone())
+                    else {
+                        return;
+                    };
+                    match callback {
+                        Some(callback) => callback(window, cx),
+                        None => {
+                            on_add
+                                .update(cx, |panel, cx| {
+                                    panel.open_tab(cx);
+                                    window.focus(&panel.focus_handle, cx);
+                                })
+                                .ok();
+                        }
+                    }
+                })
+        })
+    }
+
+    /// Mirrors the tab model (order, titles, exit state, active tab) into the strip.
+    fn sync_strip(&self, cx: &mut Context<Self>) {
+        let specs: Vec<TabSpec> = self.tabs.iter().map(strip_spec).collect();
+        let active = self.active_tab().map(strip_id);
+        let focus = self.focus_handle.clone();
+        self.strip.update(cx, |strip, cx| {
+            strip.set_tabs(specs, cx);
+            for tab in &self.tabs {
+                strip.set_content_focus(strip_id(tab.id), focus.clone());
+            }
+            strip.set_primary_focus(Some(focus));
+            match active {
+                Some(id) => strip.select(&id, cx),
+                None => strip.clear_selection(cx),
+            }
+        });
     }
 
     // --- Callbacks ---------------------------------------------------------------------
@@ -174,6 +270,24 @@ impl TerminalPanel {
     /// selection (a click without a drag selects nothing and never fires this).
     pub fn on_select(&mut self, callback: impl Fn(TabId, &str, &mut App) + 'static) {
         self.on_select = Some(Rc::new(callback));
+    }
+
+    /// Receives the strip's new-tab button. The host starts a session and calls
+    /// [`open_tab`](Self::open_tab) (or [`open_tab_pending`](Self::open_tab_pending)); the
+    /// callback runs outside the panel's update. Without one the button appends a ready tab.
+    pub fn on_new_tab(&mut self, callback: impl Fn(&mut Window, &mut App) + 'static) {
+        self.on_new_tab = Some(Rc::new(callback));
+    }
+
+    /// Receives a tab the user closed on the strip (close button or middle click) with the
+    /// number of tabs left, after the panel dropped its state; the host ends the session and
+    /// decides whether an empty dock closes. Runs outside the panel's update. Closing through
+    /// [`close_tab`](Self::close_tab) does not call it: the host asked for that itself.
+    pub fn on_tab_closed(
+        &mut self,
+        callback: impl Fn(TabId, usize, &mut Window, &mut App) + 'static,
+    ) {
+        self.on_tab_closed = Some(Rc::new(callback));
     }
 
     // --- Theme -------------------------------------------------------------------------
@@ -219,6 +333,7 @@ impl TerminalPanel {
     /// Appends a tab whose session is ready and makes it active.
     pub fn open_tab(&mut self, cx: &mut Context<Self>) -> TabId {
         let id = self.new_tab(true);
+        self.sync_strip(cx);
         cx.notify();
         id
     }
@@ -227,6 +342,7 @@ impl TerminalPanel {
     /// (the flush keeps rescheduling) until [`set_session_ready`](Self::set_session_ready).
     pub fn open_tab_pending(&mut self, cx: &mut Context<Self>) -> TabId {
         let id = self.new_tab(false);
+        self.sync_strip(cx);
         cx.notify();
         id
     }
@@ -236,6 +352,12 @@ impl TerminalPanel {
         if let Some(tab) = self.tab_mut(tab) {
             tab.ready = ready;
         }
+    }
+
+    /// The tab strip entity drawn above the grid: hosts may restyle it (`theme`) or read its
+    /// state; the panel keeps its tabs and selection in sync with the model.
+    pub fn tab_strip(&self) -> &Entity<TabStrip> {
+        &self.strip
     }
 
     /// The number of tabs.
@@ -306,6 +428,7 @@ impl TerminalPanel {
         if index < self.tabs.len() && index != self.active {
             self.active = index;
             self.end_gesture();
+            self.sync_strip(cx);
             cx.notify();
         }
     }
@@ -326,6 +449,7 @@ impl TerminalPanel {
         self.tabs.remove(index);
         self.active = active_after_close(self.active, index, self.tabs.len());
         self.end_gesture();
+        self.sync_strip(cx);
         cx.notify();
         self.tabs.len()
     }
@@ -339,6 +463,7 @@ impl TerminalPanel {
         let tab = self.tabs.remove(from);
         self.tabs.insert(to, tab);
         self.active = active_after_move(self.active, from, to);
+        self.sync_strip(cx);
         cx.notify();
     }
 
@@ -351,6 +476,7 @@ impl TerminalPanel {
             tab.input.clear();
             tab.flush_task = None;
         }
+        self.sync_strip(cx);
         cx.notify();
     }
 
@@ -371,8 +497,11 @@ impl TerminalPanel {
         if !responses.is_empty() {
             self.send_input(tab, &responses, cx);
         }
-        if title_changed && let Some(callback) = self.on_title.clone() {
-            callback(tab, title.as_deref(), cx);
+        if title_changed {
+            self.sync_strip(cx);
+            if let Some(callback) = self.on_title.clone() {
+                callback(tab, title.as_deref(), cx);
+            }
         }
         if bell && let Some(callback) = self.on_bell.clone() {
             callback(tab, cx);
@@ -806,13 +935,44 @@ impl Render for TerminalPanel {
         if std::mem::take(&mut self.pending_focus) {
             window.focus(&self.focus_handle, cx);
         }
-        div()
+        let root = div()
             .id("terminal-panel")
             .key_context("Terminal")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::key_down))
             .size_full()
-            .child(TerminalElement::new(cx.entity()))
+            .flex()
+            .flex_col();
+        let grid = TerminalElement::new(cx.entity());
+        let tab_row = div().flex_none().w_full().child(self.strip.clone());
+        let grid_area = div().w_full().min_h_0().flex_1().child(grid);
+        // Tab cycling keys reach the strip while focus is in the grid.
+        cycle_on(root, &self.strip).child(tab_row).child(grid_area)
+    }
+}
+
+fn strip_id(tab: TabId) -> StripTabId {
+    StripTabId::from(tab.0)
+}
+
+fn parse_strip_id(id: &StripTabId) -> Option<TabId> {
+    id.as_str().parse().ok().map(TabId)
+}
+
+/// The strip's description of a tab: the program-set title (or "Terminal N"), with the exit
+/// status in its accessible name and tooltip once the session ended.
+fn strip_spec(tab: &Tab) -> TabSpec {
+    let title = tab
+        .title
+        .clone()
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| format!("Terminal {}", tab.id.0));
+    let spec = TabSpec::new(strip_id(tab.id), title.clone());
+    match tab.exited {
+        Some(status) => spec
+            .accessible_name(format!("{title} (exited with status {status})"))
+            .detail(format!("Process exited with status {status}")),
+        None => spec,
     }
 }
 

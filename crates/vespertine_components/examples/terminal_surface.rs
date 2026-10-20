@@ -6,12 +6,15 @@
 //! caret notation so the encoding is visible), accepts bracketed paste with control+shift+v,
 //! and copies a selected range with control+shift+c (drag, double-click a word or triple-click
 //! a line to select). The wheel scrolls the scrollback; dragging a selection past the top or
-//! bottom edge scrolls on a timer. The dock above is plain content; drag nothing, resize the
-//! window to see the grid follow.
+//! bottom edge scrolls on a timer. The tab strip above the grid is the panel's own (CMP-017):
+//! click a tab to select it, drag one to reorder, close it with its close slot or a middle
+//! click, and open another with the + button (the demo host answers it with a fresh tab;
+//! closing the last tab leaves an empty panel). The dock above is plain content; resize the window to see the
+//! grid follow.
 
 use vespertine::{
-    App, AppContext, Bounds, Context, Entity, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
+    WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use vespertine_components::terminal::{
     BottomDock, TabId, TerminalPanel, TerminalTheme, exit_status_line,
@@ -93,6 +96,7 @@ impl Render for Demo {
 fn open_demo_tab(panel: &Entity<TerminalPanel>, cx: &mut App, exited: bool) -> TabId {
     panel.update(cx, |panel, cx| {
         let tab = panel.open_tab(cx);
+        panel.feed(tab, format!("\x1b]0;demo {}\x07", tab.0).as_bytes(), cx);
         panel.feed(tab, banner().as_bytes(), cx);
         if exited {
             panel.feed(tab, &exit_status_line(0), cx);
@@ -121,6 +125,7 @@ fn main() {
                     panel
                 });
                 let weak = panel.downgrade();
+                let weak_panel = weak.clone();
                 panel.update(cx, |panel, _| {
                     panel.on_input(move |tab, bytes, cx| {
                         // The callback runs inside an update of the panel: feed the echo later.
@@ -134,42 +139,26 @@ fn main() {
                         println!("tab {tab:?}: grid {cols} x {rows}");
                     });
                     panel.on_title(|tab, title, _| println!("tab {tab:?}: title {title:?}"));
+                    let spawner = weak_panel.clone();
+                    panel.on_new_tab(move |_, cx| {
+                        if let Some(panel) = spawner.upgrade() {
+                            open_demo_tab(&panel, cx, false);
+                        }
+                    });
+                    panel.on_tab_closed(|tab, left, _, _| {
+                        println!("tab {tab:?} closed, {left} left");
+                    });
                 });
                 open_demo_tab(&panel, cx, false);
                 panel.update(cx, |panel, cx| panel.request_focus(cx));
-                let tabs = panel.clone();
                 let dock = cx.new(|_| {
-                    let strip_panel = tabs.clone();
-                    BottomDock::new(panel.clone(), move |_, _| {
-                        let new_tab = strip_panel.clone();
-                        let first = strip_panel.clone();
+                    BottomDock::new(panel.clone(), |_, _| {
                         div()
                             .size_full()
                             .bg(rgb(0x20242C))
                             .p(px(16.))
                             .text_color(rgb(0xD0D4DC))
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.))
                             .child("Content above the terminal dock; the dock shares its height with this area.")
-                            .child(
-                                div()
-                                    .id("open-tab")
-                                    .cursor_pointer()
-                                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                        open_demo_tab(&new_tab, cx, false);
-                                    })
-                                    .child("[ open another terminal tab ]"),
-                            )
-                            .child(
-                                div()
-                                    .id("first-tab")
-                                    .cursor_pointer()
-                                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                        first.update(cx, |panel, cx| panel.select_tab(0, cx));
-                                    })
-                                    .child("[ show the first tab ]"),
-                            )
                             .into_any_element()
                     })
                     .with_height(300.0)

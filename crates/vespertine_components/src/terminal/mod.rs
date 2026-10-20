@@ -4,7 +4,8 @@
 //! [`Emulator`] (the `alacritty_terminal` state machine), paints the active grid with a
 //! fixed-width cell model on the framework's text and quad primitives, encodes focused keyboard
 //! input and paste into bytes, supports pointer selection, copy, scrolling and edge auto-scroll,
-//! and can be hosted in a [`BottomDock`] whose height is shared with the content above it.
+//! draws its tabs as a closable, reorderable strip (CMP-017) above the grid, and can be hosted
+//! in a [`BottomDock`] whose height is shared with the content above it.
 //!
 //! The byte transport (sessions, pseudo-terminals, reconnection) is the host's: the panel
 //! consumes bytes through [`TerminalPanel::feed`] and emits bytes through the `on_input`
