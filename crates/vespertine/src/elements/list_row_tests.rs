@@ -1444,7 +1444,7 @@ fn lists_without_an_id_retain_their_rows(cx: &mut TestAppContext) {
     let state = ListState::new(100, ListAlignment::Top, px(0.)).measure_all();
     let handle: AnyWindowHandle = cx
         .add_window({
-            let (renders, state) = (renders.clone(), state.clone());
+            let (renders, state) = (renders.clone(), state);
             move |_, _| Plain { state, renders }
         })
         .into();
