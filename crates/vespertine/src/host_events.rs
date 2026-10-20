@@ -548,6 +548,8 @@ struct NodeInner {
     reported_scroll: Option<Point<Pixels>>,
     /// The button pressed inside the node and not yet released.
     pressed: Option<u8>,
+    /// The border box the node painted last, for deciding whether a captured release is a click.
+    bounds: Option<Bounds<Pixels>>,
     bound: bool,
     subscriptions: Vec<Subscription>,
 }
@@ -605,6 +607,7 @@ impl HostNode {
                 reported_layout: None,
                 reported_scroll: None,
                 pressed: None,
+                bounds: None,
                 bound: false,
                 subscriptions: Vec::new(),
             })),
@@ -865,6 +868,14 @@ impl HostNode {
             _ => {}
         }
 
+        // A node that tracks a drag (press plus move or release callbacks) keeps the pointer
+        // from the press on: moves and the release reach it outside its bounds and the window
+        // (INP-001 capture, APP-012 R4).
+        if listeners.pointer_down.is_some()
+            && (listeners.pointer_move.is_some() || listeners.pointer_up.is_some())
+        {
+            element = element.capture_pointer();
+        }
         let button_events = listeners.pointer_down.is_some()
             || listeners.pointer_up.is_some()
             || listeners.click.is_some()
@@ -909,7 +920,13 @@ impl HostNode {
                     if let Some(up) = up {
                         up(&payload, window, cx);
                     }
-                    if !pressed {
+                    // A release outside the node (reachable while the pointer is captured) is
+                    // not a click.
+                    let inside = up_node
+                        .borrow()
+                        .bounds
+                        .is_none_or(|bounds| bounds.contains(&event.position));
+                    if !pressed || !inside {
                         return;
                     }
                     // The click follows the pointer-up callback.
@@ -1180,6 +1197,7 @@ impl HostElement {
     /// has been painted.
     fn report(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let mut inner = self.node.borrow_mut();
+        inner.bounds = Some(bounds);
 
         if inner.listeners.layout.is_some() {
             let size = bounds.size;
@@ -1500,6 +1518,52 @@ mod tests {
             Modifiers::none(),
         );
         assert_eq!(take(&log), ["up:Some(0):1:40:20"]);
+    }
+
+    #[crate::test]
+    fn a_dragged_node_keeps_the_pointer_outside_its_bounds_and_a_far_release_is_no_click(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx, nodes) = host_view(cx, 1);
+        let node = &nodes[0];
+        let log = logger();
+        let record = |name: &'static str| {
+            let log = log.clone();
+            move |event: &HostPointerEvent, _: &mut Window, _: &mut App| {
+                log.borrow_mut()
+                    .push(format!("{name}:{}:{}", event.x, event.y));
+            }
+        };
+        node.on_pointer_down(record("down"));
+        node.on_pointer_move(record("move"));
+        node.on_pointer_up(record("up"));
+        node.on_click(record("click"));
+        draw(cx);
+
+        let inside = point(px(40.), px(20.));
+        let far = point(px(900.), px(700.));
+        cx.simulate_mouse_move(inside, None, Modifiers::none());
+        cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
+        take(&log);
+        cx.simulate_mouse_move(far, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(far, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            take(&log),
+            ["move:900:700", "up:900:700"],
+            "the captured node gets the moves and the release outside, and no click"
+        );
+
+        // The capture ended with the release: the pointer is the window's again.
+        cx.simulate_mouse_move(far, None, Modifiers::none());
+        cx.simulate_mouse_move(point(px(300.), px(300.)), None, Modifiers::none());
+        assert_eq!(take(&log), Vec::<String>::new());
+
+        // A press and release inside is a click, as before (the press first moves the pointer in).
+        click_with(cx, inside, MouseButton::Left);
+        assert_eq!(
+            take(&log),
+            ["move:40:20", "down:40:20", "up:40:20", "click:40:20"]
+        );
     }
 
     #[crate::test]

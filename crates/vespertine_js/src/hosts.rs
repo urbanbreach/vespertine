@@ -1,6 +1,9 @@
 //! Factories of the built-in host element types that render through the adapter registry
 //! (ELM-007 R12): the scene registers them in its [`CustomElementRegistry`].
 
+mod canvas;
+mod editors;
+
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -18,6 +21,9 @@ use vespertine_theme::document::DocumentTheme;
 /// Registers the built-in adapters of the JavaScript host.
 pub fn register_builtin_hosts(registry: &mut CustomElementRegistry) {
     registry.register(DiffFactory);
+    registry.register(editors::InputFactory);
+    registry.register(editors::TextareaFactory);
+    registry.register(canvas::CanvasFactory);
 }
 
 fn custom(name: &'static str, payload: Value) -> HostEvent {

@@ -284,11 +284,11 @@ impl RetainedHost for HostTreeHost {
         bytes: &[u8],
         format: Option<&str>,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> HostResult<()> {
         self.scene
             .borrow_mut()
-            .set_image_pixels(id, width, height, bytes, format, window)
+            .set_image_pixels(id, width, height, bytes, format, window, cx)
             .map_err(HostError::Unsupported)
     }
 }

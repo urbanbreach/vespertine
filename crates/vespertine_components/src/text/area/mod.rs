@@ -256,8 +256,19 @@ fn hash_line(text: &str, width: i32, indent: i32, size: i32) -> u64 {
 impl TextArea {
     /// An empty, enabled, editable multiline editor (1 to 10 rows, 16 px text, 20 px lines).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        bind_default_keys(cx);
         let focus_handle = cx.focus_handle().tab_stop(true);
+        Self::with_focus_handle(focus_handle, window, cx)
+    }
+
+    /// Like [`TextArea::new`] but focused through `focus_handle`, so an owner whose own node
+    /// already holds the handle (a retained host element) shares one focus identity with the
+    /// editor.
+    pub fn with_focus_handle(
+        focus_handle: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        bind_default_keys(cx);
         let subscriptions = vec![
             cx.on_focus(&focus_handle, window, |this, _window, cx| {
                 this.blink.reset(cx);
@@ -764,6 +775,32 @@ impl TextArea {
         if disabled {
             self.end_drag();
         }
+        cx.notify();
+    }
+
+    /// Sets the text size and line height.
+    pub fn set_text_metrics(&mut self, size: Pixels, line_height: Pixels, cx: &mut Context<Self>) {
+        self.metrics = TextMetrics { size, line_height };
+        cx.notify();
+    }
+
+    /// Sets the height bounds in rows (see [`TextArea::rows`]).
+    pub fn set_rows(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
+        self.min_rows = min_rows.max(1);
+        self.max_rows = max_rows.max(self.min_rows);
+        cx.notify();
+    }
+
+    /// Overrides the theme roles (`None` follows the application theme).
+    pub fn set_theme(&mut self, theme: Option<FieldTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// Sets whether the enabled editor is a tab stop.
+    pub fn set_tab_stop(&mut self, tab_stop: bool, cx: &mut Context<Self>) {
+        self.tab_stop = tab_stop;
+        self.sync_tab_stop();
         cx.notify();
     }
 

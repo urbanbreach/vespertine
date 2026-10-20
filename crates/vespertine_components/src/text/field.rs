@@ -110,8 +110,19 @@ impl Focusable for TextField {
 impl TextField {
     /// An empty, enabled, editable field with the default metrics (16 px text, 20 px lines).
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        bind_default_keys(cx);
         let focus_handle = cx.focus_handle().tab_stop(true);
+        Self::with_focus_handle(focus_handle, window, cx)
+    }
+
+    /// Like [`TextField::new`] but focused through `focus_handle`, so an owner whose own node
+    /// already holds the handle (a retained host element) shares one focus identity with the
+    /// field.
+    pub fn with_focus_handle(
+        focus_handle: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        bind_default_keys(cx);
         let subscriptions = vec![
             cx.on_focus(&focus_handle, window, |this, window, cx| {
                 this.blink.reset(cx);
@@ -435,6 +446,25 @@ impl TextField {
         if disabled {
             self.end_drag();
         }
+        cx.notify();
+    }
+
+    /// Sets the text size and line height.
+    pub fn set_text_metrics(&mut self, size: Pixels, line_height: Pixels, cx: &mut Context<Self>) {
+        self.metrics = TextMetrics { size, line_height };
+        cx.notify();
+    }
+
+    /// Overrides the theme roles (`None` follows the application theme).
+    pub fn set_theme(&mut self, theme: Option<FieldTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// Sets whether the enabled field is a tab stop.
+    pub fn set_tab_stop(&mut self, tab_stop: bool, cx: &mut Context<Self>) {
+        self.tab_stop = tab_stop;
+        self.sync_tab_stop();
         cx.notify();
     }
 

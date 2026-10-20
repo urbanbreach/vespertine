@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { h } from "../src/h.js";
 import { TaskList } from "../src/tasks/index.js";
-import { bounds, centerOf, click, createTestHost, easeOut, find, hover, native, need, text } from "./native-helpers.js";
+import { bounds, centerOf, click, createTestHost, easeOut, find, hover, native, need, text, typeText } from "./native-helpers.js";
 
 const W = 940;
 const H = 660;
@@ -109,5 +109,64 @@ native("A1: sidebar collapse interpolates the outer width between 236 and 0 over
   host.renderer.clockSet(800);
   host.renderer.flush();
   assert.equal(bounds(host, "sidebar-outer").width, 236);
+  assert.deepEqual(host.errors, []);
+});
+
+/** The laid-out rows (the list builds a row only while it is near the viewport), top first. */
+const laidOut = (host) => rowIds(host).map((id) => ({ id, box: find(host, `task-row-${id}`)?.bounds })).filter((row) => row.box).sort((a, b) => a.box.y - b.box.y);
+const byPosition = (host) => laidOut(host).map((row) => text(host, `task-title-${row.id}`));
+const focusComposer = (host) => click(host, "composer-input");
+const composerValue = (host) => need(host, "composer-input").customProps.value ?? "";
+
+native("A1: the native composer rejects a blank input, trims a title, clears itself and applies the current-day rule", () => {
+  const host = mount();
+  focusComposer(host);
+  typeText(host, "   ");
+  assert.equal(composerValue(host), "   ", "the input holds what was typed");
+  host.renderer.nativeSimulateKeystrokes("enter");
+  click(host, "composer-add");
+  assert.equal(rowIds(host).length, 2, "a blank input is rejected by Enter and by Add");
+  assert.equal(composerValue(host), "   ", "a rejected submission keeps the draft");
+
+  focusComposer(host);
+  host.renderer.nativeSimulateKeystrokes("backspace backspace backspace");
+  typeText(host, "  write the agenda  ");
+  click(host, "composer-add");
+  assert.equal(byPosition(host)[0], "write the agenda", "the title is trimmed and the task prepended");
+  assert.equal(composerValue(host), "", "the composer is cleared");
+  assert.deepEqual(counts(host), ["7", "3", "2", "2"], "created in the current-day view: current-day");
+
+  click(host, "composer-add");
+  assert.equal(rowIds(host).length, 3, "Add does nothing while the trimmed input is empty");
+  focusComposer(host);
+  typeText(host, "second");
+  host.renderer.nativeSimulateKeystrokes("enter");
+  assert.equal(byPosition(host)[0], "second", "Enter inside the input submits like Add");
+  assert.equal(composerValue(host), "");
+
+  click(host, "view-general");
+  focusComposer(host);
+  typeText(host, "from general");
+  click(host, "composer-add");
+  assert.equal(byPosition(host)[0], "from general");
+  assert.deepEqual(counts(host), ["9", "4", "2", "2"], "created in the general view: not current-day");
+  assert.deepEqual(host.errors, []);
+});
+
+native("A1: twenty consecutive prepends each stay visible at the top of the pinned list", () => {
+  const host = mount();
+  const list = need(host, "task-list");
+  for (let i = 1; i <= 20; i++) {
+    focusComposer(host);
+    typeText(host, `n ${i}`);
+    click(host, "composer-add");
+    const top = byPosition(host)[0];
+    assert.equal(top, `n ${i}`);
+    const row = laidOut(host)[0].box;
+    assert.equal(row.y, bounds(host, "task-list").y, `row ${i} sits at the start of the list`);
+    const anchor = host.renderer.getListScrollTop(list.id);
+    assert.deepEqual([anchor.itemIndex, anchor.offset], [0, 0], "the list stays pinned to its start");
+  }
+  assert.equal(text(host, "header-count"), "22");
   assert.deepEqual(host.errors, []);
 });

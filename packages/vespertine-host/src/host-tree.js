@@ -125,6 +125,9 @@ class Node {
   #call(action, method, ...args) {
     const renderer = this.#renderer(action);
     if (typeof renderer[method] !== "function") throw new Error(`The renderer does not support ${action}`);
+    // The native side must know every element queued so far (an effect that runs inside a
+    // synchronous render calls before the commit's batch was submitted).
+    this.tree.flush();
     return renderer[method](...args);
   }
 

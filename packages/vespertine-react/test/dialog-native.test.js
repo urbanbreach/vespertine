@@ -123,6 +123,20 @@ native("CMP-003 A1: a nested select's Escape closes the select first, the next E
   assert.deepEqual(host.errors, []);
 });
 
+native("CMP-003 A1: Escape in a native input inside the dialog reports the input's cancel and closes the dialog", async () => {
+  const host = createTestHost({ width: 600, height: 400 });
+  const log = [];
+  const field = h("input", { testId: "field", style: { width: 200, height: 30 }, onCancel: () => log.push("cancel") });
+  host.render(dialogApp({ inside: field }));
+  await click(host, "trigger");
+  await click(host, "field");
+  assert.ok(focusedId(host, "field"), "the input holds the focus");
+  await press(host, "escape");
+  assert.deepEqual(log, ["cancel"], "the editor reports Escape as its cancel");
+  assert.equal(find(host, "popup"), null, "and the dialog still sees the Escape");
+  assert.deepEqual(host.errors, []);
+});
+
 native("CMP-003 A1: choosing a select row inside the dialog leaves it open; Close closes it and the trigger opens it again", async () => {
   const host = createTestHost({ width: 600, height: 400 });
   host.render(dialogApp({ inside: selectInside() }));

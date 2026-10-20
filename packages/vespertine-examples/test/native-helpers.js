@@ -1,12 +1,12 @@
 // Helpers for the native acceptance tests of the reference examples (APP-011, APP-012): the
 // offscreen test host, element lookup by test id, text readouts and PNG decoding.
 
-import { readFileSync } from "node:fs";
-import { inflateSync } from "node:zlib";
 import { test } from "node:test";
 import { createTestHost, testHostAvailable } from "@vespertine/react/testing";
+import { loadNative } from "@vespertine/host/native";
+import { readPng, screenshotPixels } from "@vespertine/host/testing";
 
-export { createTestHost };
+export { createTestHost, readPng, screenshotPixels };
 
 const available = testHostAvailable();
 
@@ -43,54 +43,31 @@ export function hover(host, testId) {
   host.renderer.nativeSimulateMouseMove(...centerOf(bounds(host, testId)));
 }
 
-/** Decodes an 8-bit RGBA or RGB PNG file into `{ width, height, at(x, y) -> [r, g, b, a] }`. */
-export function readPng(path) {
-  const file = readFileSync(path);
-  let offset = 8;
-  let header = null;
-  const data = [];
-  while (offset < file.length) {
-    const length = file.readUInt32BE(offset);
-    const type = file.toString("latin1", offset + 4, offset + 8);
-    const body = file.subarray(offset + 8, offset + 8 + length);
-    if (type === "IHDR") header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8], color: body[9] };
-    if (type === "IDAT") data.push(body);
-    offset += 12 + length;
-  }
-  if (!header || header.depth !== 8 || (header.color !== 6 && header.color !== 2)) throw new Error("unsupported PNG");
-  const channels = header.color === 6 ? 4 : 3;
-  const stride = header.width * channels;
-  const raw = inflateSync(Buffer.concat(data));
-  const pixels = Buffer.alloc(stride * header.height);
-  for (let y = 0; y < header.height; y++) {
-    const filter = raw[y * (stride + 1)];
-    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
-    for (let x = 0; x < stride; x++) {
-      const left = x >= channels ? pixels[y * stride + x - channels] : 0;
-      const up = y > 0 ? pixels[(y - 1) * stride + x] : 0;
-      const upLeft = y > 0 && x >= channels ? pixels[(y - 1) * stride + x - channels] : 0;
-      let value = line[x];
-      if (filter === 1) value += left;
-      else if (filter === 2) value += up;
-      else if (filter === 3) value += (left + up) >> 1;
-      else if (filter === 4) {
-        const p = left + up - upLeft;
-        const pa = Math.abs(p - left);
-        const pb = Math.abs(p - up);
-        const pc = Math.abs(p - upLeft);
-        value += pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft;
-      }
-      pixels[y * stride + x] = value & 0xff;
+/** Types `value` into the focused editor (a space is the `space` key). */
+export function typeText(host, value) {
+  host.renderer.nativeSimulateKeystrokes([...value].map((char) => (char === " " ? "space" : char)).join(" "));
+}
+
+/** Lets promises and the React scheduler run, then flushes the native tree. */
+export async function settle(host, ms = 30) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  host.renderer.flush();
+}
+
+/**
+ * A native addon whose test renderer records every mutation batch it receives: pass `native` to
+ * `createTestHost`; `batches` holds the parsed batches in order.
+ */
+export function recordingNative() {
+  const addon = loadNative();
+  const batches = [];
+  class Recording extends addon.TestRenderer {
+    applyBatch(json) {
+      batches.push(JSON.parse(json));
+      return super.applyBatch(json);
     }
   }
-  return {
-    width: header.width,
-    height: header.height,
-    at: (x, y) => {
-      const at = (y * header.width + x) * channels;
-      return [pixels[at], pixels[at + 1], pixels[at + 2], channels === 4 ? pixels[at + 3] : 255];
-    },
-  };
+  return { native: { ...addon, TestRenderer: Recording }, batches };
 }
 
 /** The ease-out curve cubic-bezier(0, 0, 0.58, 1) evaluated at normalized time `t`. */

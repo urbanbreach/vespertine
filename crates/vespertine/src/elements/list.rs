@@ -811,15 +811,25 @@ impl ListState {
         } else if let Some(old_ix) = anchor_old_ix {
             match sources.iter().position(|source| *source == Some(old_ix)) {
                 Some(new_ix) => {
-                    if let Some(pending) = pending.as_mut() {
-                        if pending.item_ix() == top.item_ix {
-                            pending.set_item_ix(new_ix);
+                    // Rows prepended while the list rests at its very top leave the top in
+                    // view (ELM-001 R12); any other change keeps the anchor row by identity.
+                    let prepended_at_top = old_ix == 0
+                        && top.offset_in_item == px(0.)
+                        && !state.follow_state.is_following()
+                        && sources[..new_ix].iter().all(Option::is_none);
+                    if prepended_at_top {
+                        Some(top)
+                    } else {
+                        if let Some(pending) = pending.as_mut() {
+                            if pending.item_ix() == top.item_ix {
+                                pending.set_item_ix(new_ix);
+                            }
                         }
+                        Some(ListOffset {
+                            item_ix: new_ix,
+                            offset_in_item: top.offset_in_item,
+                        })
                     }
-                    Some(ListOffset {
-                        item_ix: new_ix,
-                        offset_in_item: top.offset_in_item,
-                    })
                 }
                 None => {
                     pending = None;

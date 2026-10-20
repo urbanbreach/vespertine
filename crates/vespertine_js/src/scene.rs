@@ -854,6 +854,13 @@ impl HostScene {
         let painted = self.painted.clone();
 
         if Self::adapter_type(&self.registry.borrow(), element_type) {
+            if matches!(element_type, "input" | "textarea") {
+                // An editor shares its node's focus handle; building the node's element once per
+                // frame binds the node's focus and blur listeners and registers autofocus.
+                if let Some(scene_node) = self.nodes.get(&id) {
+                    drop(scene_node.host.element(window, cx));
+                }
+            }
             let children: Vec<NodeId> = node.children().collect();
             let children = children
                 .into_iter()
@@ -1180,6 +1187,16 @@ impl HostScene {
         false
     }
 
+    /// Brings the scene's nodes in line with the tree when `id` has none yet: a command that
+    /// arrives between a mutation batch and the first frame that draws it still finds its node.
+    fn ensure_node(&mut self, id: NodeId, window: &mut Window, cx: &mut App) {
+        if self.nodes.contains_key(&id) {
+            return;
+        }
+        let source = self.tree.clone();
+        source.read(&mut |tree| self.sync(tree, window, cx));
+    }
+
     /// Replaces an `img` node's image with packed pixels.
     pub fn set_image_pixels(
         &mut self,
@@ -1189,7 +1206,9 @@ impl HostScene {
         bytes: &[u8],
         format: Option<&str>,
         window: &mut Window,
+        cx: &mut App,
     ) -> Result<(), String> {
+        self.ensure_node(id, window, cx);
         let image = self
             .nodes
             .get_mut(&id)
@@ -1208,8 +1227,9 @@ impl HostScene {
         id: NodeId,
         bytes: &[u8],
         window: &mut Window,
-        cx: &App,
+        cx: &mut App,
     ) -> Result<(), String> {
+        self.ensure_node(id, window, cx);
         let image = self
             .nodes
             .get_mut(&id)

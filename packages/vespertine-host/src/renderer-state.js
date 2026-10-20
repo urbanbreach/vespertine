@@ -114,6 +114,17 @@ function createState(renderer) {
       }
       default: {
         const handler = binding.handlers.get(event.id)?.get(event.type);
+        if (event.type === "cancel") {
+          // A native editor consumed Escape and reports it as a cancel: the host's handler runs,
+          // then the top layer sees the Escape like a key that bubbled to the window.
+          if (handler) invoke(handler, event);
+          const top = layers[layers.length - 1];
+          if (top) {
+            run(() => top.layer.onEscape?.());
+            handled = true;
+          }
+          return handled;
+        }
         if (!handler) return false;
         if (event.type === "keyDown" || event.type === "keyUp") {
           const flags = flagsFor(event);

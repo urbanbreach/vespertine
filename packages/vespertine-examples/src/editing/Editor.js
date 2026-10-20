@@ -137,14 +137,18 @@ export function Editor({ trackCount, durationSeconds, viewportWidth, viewportHei
   const handlerCache = React.useRef(new Map());
   const stable = React.useRef(null);
   if (stable.current === null) {
+    // A clip blocks the wheel for the surfaces behind it (explicit pointer events), so the clip
+    // forwards wheel input to the same viewport handler the panes use.
+    const onWheel = (event) => dispatch({ type: "wheel", ...event });
     stable.current = {
+      onWheel,
       ruler: pointerHandlers(dispatch, (event) => ({ type: "pressRuler", ...flags(event) })),
       grid: pointerHandlers(dispatch, (event) => ({ type: "pressGrid", ...flags(event) })),
       slider: pointerHandlers(dispatch, (event) => ({ type: "pressSlider", ...flags(event) })),
       handlersFor(clipId) {
         let entry = handlerCache.current.get(clipId);
         if (!entry) {
-          const part = (name) => pointerHandlers(dispatch, (event) => ({ type: "pressClip", clipId, part: name, ...flags(event) }));
+          const part = (name) => ({ ...pointerHandlers(dispatch, (event) => ({ type: "pressClip", clipId, part: name, ...flags(event) })), onWheel });
           entry = { body: part("body"), start: part("start"), end: part("end") };
           handlerCache.current.set(clipId, entry);
         }
@@ -152,8 +156,7 @@ export function Editor({ trackCount, durationSeconds, viewportWidth, viewportHei
       },
     };
   }
-  const { ruler, grid, slider, handlersFor } = stable.current;
-  const onWheel = React.useCallback((event) => dispatch({ type: "wheel", ...event }), []);
+  const { onWheel, ruler, grid, slider, handlersFor } = stable.current;
 
   // The mounted clips change identity only when their membership changes.
   const visible = visibleClips(project, collapsed, metrics.rows, view, metrics, cull);
@@ -216,7 +219,7 @@ export function Editor({ trackCount, durationSeconds, viewportWidth, viewportHei
         metrics.rows.map((row) =>
           h(
             "div",
-            { key: row.track.id, testId: `header-${row.track.id}`, style: { position: "absolute", left: 0, top: row.top, width: HEADER_WIDTH, height: row.height, flexDirection: "row", gap: 8, paddingLeft: 8, borderColor: colors.border, borderWidth: 1 } },
+            { key: row.track.id, testId: `header-${row.track.id}`, onWheel, style: { position: "absolute", left: 0, top: row.top, width: HEADER_WIDTH, height: row.height, flexDirection: "row", gap: 8, paddingLeft: 8, borderColor: colors.border, borderWidth: 1 } },
             h(
               "div",
               {
@@ -224,6 +227,7 @@ export function Editor({ trackCount, durationSeconds, viewportWidth, viewportHei
                 role: "button",
                 "aria-label": `Toggle ${row.track.id}`,
                 onClick: () => dispatch({ type: "toggleCollapse", trackId: row.track.id }),
+                onWheel,
                 style: { width: 14, height: 14, backgroundColor: colors.raised, borderRadius: 2, ...auto },
               },
             ),

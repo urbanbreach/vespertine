@@ -609,6 +609,40 @@ fn r13_a7_keyed_reconciliation_restores_the_anchor(_cx: &mut TestAppContext) {
 }
 
 #[vespertine::test]
+fn r12_keyed_prepend_at_the_very_top_leaves_the_top_in_view(_cx: &mut TestAppContext) {
+    let old: Vec<char> = "abc".chars().collect();
+    let new: Vec<char> = "xyabc".chars().collect();
+
+    // At row 0 with offset 0 the new rows are visible: the anchor stays at the top.
+    let state = keyed_state(&old);
+    state.scroll_to(at(0, 0.));
+    state.reconcile_keys(&old, &new);
+    assert_eq!(anchor(&state), (0, 0.));
+    assert_eq!(
+        heights(&state)[2],
+        Some(10.),
+        "surviving rows keep their records"
+    );
+
+    // A second prepend keeps resting at the top.
+    let newer: Vec<char> = "wxyabc".chars().collect();
+    state.reconcile_keys(&new, &newer);
+    assert_eq!(anchor(&state), (0, 0.));
+
+    // Scrolled into the first row, the anchor row is kept by identity.
+    let state = keyed_state(&old);
+    state.scroll_to(at(0, 4.));
+    state.reconcile_keys(&old, &new);
+    assert_eq!(anchor(&state), (2, 4.));
+
+    // A reorder that moves the first row is not a prepend.
+    let state = keyed_state(&old);
+    state.scroll_to(at(0, 0.));
+    state.reconcile_keys(&old, &['b', 'a', 'c']);
+    assert_eq!(anchor(&state), (1, 0.));
+}
+
+#[vespertine::test]
 fn r13_keyed_reconciliation_keeps_focus_handles(cx: &mut TestAppContext) {
     let handles: Vec<FocusHandle> = cx.update(|cx| (0..3).map(|_| cx.focus_handle()).collect());
     let old = ['a', 'b', 'c'];

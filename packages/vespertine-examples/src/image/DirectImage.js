@@ -45,7 +45,7 @@ export function DirectImage({ width, height }) {
     ),
     h(
       "div",
-      { testId: "scrolling-list", style: { width: 320, height: LIST_HEIGHT, overflowY: "scroll", backgroundColor: colors.raised } },
+      { testId: "scrolling-list", style: { width: 320, height: LIST_HEIGHT, flexDirection: "column", overflowY: "scroll", backgroundColor: colors.raised } },
       Array.from({ length: ROWS }, (_, index) =>
         h(
           "div",

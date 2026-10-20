@@ -561,9 +561,9 @@ impl HostRenderer {
         bytes: Vec<u8>,
         format: Option<String>,
     ) -> Result<(), HostError> {
-        let result = self.with_scene("setting image pixels", move |view, window, _| {
+        let result = self.with_scene("setting image pixels", move |view, window, cx| {
             view.scene()
-                .set_image_pixels(id, width, height, &bytes, format.as_deref(), window)
+                .set_image_pixels(id, width, height, &bytes, format.as_deref(), window, cx)
         })?;
         result.unwrap_or(Ok(())).map_err(HostError::Failed)
     }
