@@ -9,7 +9,7 @@ use vespertine::{
     App, AppContext as _, AsyncApp, Bounds, CompositionLayout, CompositionStats, Entity, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NativePointerEvent, Pixels,
     PlatformInput, Point, Render, ScrollDelta, ScrollWheelEvent, SurfaceId, Window, WindowBounds,
-    WindowHandle, WindowOptions, point, px, size,
+    WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
 
 pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
@@ -168,10 +168,21 @@ pub fn launch<V, S, F>(
     vespertine::Application::with_platform(vespertine_linux::current_platform(false)).run(
         move |cx: &mut App| {
             let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+            // The scripts resize the window and place children at absolute positions, so the
+            // window must keep the size it asks for. A tiling window manager lays a normal X11
+            // window out itself and ignores such requests, so on X11 the window is a dialog
+            // (`_NET_WM_WINDOW_TYPE_DIALOG`), which window managers float. A Wayland client
+            // may attach a buffer of any size, so a Wayland window needs no such request.
+            let kind = if cx.compositor_name() == "X11" {
+                WindowKind::Dialog
+            } else {
+                WindowKind::Normal
+            };
             let handle = cx
                 .open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        kind,
                         ..Default::default()
                     },
                     build,

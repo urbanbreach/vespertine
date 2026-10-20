@@ -110,6 +110,11 @@ fn main() {
         },
         move |mut script| async move {
             script.sleep(300).await;
+            let scale = script
+                .cx
+                .update_window(script.handle.into(), |_, window, _| window.scale_factor())
+                .expect("window");
+            println!("scale factor {scale}");
             let child = script.read(|view| view.child.surface().map(|s| s.id()));
             script.check(child.is_some(), "the native child is created");
             let Some(child) = child else {
