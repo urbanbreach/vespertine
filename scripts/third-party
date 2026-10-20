@@ -77,7 +77,7 @@ ASSETS = [
     ("STIX Two Math (Regular, OTF)", "2.13", "OFL-1.1",
      "https://github.com/stipub/stixfonts (tag v2.13, `fonts/static_otf`)",
      "crates/vespertine_components/src/math/fonts/LICENSE-STIXTwoMath-OFL.txt",
-     "math face 1 of CMP-012 (Times-style serif, backs missing glyphs)"),
+     "math face 1 of CMP-012 (Times-style serif, backs missing glyphs); three one-byte CFF charstring operands (glyphs `uni0221` and `uni211C.ssty2`, one local subroutine) re-encoded in their equivalent three-byte form (fontTools, outlines and advance widths of all 6760 glyphs verified identical with a recording pen), `head` checksum adjusted"),
     ("Latin Modern Math (OTF)", "1.959", "GUST-Font-License",
      "https://ctan.org/pkg/lm-math (`fonts/lm-math/opentype`)",
      "crates/vespertine_components/src/math/fonts/LICENSE-LatinModernMath-GUST.txt",
