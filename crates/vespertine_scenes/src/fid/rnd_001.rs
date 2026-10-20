@@ -189,12 +189,7 @@ impl Scene for Checkerboard {
                             hex(0x586070)
                         };
                         window.paint_quad(fill(
-                            bounds(
-                                80. + column as f32 * 20.,
-                                60. + row as f32 * 20.,
-                                20.,
-                                20.,
-                            ),
+                            bounds(80. + column as f32 * 20., 60. + row as f32 * 20., 20., 20.),
                             color,
                         ));
                     }

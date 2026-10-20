@@ -5,8 +5,8 @@ use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, Corners, IntoElement, LineCap, LineJoin, ParentElement, PathBuilder,
-    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, TextRun, Window, canvas, div,
-    fill, font, point, px, size,
+    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, TextRun, Window, canvas, div, fill,
+    font, point, px, size,
 };
 
 fn root() -> vespertine::Div {
@@ -51,13 +51,12 @@ impl Scene for Vector {
                     |_, _, _| (),
                     |_, _, window, cx| {
                         // Open polyline, 2 px wide, round joins and caps.
-                        let mut stroke =
-                            PathBuilder::stroke(px(2.)).with_style(PathStyle::Stroke(
-                                StrokeOptions::default()
-                                    .with_line_width(2.0)
-                                    .with_line_cap(LineCap::Round)
-                                    .with_line_join(LineJoin::Round),
-                            ));
+                        let mut stroke = PathBuilder::stroke(px(2.)).with_style(PathStyle::Stroke(
+                            StrokeOptions::default()
+                                .with_line_width(2.0)
+                                .with_line_cap(LineCap::Round)
+                                .with_line_join(LineJoin::Round),
+                        ));
                         stroke.move_to(point(px(80.), px(120.)));
                         stroke.line_to(point(px(160.), px(60.)));
                         stroke.line_to(point(px(240.), px(120.)));

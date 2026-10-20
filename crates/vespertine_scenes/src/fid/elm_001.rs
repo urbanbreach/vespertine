@@ -1,6 +1,6 @@
 //! FID-ELM-001-1 (windowed list with horizontal padding) and FID-ELM-001-2 (all four paddings).
 
-use crate::common::{hex, SANS};
+use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, IntoElement, ListAlignment, ListOffset, ListState, ParentElement, Styled,

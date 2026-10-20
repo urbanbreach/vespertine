@@ -5,9 +5,9 @@
 //! 2 is frames 720..1920 (1,100 distinct sizes, then 23). The runner's `--warmup` and `--frames`
 //! select the configuration.
 
+use super::prf_012::words;
 use crate::common::{INK, SANS, WHITE, hex};
 use crate::scene::{Scene, register_scene};
-use super::prf_012::words;
 use vespertine::{
     AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };

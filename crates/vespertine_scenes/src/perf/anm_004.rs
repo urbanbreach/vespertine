@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use crate::common::hex;
 use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnimationCadence, AppContext as _, AnyElement, App, Context, Entity, IntoElement, ParentElement, Render,
-    StyleRefinement, Styled, Window, animation_wave, div, px,
+    AnimationCadence, AnyElement, App, AppContext as _, Context, Entity, IntoElement,
+    ParentElement, Render, StyleRefinement, Styled, Window, animation_wave, div, px,
 };
 
 const COLUMNS: usize = 10;

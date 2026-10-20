@@ -4,8 +4,8 @@
 use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnyElement, App, Bounds, Corners, Hsla, IntoElement, Pixels, Styled, TextAlign, TextRun,
-    Window, canvas, fill, font, point, px, quad, rgba, size, BorderStyle,
+    AnyElement, App, BorderStyle, Bounds, Corners, Hsla, IntoElement, Pixels, Styled, TextAlign,
+    TextRun, Window, canvas, fill, font, point, px, quad, rgba, size,
 };
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
@@ -171,10 +171,7 @@ impl Scene for Card {
                 window.paint_quad(fill(bounds(0., 0., 800., 480.), hex(0x181A1F)));
                 for stripe in 0..40 {
                     let color = if stripe % 2 == 0 { 0x202838 } else { 0x546078 };
-                    window.paint_quad(fill(
-                        bounds(stripe as f32 * 20., 0., 20., 480.),
-                        hex(color),
-                    ));
+                    window.paint_quad(fill(bounds(stripe as f32 * 20., 0., 20., 480.), hex(color)));
                 }
                 let card = bounds(220., 100., 360., 240.);
                 let radii = corners(16., 16., 16., 16.);
@@ -189,7 +186,15 @@ impl Scene for Card {
                         Hsla::from(rgba(0xA0A8B866)),
                         BorderStyle::Solid,
                     ));
-                    text_at(window, cx, "Sharp foreground", 14., hex(0xF0F1F3), 244., 139.);
+                    text_at(
+                        window,
+                        cx,
+                        "Sharp foreground",
+                        14.,
+                        hex(0xF0F1F3),
+                        244.,
+                        139.,
+                    );
                     let overlay = bounds(456., 144., 100., 30.);
                     window.paint_layer(overlay, |window| {
                         window.paint_quad(fill(overlay, hex(0x406090)));

@@ -9,8 +9,8 @@ use crate::common::hex;
 use crate::scene::{Scene, register_scene};
 use vespertine::private::serde_json::{Value, json};
 use vespertine::{
-    AnyElement, App, FocusHandle, HostStyle, InteractiveElement, IntoElement,
-    KeyDownEvent, Keystroke, ParentElement, PlatformInput, Styled, Window, div,
+    AnyElement, App, FocusHandle, HostStyle, InteractiveElement, IntoElement, KeyDownEvent,
+    Keystroke, ParentElement, PlatformInput, Styled, Window, div,
 };
 
 const LABELS: [&str; 3] = ["First", "Second", "Third"];

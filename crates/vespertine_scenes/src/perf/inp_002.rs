@@ -8,8 +8,8 @@ use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, InputEvent as _, InteractiveElement, IntoElement, Modifiers, MouseMoveEvent,
-    ParentElement, ScrollDelta, ScrollWheelEvent, Styled, TouchPhase,
-    UniformListScrollHandle, Window, div, point, px, uniform_list,
+    ParentElement, ScrollDelta, ScrollWheelEvent, Styled, TouchPhase, UniformListScrollHandle,
+    Window, div, point, px, uniform_list,
 };
 
 const ROWS: usize = 200;
@@ -52,7 +52,11 @@ impl WheelHover {
 }
 
 fn row(ix: usize) -> impl IntoElement {
-    let fill = if ix.is_multiple_of(2) { 0xffffff } else { 0xf8f8f8 };
+    let fill = if ix.is_multiple_of(2) {
+        0xffffff
+    } else {
+        0xf8f8f8
+    };
     let row = div()
         .id(("row", ix))
         .flex()
@@ -129,4 +133,7 @@ impl Scene for WheelHover {
 }
 
 register_scene!("PERF-INP-002", WheelHover::new);
-register_scene!("PERF-INP-002-NOSUPPRESSION", WheelHover::without_suppression);
+register_scene!(
+    "PERF-INP-002-NOSUPPRESSION",
+    WheelHover::without_suppression
+);

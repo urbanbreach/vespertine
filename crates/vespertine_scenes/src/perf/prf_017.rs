@@ -16,8 +16,7 @@ use crate::scene::{Scene, register_scene};
 use std::sync::Arc;
 use vespertine::{
     AnyElement, App, AppContext as _, Entity, Font, ImageSource, IntoElement, ParentElement,
-    RenderImage, SharedString, Styled, TextRun, WindowTextSystem, Window, div, font, hsla, img,
-    px,
+    RenderImage, SharedString, Styled, TextRun, Window, WindowTextSystem, div, font, hsla, img, px,
 };
 use vespertine_residency::{
     BlockDocument, BlockModel, ImageResidency, ParsedBlock, ResidencyConfig,
@@ -311,11 +310,7 @@ impl Prf017 {
                     .w(px(512.0))
                     .h(px(ROW_HEIGHT))
                     .child(div().h(px(LINE_HEIGHT)).child(format!("Media {row}")))
-                    .child(
-                        img(ImageSource::Render(image))
-                            .w(px(512.0))
-                            .h(px(192.0)),
-                    ),
+                    .child(img(ImageSource::Render(image)).w(px(512.0)).h(px(192.0))),
             );
         }
         root.into_any_element()
@@ -349,7 +344,11 @@ mod tests {
     #[test]
     fn part_b_rows_follow_the_scroll_and_cover_the_whole_list() {
         assert_eq!(visible_rows(600), 0..=2);
-        assert_eq!(visible_rows(601), 0..=2, "100 px: row 0 still reaches 100..220");
+        assert_eq!(
+            visible_rows(601),
+            0..=2,
+            "100 px: row 0 still reaches 100..220"
+        );
         assert_eq!(visible_rows(603), 1..=3);
         let mut seen = std::collections::BTreeSet::new();
         for f in 600..1040 {
@@ -370,15 +369,29 @@ mod tests {
             [bytes[at + 2], bytes[at + 1], bytes[at]]
         };
         let top = pixel(0);
-        assert!(top[0] > top[1] && top[1] > top[2], "orange-ish top: {top:?}");
+        assert!(
+            top[0] > top[1] && top[1] > top[2],
+            "orange-ish top: {top:?}"
+        );
         let bottom = pixel(IMAGE_HEIGHT as usize - 1);
-        assert!(bottom[1] > bottom[0] && bottom[1] > bottom[2], "green-ish bottom: {bottom:?}");
+        assert!(
+            bottom[1] > bottom[0] && bottom[1] > bottom[2],
+            "green-ish bottom: {bottom:?}"
+        );
     }
 
     #[test]
     fn the_last_block_is_pinned_to_the_bottom() {
-        let tops = pinned_tops([60.0, 20.0, 20.0].into_iter().chain(std::iter::repeat(20.0)));
-        assert_eq!(tops[0], (0, 420.0), "trailing block bottom at the viewport bottom");
+        let tops = pinned_tops(
+            [60.0, 20.0, 20.0]
+                .into_iter()
+                .chain(std::iter::repeat(20.0)),
+        );
+        assert_eq!(
+            tops[0],
+            (0, 420.0),
+            "trailing block bottom at the viewport bottom"
+        );
         assert_eq!(tops[1], (1, 380.0), "a blank line separates blocks");
         assert!(tops.last().unwrap().1 <= 0.0);
         assert_eq!(tops.len(), 12);
@@ -404,16 +417,27 @@ mod tests {
                 naive.document.as_ref().unwrap(),
             );
             assert_eq!(a.source(), b.source());
-            assert_eq!(a.blocks().len(), SETTLED_BLOCKS + 1, "the trailing block has index 10,000");
+            assert_eq!(
+                a.blocks().len(),
+                SETTLED_BLOCKS + 1,
+                "the trailing block has index 10,000"
+            );
             let layouts = |d: &BlockDocument<Paragraphs>| {
-                d.blocks().iter().map(|e| (e.range.clone(), e.layout)).collect::<Vec<_>>()
+                d.blocks()
+                    .iter()
+                    .map(|e| (e.range.clone(), e.layout))
+                    .collect::<Vec<_>>()
             };
             assert_eq!(layouts(a), layouts(b), "frame {f}");
         }
         // The incremental document parsed the load once and one block per later update.
         assert_eq!(incremental_parsed, SETTLED_BLOCKS as u64 + 1 + 5);
         let naive_parsed = naive.document.as_ref().unwrap().stats().blocks_parsed;
-        assert_eq!(naive_parsed, SETTLED_BLOCKS as u64 + 1, "its last fresh document parsed everything");
+        assert_eq!(
+            naive_parsed,
+            SETTLED_BLOCKS as u64 + 1,
+            "its last fresh document parsed everything"
+        );
     }
 
     #[vespertine::test]
@@ -438,7 +462,10 @@ mod tests {
         }
         let residency = scene.residency.clone().unwrap();
         let stats = residency.read_with(cx, |r, _| r.stats(&CLASS));
-        assert_eq!(stats.inserts, ROWS as u64, "each row's image is generated once");
+        assert_eq!(
+            stats.inserts, ROWS as u64,
+            "each row's image is generated once"
+        );
         assert!(stats.requested <= 4);
     }
 }

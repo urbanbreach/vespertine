@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::scene::{Scene, register_scene};
 use crate::common::{BORDER, INK, MONO, SANS, SURFACE, WHITE, hex};
 use crate::corpus;
+use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, FollowMode, FontWeight, IntoElement, ListAlignment, ListState, ParentElement,
     SharedString, Styled, Window, div, list, px,
@@ -123,7 +123,8 @@ impl StreamScene {
 
     fn apply(&mut self, f: u64) {
         let live = self.messages.borrow().len() - 1;
-        self.live_body.push_str(&corpus::token(LIVE_TOKEN_BASE + f as usize));
+        self.live_body
+            .push_str(&corpus::token(LIVE_TOKEN_BASE + f as usize));
         self.messages.borrow_mut()[live].body = SharedString::from(self.live_body.clone());
         self.list.remeasure_items(live..live + 1);
         if f > 0 && f.is_multiple_of(LIVE_PERIOD) {

@@ -62,7 +62,13 @@ fn panel(k: usize, f: u64) -> impl IntoElement {
             // The canvas covers the panel's border box; the path is panel-relative.
             let origin = bounds.origin + point(px(1.0), px(1.0));
             let mut builder = PathBuilder::stroke(px(2.0));
-            let points = [(4.0, 36.0), (20.0, 24.0), (36.0, 36.0), (52.0, 24.0), (68.0, 36.0)];
+            let points = [
+                (4.0, 36.0),
+                (20.0, 24.0),
+                (36.0, 36.0),
+                (52.0, 24.0),
+                (68.0, 36.0),
+            ];
             for (i, (x, y)) in points.into_iter().enumerate() {
                 let p = origin + point(px(x), px(y));
                 if i == 0 {

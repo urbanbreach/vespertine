@@ -11,9 +11,9 @@
 use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnyElement, App, AppContext as _, Context, Entity, InputEvent as _, InteractiveElement, IntoElement, Modifiers,
-    ParentElement, PathBuilder, Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement,
-    Styled, TouchPhase, Window, canvas, div, point, px,
+    AnyElement, App, AppContext as _, Context, Entity, InputEvent as _, InteractiveElement,
+    IntoElement, Modifiers, ParentElement, PathBuilder, Render, ScrollDelta, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, TouchPhase, Window, canvas, div, point, px,
 };
 
 const ROWS: usize = 40;
@@ -29,7 +29,11 @@ const POLYLINE: [(f32, f32); 4] = [(300.0, 20.0), (320.0, 10.0), (340.0, 25.0), 
 struct Viewport;
 
 fn row(index: usize) -> impl IntoElement {
-    let fill = if index.is_multiple_of(2) { 0xffffff } else { 0xf7f7f7 };
+    let fill = if index.is_multiple_of(2) {
+        0xffffff
+    } else {
+        0xf7f7f7
+    };
     div()
         .id(("row", index))
         .relative()

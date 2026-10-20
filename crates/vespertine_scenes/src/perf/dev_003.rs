@@ -83,9 +83,9 @@ impl Dev003Scene {
                 let quotes = &self.quotes;
                 match (f / SORT_PERIOD) % 3 {
                     0 => self.order.sort_by_key(|row| *row),
-                    1 => self
-                        .order
-                        .sort_by(|a, b| quotes[*b].price.total_cmp(&quotes[*a].price).then(a.cmp(b))),
+                    1 => self.order.sort_by(|a, b| {
+                        quotes[*b].price.total_cmp(&quotes[*a].price).then(a.cmp(b))
+                    }),
                     _ => self
                         .order
                         .sort_by(|a, b| quotes[*b].volume.cmp(&quotes[*a].volume).then(a.cmp(b))),
@@ -144,7 +144,10 @@ impl Scene for Dev003Scene {
             .items_center()
             .pl(px(COLUMNS[0]))
             .font_weight(FontWeight::BOLD);
-        for (ix, label) in ["Symbol", "Price", "Change", "Volume"].into_iter().enumerate() {
+        for (ix, label) in ["Symbol", "Price", "Change", "Volume"]
+            .into_iter()
+            .enumerate()
+        {
             header = header.child(cell(ix).child(label));
         }
         let mut table = div()
@@ -160,7 +163,12 @@ impl Scene for Dev003Scene {
         for (position, row) in self.order.iter().copied().enumerate() {
             let quote = self.quotes[row];
             let change = (quote.price - quote.previous) / quote.previous * 100.0;
-            let mut line = div().h(px(ROW_HEIGHT)).flex().flex_none().items_center().pl(px(COLUMNS[0]));
+            let mut line = div()
+                .h(px(ROW_HEIGHT))
+                .flex()
+                .flex_none()
+                .items_center()
+                .pl(px(COLUMNS[0]));
             if position % 2 == 1 {
                 line = line.bg(hex(SURFACE));
             }
@@ -170,7 +178,11 @@ impl Scene for Dev003Scene {
                     .child(
                         cell(2)
                             .text_color(hex(if change >= 0.0 { POSITIVE } else { NEGATIVE }))
-                            .child(format!("{}{:.2}%", if change >= 0.0 { "+" } else { "-" }, change.abs())),
+                            .child(format!(
+                                "{}{:.2}%",
+                                if change >= 0.0 { "+" } else { "-" },
+                                change.abs()
+                            )),
                     )
                     .child(cell(3).child(volume(quote.volume))),
             );

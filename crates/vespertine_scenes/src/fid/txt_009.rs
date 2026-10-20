@@ -30,11 +30,15 @@ impl Scene for Find {
             .text_color(hex(0xeeeeee))
             .child(RichText::new("find", "Find red, red and RED."));
         text_root(
-            div().size_full().relative().bg(hex(0x181818)).child(highlight(
-                "find-highlight",
-                HighlightDeclaration::from_spec(spec),
-                block,
-            )),
+            div()
+                .size_full()
+                .relative()
+                .bg(hex(0x181818))
+                .child(highlight(
+                    "find-highlight",
+                    HighlightDeclaration::from_spec(spec),
+                    block,
+                )),
         )
         .into_any_element()
     }

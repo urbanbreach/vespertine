@@ -42,9 +42,8 @@ fn sector(outer: f32, inner: f32, from: f32, to: f32) -> [(f32, f32); 8] {
     let span = a1 - a0;
     let on = |radius: f32, angle: f32| (radius * angle.cos(), radius * angle.sin());
     let tangent = |angle: f32| (-angle.sin(), angle.cos());
-    let along = |p: (f32, f32), t: (f32, f32), distance: f32| {
-        (p.0 + t.0 * distance, p.1 + t.1 * distance)
-    };
+    let along =
+        |p: (f32, f32), t: (f32, f32), distance: f32| (p.0 + t.0 * distance, p.1 + t.1 * distance);
     let control = |radius: f32| 4.0 / 3.0 * (span / 4.0).tan() * radius;
     let (o0, o1) = (on(outer, a0), on(outer, a1));
     let (i0, i1) = (on(inner, a0), on(inner, a1));
@@ -75,10 +74,14 @@ impl Prf006 {
             events: 0,
             mini: Arc::new(
                 (0..8)
-                .map(|k| sector(12.0, 7.0, 45.0 * k as f32 + 2.0, 45.0 * k as f32 + 43.0))
-                .collect(),
+                    .map(|k| sector(12.0, 7.0, 45.0 * k as f32 + 2.0, 45.0 * k as f32 + 43.0))
+                    .collect(),
             ),
-            large: Arc::new((0..12).map(|k| sector(90.0, 56.0, 30.0 * k as f32 + 1.5, 30.0 * k as f32 + 28.5)).collect()),
+            large: Arc::new(
+                (0..12)
+                    .map(|k| sector(90.0, 56.0, 30.0 * k as f32 + 1.5, 30.0 * k as f32 + 28.5))
+                    .collect(),
+            ),
         }
     }
 
@@ -129,11 +132,7 @@ fn sparkline_points(values: &[f32; POINTS], row: usize) -> [(f32, f32); POINTS] 
 
 /// Builds every path of the frame through the path builder and hands it to `emit` with its
 /// fill color; `content` is the position of the content block.
-fn build_shapes(
-    scene: &Prf006,
-    content: Point<Pixels>,
-    emit: &mut impl FnMut(Path<Pixels>, Hsla),
-) {
+fn build_shapes(scene: &Prf006, content: Point<Pixels>, emit: &mut impl FnMut(Path<Pixels>, Hsla)) {
     let at = |x: f32, y: f32| content + point(px(x), px(y));
 
     for (r, row) in scene.values.iter().enumerate() {

@@ -1,7 +1,7 @@
 //! PERF-QUADS: many styled quads with shadows.
 
-use crate::scene::{Scene, register_scene};
 use crate::common::{WHITE, hex, hsl_deg};
+use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, BoxShadow, IntoElement, ParentElement, Styled, Window, div, point, px, rgba,
 };

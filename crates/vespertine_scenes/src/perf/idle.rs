@@ -1,7 +1,7 @@
 //! PERF-IDLE: idle window showing the PERF-STREAM content at frame 0 without any update.
 
-use crate::scene::{Scene, register_scene};
 use super::stream::StreamScene;
+use crate::scene::{Scene, register_scene};
 use vespertine::{AnyElement, App, Window};
 
 pub struct IdleScene {

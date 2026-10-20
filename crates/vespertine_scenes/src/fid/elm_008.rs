@@ -25,11 +25,11 @@ impl Scene for Elm008 {
             .size_full()
             .relative()
             .bg(hex(0xFFFFFF))
-            .child(
-                rectangle(40.)
-                    .rounded(px(8.))
-                    .outline(Outline::new(px(2.), hex(0x0066FF), px(3.))),
-            )
+            .child(rectangle(40.).rounded(px(8.)).outline(Outline::new(
+                px(2.),
+                hex(0x0066FF),
+                px(3.),
+            )))
             .child(
                 rectangle(220.)
                     .rounded_tr(px(8.))

@@ -2,16 +2,18 @@
 
 use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
-use vespertine::{
-    AnyElement, App, IntoElement, ParentElement, Rgba, Styled, Window, div, px,
-};
+use vespertine::{AnyElement, App, IntoElement, ParentElement, Rgba, Styled, Window, div, px};
 use vespertine_richtext::{
     RichText, RunKey, SelectionRequest, TextService, selection_color, text_root,
 };
 
 const BACKGROUND: u32 = 0x181818;
 const INK: u32 = 0xeeeeee;
-const LINES: [&str; 3] = ["Select across", "multiple text rows", "without moving glyphs"];
+const LINES: [&str; 3] = [
+    "Select across",
+    "multiple text rows",
+    "without moving glyphs",
+];
 
 struct SelectAcross;
 
@@ -43,15 +45,26 @@ impl Scene for SelectAcross {
             .text_size(px(16.))
             .line_height(px(24.))
             .text_color(hex(INK))
-            .children(LINES.iter().enumerate().map(|(row, line)| {
-                RichText::new(("line", row), *line).key(key(row as u32))
-            }));
+            .children(
+                LINES
+                    .iter()
+                    .enumerate()
+                    .map(|(row, line)| RichText::new(("line", row), *line).key(key(row as u32))),
+            );
         text_root(
             div()
                 .size_full()
                 .relative()
                 .bg(hex(BACKGROUND))
-                .child(selection_color(Rgba { r: 0x44 as f32 / 255., g: 0x66 as f32 / 255., b: 0xcc as f32 / 255., a: 0x80 as f32 / 255. }, region)),
+                .child(selection_color(
+                    Rgba {
+                        r: 0x44 as f32 / 255.,
+                        g: 0x66 as f32 / 255.,
+                        b: 0xcc as f32 / 255.,
+                        a: 0x80 as f32 / 255.,
+                    },
+                    region,
+                )),
         )
         .into_any_element()
     }

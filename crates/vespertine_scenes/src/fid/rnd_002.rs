@@ -7,8 +7,8 @@ use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, Bounds, Hsla, IntoElement, ParentElement, Pixels, Styled,
-    TextAlign, TextRun, Window, canvas, div, fill, font, linear_color_stop, linear_gradient,
-    point, px, size,
+    TextAlign, TextRun, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point,
+    px, size,
 };
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
@@ -68,8 +68,26 @@ fn text_at(
 /// The two label lines of the 800 x 400 scenes, with the panel's left edge at `panel_left`.
 fn panel_labels(window: &mut Window, cx: &mut App, panel_left: f32) {
     let ink = hex(0x102030);
-    text_at(window, cx, "Rounded clip", 36., 44., ink, panel_left + 20., 70.);
-    text_at(window, cx, "Across corners", 36., 44., ink, panel_left + 4., 318.);
+    text_at(
+        window,
+        cx,
+        "Rounded clip",
+        36.,
+        44.,
+        ink,
+        panel_left + 20.,
+        70.,
+    );
+    text_at(
+        window,
+        cx,
+        "Across corners",
+        36.,
+        44.,
+        ink,
+        panel_left + 4.,
+        318.,
+    );
 }
 
 /// A window-sized solid quad in a rounded scope; the scope's rectangular mask cuts it.
@@ -149,7 +167,16 @@ impl Scene for OverBackground {
                         bounds(140., 60., 520., 100.),
                         vertical_gradient(0xD08040, 0xE4A060),
                     ));
-                    text_at(window, cx, "Clipped text", 48., 60., hex(0xF0F1F3), 140., 100.);
+                    text_at(
+                        window,
+                        cx,
+                        "Clipped text",
+                        48.,
+                        60.,
+                        hex(0xF0F1F3),
+                        140.,
+                        100.,
+                    );
                 });
             },
         )

@@ -2,12 +2,12 @@
 
 use std::ops::Range;
 
-use crate::scene::{Scene, register_scene};
 use crate::common::{INK, MONO, WHITE, hex};
 use crate::corpus;
+use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnyElement, App, HighlightStyle, Hsla, IntoElement, ParentElement, SharedString, StyledText,
-    Styled, Window, div, px,
+    AnyElement, App, HighlightStyle, Hsla, IntoElement, ParentElement, SharedString, Styled,
+    StyledText, Window, div, px,
 };
 
 const VISIBLE_LINES: usize = 36;

@@ -1,10 +1,10 @@
 //! PERF-LIST: virtualized list scroll.
 
-use crate::scene::{Scene, register_scene};
 use crate::common::{INK, SANS, SURFACE, WHITE, hex, hsl_deg};
+use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnyElement, App, Div, IntoElement, ParentElement, Styled,
-    UniformListScrollHandle, Window, div, point, px, uniform_list,
+    AnyElement, App, Div, IntoElement, ParentElement, Styled, UniformListScrollHandle, Window, div,
+    point, px, uniform_list,
 };
 
 const ROWS: usize = 100_000;

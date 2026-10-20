@@ -1,7 +1,7 @@
 //! PERF-FLEX: deep flex re-layout.
 
-use crate::scene::{Scene, register_scene};
 use crate::common::{BORDER, SURFACE, WHITE, hex, hsl_deg};
+use crate::scene::{Scene, register_scene};
 use vespertine::{AnyElement, App, Div, IntoElement, ParentElement, Styled, Window, div, px};
 
 /// Depth of the leaves below the root.
@@ -35,7 +35,11 @@ fn node(depth: u32, f: u64, next_leaf: &mut usize) -> Div {
         .p(px(2.0))
         .border(px(1.0))
         .border_color(hex(BORDER))
-        .bg(hex(if depth.is_multiple_of(2) { WHITE } else { SURFACE }));
+        .bg(hex(if depth.is_multiple_of(2) {
+            WHITE
+        } else {
+            SURFACE
+        }));
     container = if depth.is_multiple_of(2) {
         container.flex_row()
     } else {
@@ -59,9 +63,7 @@ impl Scene for FlexScene {
 
     fn frame(&mut self, f: u64, _window: &mut Window, _cx: &mut App) -> AnyElement {
         let mut next_leaf = 0;
-        node(0, f, &mut next_leaf)
-            .size_full()
-            .into_any_element()
+        node(0, f, &mut next_leaf).size_full().into_any_element()
     }
 }
 

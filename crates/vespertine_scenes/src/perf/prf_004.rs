@@ -14,9 +14,9 @@
 use crate::common::{BORDER, SANS, SURFACE, WHITE, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
-    AnyElement, App, AppContext as _, Context, Entity, InputEvent as _, InteractiveElement, IntoElement, Modifiers,
-    ParentElement, Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement, Styled,
-    TouchPhase, Window, div, point, px,
+    AnyElement, App, AppContext as _, Context, Entity, InputEvent as _, InteractiveElement,
+    IntoElement, Modifiers, ParentElement, Render, ScrollDelta, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, TouchPhase, Window, div, point, px,
 };
 
 const SECTIONS: usize = 100;
@@ -93,7 +93,11 @@ fn body_line(section: usize, line: usize, revision: u32) -> impl IntoElement {
 }
 
 fn section(index: usize, revision: u32) -> impl IntoElement {
-    let fill = if index.is_multiple_of(2) { WHITE } else { 0xfafafa };
+    let fill = if index.is_multiple_of(2) {
+        WHITE
+    } else {
+        0xfafafa
+    };
     div()
         .id(("section", index))
         .relative()

@@ -5,8 +5,8 @@ use crate::common::{SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, BorderStyle, BoxShadow, Corners, Edges, Hsla, IntoElement,
-    ParentElement, Styled, TextAlign, TextRun, Window, black, canvas, div, font,
-    linear_color_stop, linear_gradient, point, px, quad, white,
+    ParentElement, Styled, TextAlign, TextRun, Window, black, canvas, div, font, linear_color_stop,
+    linear_gradient, point, px, quad, white,
 };
 
 fn drop_shadow() -> BoxShadow {

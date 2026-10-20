@@ -88,7 +88,11 @@ impl HoverAfterWheel {
 }
 
 fn row(index: usize) -> impl IntoElement {
-    let fill = if index.is_multiple_of(2) { 0xffffff } else { 0xf8f8f8 };
+    let fill = if index.is_multiple_of(2) {
+        0xffffff
+    } else {
+        0xf8f8f8
+    };
     let row = div()
         .id(("row", index))
         .flex_none()

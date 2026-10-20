@@ -84,15 +84,10 @@ fn uniform_row(i: usize, edits: u32) -> AnyElement {
         .border_color(hex(SEPARATOR))
         .bg(hex(WHITE))
         .hover(|style| style.bg(hex(SURFACE)))
-        .child(
-            div()
-                .flex_1()
-                .whitespace_nowrap()
-                .child(format!(
-                    "Message {i}: lorem ipsum dolor sit amet{}",
-                    edit_suffix(edits)
-                )),
-        )
+        .child(div().flex_1().whitespace_nowrap().child(format!(
+            "Message {i}: lorem ipsum dolor sit amet{}",
+            edit_suffix(edits)
+        )))
         .child(
             div()
                 .flex_none()
@@ -123,11 +118,7 @@ fn variable_row(i: usize, edits: u32) -> AnyElement {
     match i % 3 {
         0 => {
             let sentence = "The quick brown fox jumps over the lazy dog. ";
-            let text = format!(
-                "{}{}",
-                sentence.repeat(2 + (5 * i) % 7),
-                edit_suffix(edits)
-            );
+            let text = format!("{}{}", sentence.repeat(2 + (5 * i) % 7), edit_suffix(edits));
             base.bg(hex(WHITE))
                 .hover(|style| style.bg(hex(SURFACE)))
                 .line_height(px(20.0))

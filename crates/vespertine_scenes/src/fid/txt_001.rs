@@ -23,11 +23,36 @@ pub struct WrapScene {
 }
 
 const LATIN_BOXES: [TextBox; 5] = [
-    TextBox { x: 20.0, y: 20.0, width: 76.0, text: "aaa aaaa.\"" },
-    TextBox { x: 140.0, y: 20.0, width: 140.0, text: "aaa aaaa.\"" },
-    TextBox { x: 20.0, y: 100.0, width: 76.0, text: "aaa aaaaa!" },
-    TextBox { x: 140.0, y: 100.0, width: 76.0, text: "aaa (aaaa)" },
-    TextBox { x: 20.0, y: 180.0, width: 76.0, text: "aaaa \"bbbb" },
+    TextBox {
+        x: 20.0,
+        y: 20.0,
+        width: 76.0,
+        text: "aaa aaaa.\"",
+    },
+    TextBox {
+        x: 140.0,
+        y: 20.0,
+        width: 140.0,
+        text: "aaa aaaa.\"",
+    },
+    TextBox {
+        x: 20.0,
+        y: 100.0,
+        width: 76.0,
+        text: "aaa aaaaa!",
+    },
+    TextBox {
+        x: 140.0,
+        y: 100.0,
+        width: 76.0,
+        text: "aaa (aaaa)",
+    },
+    TextBox {
+        x: 20.0,
+        y: 180.0,
+        width: 76.0,
+        text: "aaaa \"bbbb",
+    },
 ];
 
 const T1: &str = "今天的天气非常好，我们一起去公园散步吧。";
@@ -35,11 +60,36 @@ const T2: &str = "我用（新方法）重写了程序：速度提升了８％�
 const T3: &str = "好吗？我们走吧。「新」方法真好！";
 
 const CJK_BOXES: [TextBox; 5] = [
-    TextBox { x: 20.0, y: 20.0, width: 170.0, text: T1 },
-    TextBox { x: 210.0, y: 20.0, width: 70.0, text: T2 },
-    TextBox { x: 300.0, y: 20.0, width: 130.0, text: T2 },
-    TextBox { x: 450.0, y: 20.0, width: 110.0, text: T2 },
-    TextBox { x: 580.0, y: 20.0, width: 110.0, text: T3 },
+    TextBox {
+        x: 20.0,
+        y: 20.0,
+        width: 170.0,
+        text: T1,
+    },
+    TextBox {
+        x: 210.0,
+        y: 20.0,
+        width: 70.0,
+        text: T2,
+    },
+    TextBox {
+        x: 300.0,
+        y: 20.0,
+        width: 130.0,
+        text: T2,
+    },
+    TextBox {
+        x: 450.0,
+        y: 20.0,
+        width: 110.0,
+        text: T2,
+    },
+    TextBox {
+        x: 580.0,
+        y: 20.0,
+        width: 110.0,
+        text: T3,
+    },
 ];
 
 impl WrapScene {

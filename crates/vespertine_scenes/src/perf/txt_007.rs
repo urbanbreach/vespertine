@@ -34,9 +34,7 @@ pub fn rust_document(n: u64) -> String {
                 n * k
             ));
         } else {
-            out.push_str(&format!(
-                "fn f{n}_{k}(x: u32) -> u32 {{ x * {k} + {n} }}\n"
-            ));
+            out.push_str(&format!("fn f{n}_{k}(x: u32) -> u32 {{ x * {k} + {n} }}\n"));
         }
     }
     out
