@@ -7,6 +7,11 @@
 //! `render`, layout, prepaint and paint do not run again. When only views nested in a
 //! clean view changed, the clean view replays its own output around the rebuilt children.
 //!
+//! Views drawn inside a deferred draw (popovers, menus, anything under `deferred`) are retained
+//! independently of the view that owns the draw: when the owner is replayed, the draw is replayed
+//! with it and the views inside keep valid records, and a notified view inside the draw is the
+//! only view built, never the owner.
+//!
 //! No application code opts in; the explicit `AnyView::cached`
 //! entry points keep their rule that an unnotified update does not invalidate them.
 //!

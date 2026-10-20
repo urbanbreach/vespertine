@@ -881,9 +881,15 @@ pub(crate) struct RetentionState {
     /// Number of views on the stack that were notified since the preceding
     /// frame (their ordinary descendants re-evaluate unnotified updates).
     pub notified_ancestors: u32,
-    /// Greater than zero while deferred content is built: such views are not
-    /// retained independently.
-    pub in_deferred: u32,
+    /// Records of views drawn inside deferred draws whose owner was replayed: they keep the
+    /// ranges of the previous frame until the replay of the draw that holds their output
+    /// moves them (PRF-001 R2). The prepaint and paint lists are separate, each with the range
+    /// the record held when it was carried.
+    pub carried_prepaint: Vec<(ViewKey, Range<PrepaintStateIndex>)>,
+    pub carried_paint: Vec<(ViewKey, Range<PaintIndex>)>,
+    /// Views rebuilt in this frame inside a deferred draw of a replayed owner: each is placed
+    /// into the replay of the draw that holds its previous output.
+    pub deferred_splice: Vec<crate::view::SplicedChild>,
     /// Children built for a splice that was abandoned, waiting to be adopted
     /// by the fallback reconstruction of their parent.
     pub adopted: FxHashMap<ViewKey, (LayoutId, crate::AnyElement)>,
@@ -906,6 +912,11 @@ pub(crate) struct RetentionState {
 }
 
 impl RetentionState {
+    pub fn clear_carried(&mut self) {
+        self.carried_prepaint.clear();
+        self.carried_paint.clear();
+    }
+
     pub fn new(tracker: std::rc::Rc<ReadTracker>) -> Self {
         Self {
             tracker,
@@ -913,7 +924,9 @@ impl RetentionState {
             stack: Vec::new(),
             last_inputs: None,
             notified_ancestors: 0,
-            in_deferred: 0,
+            carried_prepaint: Vec::new(),
+            carried_paint: Vec::new(),
+            deferred_splice: Vec::new(),
             adopted: FxHashMap::default(),
             layout_state_sink: Vec::new(),
             blocked: false,
@@ -928,7 +941,7 @@ impl RetentionState {
 
 impl PrepaintStateIndex {
     /// Whether every component of `self` lies within `range`.
-    fn within(&self, range: &Range<PrepaintStateIndex>) -> bool {
+    pub(crate) fn within(&self, range: &Range<PrepaintStateIndex>) -> bool {
         self.hitboxes_index >= range.start.hitboxes_index
             && self.hitboxes_index <= range.end.hitboxes_index
             && self.tooltips_index >= range.start.tooltips_index
@@ -989,9 +1002,7 @@ impl PaintIndex {
 impl Window {
     /// Whether views are recorded in this frame at all.
     pub(crate) fn retention_tracking(&self) -> bool {
-        !retained_frames_disabled()
-            && !self.retention.window_disabled
-            && self.retention.in_deferred == 0
+        !retained_frames_disabled() && !self.retention.window_disabled
     }
 
     /// Whether a recorded view may be replayed in this frame.
@@ -1172,11 +1183,17 @@ impl Window {
             };
             record.live_epoch = epoch;
             let range = record.prepaint.take();
-            match range.and_then(|range| {
+            let moved = range.as_ref().and_then(|range| {
                 Some(map_point(&range.start, false)?..map_point(&range.end, true)?)
-            }) {
-                Some(range) => record.prepaint = Some(range),
-                None => record.paint = None,
+            });
+            match (moved, range) {
+                (Some(moved), _) => record.prepaint = Some(moved),
+                // Output of a deferred draw: moved with the draw's replay.
+                (None, Some(range)) => {
+                    record.prepaint = Some(range.clone());
+                    self.retention.carried_prepaint.push((child, range));
+                }
+                (None, None) => record.paint = None,
             }
             stack.extend(record.children.iter().copied());
         }
@@ -1215,11 +1232,16 @@ impl Window {
                 continue;
             };
             let range = record.paint.take();
-            match range.and_then(|range| {
+            let moved = range.as_ref().and_then(|range| {
                 Some(map_point(&range.start, false)?..map_point(&range.end, true)?)
-            }) {
-                Some(range) => record.paint = Some(range),
-                None => record.prepaint = None,
+            });
+            match (moved, range) {
+                (Some(moved), _) => record.paint = Some(moved),
+                (None, Some(range)) => {
+                    record.paint = Some(range.clone());
+                    self.retention.carried_paint.push((child, range));
+                }
+                (None, None) => record.prepaint = None,
             }
             stack.extend(record.children.iter().copied());
         }
@@ -1500,10 +1522,14 @@ impl Window {
                             ..range.end.rebased(&old.start, &new.start),
                     );
                 }
-                // Output outside the replayed range (content drawn later,
-                // such as deferred draws) cannot be carried: the view is
-                // built again when it is next reached.
-                _ => record.paint = None,
+                // Output outside the replayed range is content drawn later by a deferred
+                // draw: it keeps its range until the replay of that draw moves it, and is
+                // built again when it is next reached if nothing does.
+                Some(range) => {
+                    record.prepaint = Some(range.clone());
+                    self.retention.carried_prepaint.push((child, range));
+                }
+                None => record.paint = None,
             }
             stack.extend(record.children.iter().copied());
         }
@@ -1532,10 +1558,174 @@ impl Window {
                             ..range.end.rebased(&old.start, &new.start),
                     );
                 }
-                _ => record.prepaint = None,
+                Some(range) => {
+                    record.paint = Some(range.clone());
+                    self.retention.carried_paint.push((child, range));
+                }
+                None => record.prepaint = None,
             }
             stack.extend(record.children.iter().copied());
         }
+    }
+}
+
+impl Window {
+    /// After the output of a deferred draw was copied from `container` (its range in the
+    /// previous frame) in `stretches` (copied ranges and where each begins now), moves the
+    /// records of the views drawn inside it. A record whose output lies in a gap between the
+    /// stretches belongs to a view built again in this frame, which assigns it its new range.
+    pub(crate) fn rebase_carried_prepaint(
+        &mut self,
+        container: &Range<PrepaintStateIndex>,
+        stretches: &[(Range<PrepaintStateIndex>, PrepaintStateIndex)],
+    ) {
+        let epoch = self.retention.views.frame_epoch;
+        let map_point = |point: &PrepaintStateIndex, prefer_last: bool| {
+            let mut found = None;
+            for (old, new_start) in stretches {
+                if point.within(old) {
+                    found = Some(point.rebased(&old.start, new_start));
+                    if !prefer_last {
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        let carried = std::mem::take(&mut self.retention.carried_prepaint);
+        let mut remaining = Vec::with_capacity(carried.len());
+        for (key, range) in carried {
+            if !(range.start.within(container) && range.end.within(container)) {
+                remaining.push((key, range));
+                continue;
+            }
+            let Some(record) = self.retention.views.get_mut(key) else {
+                continue;
+            };
+            if record.built_epoch == epoch || record.prepaint.as_ref() != Some(&range) {
+                continue;
+            }
+            if let Some(moved) = map_point(&range.start, false)
+                .zip(map_point(&range.end, true))
+                .map(|(start, end)| start..end)
+            {
+                record.prepaint = Some(moved);
+                record.live_epoch = epoch;
+            }
+        }
+        self.retention.carried_prepaint = remaining;
+    }
+
+    /// The paint-phase counterpart of [`Self::rebase_carried_prepaint`].
+    pub(crate) fn rebase_carried_paint(
+        &mut self,
+        container: &Range<PaintIndex>,
+        stretches: &[(Range<PaintIndex>, PaintIndex)],
+    ) {
+        let epoch = self.retention.views.frame_epoch;
+        let map_point = |point: &PaintIndex, prefer_last: bool| {
+            let mut found = None;
+            for (old, new_start) in stretches {
+                if point.within(old) {
+                    found = Some(point.rebased(&old.start, new_start));
+                    if !prefer_last {
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        let carried = std::mem::take(&mut self.retention.carried_paint);
+        let mut remaining = Vec::with_capacity(carried.len());
+        for (key, range) in carried {
+            if !(range.start.within(container) && range.end.within(container)) {
+                remaining.push((key, range));
+                continue;
+            }
+            let Some(record) = self.retention.views.get_mut(key) else {
+                continue;
+            };
+            if record.built_epoch == epoch || record.paint.as_ref() != Some(&range) {
+                continue;
+            }
+            if let Some(moved) = map_point(&range.start, false)
+                .zip(map_point(&range.end, true))
+                .map(|(start, end)| start..end)
+            {
+                record.paint = Some(moved);
+            }
+        }
+        self.retention.carried_paint = remaining;
+    }
+
+    /// Invalidates the records no deferred draw moved: the views are built again when they are
+    /// next reached.
+    pub(crate) fn finish_carried_prepaint(&mut self) {
+        let epoch = self.retention.views.frame_epoch;
+        for (key, range) in std::mem::take(&mut self.retention.carried_prepaint) {
+            if let Some(record) = self.retention.views.get_mut(key)
+                && record.built_epoch != epoch
+                && record.prepaint.as_ref() == Some(&range)
+            {
+                record.paint = None;
+            }
+        }
+    }
+
+    /// The paint-phase counterpart of [`Self::finish_carried_prepaint`].
+    pub(crate) fn finish_carried_paint(&mut self) {
+        let epoch = self.retention.views.frame_epoch;
+        for (key, range) in std::mem::take(&mut self.retention.carried_paint) {
+            if let Some(record) = self.retention.views.get_mut(key)
+                && record.built_epoch != epoch
+                && record.paint.as_ref() == Some(&range)
+            {
+                record.prepaint = None;
+            }
+        }
+    }
+
+    /// The ranges of the deferred draws whose output the replay of `range` of the previous
+    /// frame copies, nested draws included.
+    pub(crate) fn deferred_ranges_within(
+        &self,
+        range: &Range<PrepaintStateIndex>,
+    ) -> Vec<Range<PrepaintStateIndex>> {
+        let mut found = Vec::new();
+        let mut pending = vec![range.clone()];
+        while let Some(range) = pending.pop() {
+            let draws = self
+                .rendered_frame
+                .deferred_draws
+                .get(range.start.deferred_draws_index..range.end.deferred_draws_index)
+                .unwrap_or_default();
+            for draw in draws {
+                found.push(draw.prepaint_range.clone());
+                pending.push(draw.prepaint_range.clone());
+            }
+        }
+        found
+    }
+}
+
+impl RetentionState {
+    /// Takes the views rebuilt for a deferred draw whose previous output is `range`.
+    pub(crate) fn take_deferred_children(
+        &mut self,
+        range: &Range<PrepaintStateIndex>,
+    ) -> Vec<crate::view::SplicedChild> {
+        let (taken, kept) = std::mem::take(&mut self.deferred_splice)
+            .into_iter()
+            .partition(|child| {
+                self.views
+                    .get(child.key)
+                    .and_then(|record| record.prepaint.as_ref())
+                    .is_some_and(|prepaint| {
+                        prepaint.start.within(range) && prepaint.end.within(range)
+                    })
+            });
+        self.deferred_splice = kept;
+        taken
     }
 }
 

@@ -3,9 +3,10 @@ use crate::window::read_tracker::ViewKey;
 use crate::window::retained::{AmbientPhase, SpliceMap};
 use crate::window::retained::{RetainedViews, ViewKind};
 use crate::{
-    AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, Context, Element, ElementId,
-    Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
-    Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style, StyleRefinement, WeakEntity,
+    AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
+    Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
+    StyleRefinement, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
@@ -359,8 +360,8 @@ enum ViewStateInner {
 }
 
 /// A view nested in a replayed view that was built again in this frame.
-struct SplicedChild {
-    key: ViewKey,
+pub(crate) struct SplicedChild {
+    pub(crate) key: ViewKey,
     /// The layout root of a rebuilt view; `None` for a scroll layer (PRF-004), which is placed
     /// at its block's new offset instead of being built.
     layout_id: Option<LayoutId>,
@@ -931,7 +932,8 @@ fn prepaint_view(
                         .retention
                         .views
                         .get(key)
-                        .is_some_and(|record| !record.dirty && record.prepaint.is_some());
+                        .is_some_and(|record| !record.dirty && record.prepaint.is_some())
+                        && splice_places_children(window, key, &splice);
                     if spliceable {
                         prepaint_spliced(window, cx, key, &mut splice);
                         window.frame_stats_mut().views_spliced += 1;
@@ -1020,15 +1022,96 @@ fn prepaint_view(
     })
 }
 
+/// Where the output of a view rebuilt for a splice lies in the previous frame, relative to
+/// the clean view `key` that is replayed around it.
+enum Placing {
+    /// In the clean view's own prepaint range.
+    Own,
+    /// In the output of one of the deferred draws the view requested.
+    Deferred,
+}
+
+/// How each rebuilt view of `splice` is placed, or `None` if one of them lies nowhere the
+/// replay of `key` reaches.
+fn classify_splice(window: &Window, key: ViewKey, splice: &[SplicedChild]) -> Option<Vec<Placing>> {
+    let old = window.retention.views.get(key)?.prepaint.clone()?;
+    let deferred = window.deferred_ranges_within(&old);
+    splice
+        .iter()
+        .map(|child| {
+            let range = window.retention.views.get(child.key)?.prepaint.as_ref()?;
+            let within = |container: &Range<PrepaintStateIndex>| {
+                range.start.within(container) && range.end.within(container)
+            };
+            if within(&old) {
+                Some(Placing::Own)
+            } else if deferred.iter().any(within) {
+                Some(Placing::Deferred)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn splice_places_children(window: &Window, key: ViewKey, splice: &[SplicedChild]) -> bool {
+    classify_splice(window, key, splice).is_some()
+}
+
 /// Replays the prepaint output of the clean view `key` in stretches around the
 /// views nested in it that were built again, and prepaints those in place.
-fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [SplicedChild]) {
+fn prepaint_spliced(
+    window: &mut Window,
+    cx: &mut App,
+    key: ViewKey,
+    splice: &mut Vec<SplicedChild>,
+) {
     let old = window
         .retention
         .views
         .get(key)
         .and_then(|record| record.prepaint.clone())
         .expect("spliced views have prepaint output");
+    // The views rebuilt inside deferred draws are placed when those draws are replayed.
+    let placing = classify_splice(window, key, splice).expect("checked before replaying");
+    let mut own = Vec::with_capacity(splice.len());
+    for (child, placing) in std::mem::take(splice).into_iter().zip(placing) {
+        match placing {
+            Placing::Own => own.push(child),
+            Placing::Deferred => window.retention.deferred_splice.push(child),
+        }
+    }
+    *splice = own;
+    let parent = window.retention.stack.last().copied();
+    window.retention.views.adopt(key, parent);
+    let (whole, stretches) = prepaint_stretches(window, cx, Some(key), old, splice);
+    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
+    window.rebase_spliced_prepaint(key, whole, &stretches, &rebuilt);
+}
+
+/// Replays the prepaint output of `old` in stretches around the views of `splice` that were
+/// built again, and prepaints those in place. Returns the new range and the copied
+/// stretches with where each begins. `owner` is the view the output belongs to.
+pub(crate) fn prepaint_around(
+    window: &mut Window,
+    cx: &mut App,
+    owner: Option<ViewKey>,
+    old: Range<PrepaintStateIndex>,
+    splice: &mut [SplicedChild],
+) -> Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)> {
+    prepaint_stretches(window, cx, owner, old, splice).1
+}
+
+fn prepaint_stretches(
+    window: &mut Window,
+    cx: &mut App,
+    owner: Option<ViewKey>,
+    old: Range<PrepaintStateIndex>,
+    splice: &mut [SplicedChild],
+) -> (
+    Range<PrepaintStateIndex>,
+    Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)>,
+) {
     // Gaps in the order their output appears.
     splice.sort_by_key(|child| {
         window
@@ -1049,8 +1132,6 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
                 .expect("rebuilt children have prepaint output")
         })
         .collect();
-    let parent = window.retention.stack.last().copied();
-    window.retention.views.adopt(key, parent);
 
     let attachment = window.next_frame.dispatch_tree.active_node_id();
     let whole_start = window.prepaint_index();
@@ -1076,7 +1157,9 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
 
         let Some(layout_id) = child.layout_id else {
             // A scroll layer: placed at the new offset of its block.
-            let placed = window.scroll_layer_splice_prepaint(key, child.key, &map, attachment, cx);
+            let placed = owner.is_some_and(|owner| {
+                window.scroll_layer_splice_prepaint(owner, child.key, &map, attachment, cx)
+            });
             debug_assert!(placed, "layers are checked before the owner is replayed");
             continue;
         };
@@ -1134,8 +1217,7 @@ fn prepaint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mu
         child.state = Some(state);
     }
     let whole_end = window.prepaint_index();
-    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
-    window.rebase_spliced_prepaint(key, whole_start..whole_end, &stretches, &rebuilt);
+    (whole_start..whole_end, stretches)
 }
 
 #[inline(never)]
@@ -1203,6 +1285,33 @@ fn paint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [
         .get(key)
         .and_then(|record| record.paint.clone())
         .expect("spliced views have paint output");
+    let (whole, stretches) = paint_stretches(window, cx, old, splice, None, None);
+    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
+    window.rebase_spliced_paint(key, whole, &stretches, &rebuilt);
+}
+
+/// Replays the paint output of the deferred draw whose previous output is `old` in stretches
+/// around the views of `splice` that were built again, and paints those in place. The draw's
+/// content mask and rem size apply to them.
+pub(crate) fn paint_around(
+    window: &mut Window,
+    cx: &mut App,
+    old: Range<PaintIndex>,
+    splice: &mut [SplicedChild],
+    content_mask: Option<ContentMask<Pixels>>,
+    rem_size: Pixels,
+) -> Vec<(Range<PaintIndex>, PaintIndex)> {
+    paint_stretches(window, cx, old, splice, Some(content_mask), Some(rem_size)).1
+}
+
+fn paint_stretches(
+    window: &mut Window,
+    cx: &mut App,
+    old: Range<PaintIndex>,
+    splice: &mut [SplicedChild],
+    content_mask: Option<Option<ContentMask<Pixels>>>,
+    rem_size: Option<Pixels>,
+) -> (Range<PaintIndex>, Vec<(Range<PaintIndex>, PaintIndex)>) {
     let gaps: Vec<Range<PaintIndex>> = splice
         .iter()
         .map(|child| {
@@ -1248,13 +1357,22 @@ fn paint_spliced(window: &mut Window, cx: &mut App, key: ViewKey, splice: &mut [
         };
         window.with_ambient(&ambient, AmbientPhase::Prepaint, |window| {
             window.next_frame.dispatch_tree.set_active_node(node);
-            paint_view(entity_id, &mut child_state, window, cx);
+            let mut paint =
+                |window: &mut Window| paint_view(entity_id, &mut child_state, window, cx);
+            // A deferred draw paints under its own content mask and rem size.
+            let mut paint_masked = |window: &mut Window| match content_mask {
+                Some(mask) => window.with_content_mask(mask, &mut paint),
+                None => paint(window),
+            };
+            match rem_size {
+                Some(rem_size) => window.with_rem_size(Some(rem_size), paint_masked),
+                None => paint_masked(window),
+            }
         });
         child.state = Some(child_state);
     }
     let whole_end = window.paint_index();
-    let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
-    window.rebase_spliced_paint(key, whole_start..whole_end, &stretches, &rebuilt);
+    (whole_start..whole_end, stretches)
 }
 
 #[inline(never)]

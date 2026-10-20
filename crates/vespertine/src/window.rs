@@ -75,8 +75,11 @@ mod a11y_retained_tests;
 #[cfg(test)]
 mod a11y_virtual_list_tests;
 #[cfg(test)]
+mod deferred_retained_tests;
+#[cfg(test)]
 mod hover_retained_tests;
 pub(crate) mod read_tracker;
+use read_tracker::ViewKey;
 pub(crate) mod retained;
 #[cfg(test)]
 mod retained_tests;
@@ -1105,6 +1108,12 @@ pub(crate) struct DeferredDraw {
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+    /// The view whose output requested the draw: the views drawn inside it are nested in that
+    /// view's record (PRF-001).
+    view_key: Option<ViewKey>,
+    /// Views nested in the replayed view that were built again in this frame and are drawn
+    /// inside this draw: the draw is replayed in stretches around them.
+    spliced: Vec<crate::view::SplicedChild>,
 }
 
 pub(crate) struct Frame {
@@ -1157,8 +1166,11 @@ pub(crate) struct Frame {
 /// See [`Window::prepaint_effect`] and [`Window::paint_effect`].
 pub type ReplayEffect = Rc<dyn Fn(&mut Window, &mut App)>;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct PrepaintStateIndex {
+    /// The frame the index was taken in: ranges of the previous frame and ranges assigned in
+    /// this frame never compare equal.
+    frame: u64,
     hitboxes_index: usize,
     tooltips_index: usize,
     deferred_draws_index: usize,
@@ -1171,8 +1183,10 @@ pub(crate) struct PrepaintStateIndex {
     hitbox_switches_index: usize,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct PaintIndex {
+    /// The frame the index was taken in (see [`PrepaintStateIndex`]).
+    frame: u64,
     scene_index: usize,
     #[cfg(any(test, feature = "test-support"))]
     debug_bounds_index: usize,
@@ -1239,6 +1253,7 @@ impl PrepaintStateIndex {
     /// equivalent position inside a copy of that range that began at `to`.
     pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
         Self {
+            frame: to.frame,
             hitboxes_index: shift_index(
                 self.hitboxes_index,
                 from.hitboxes_index,
@@ -1288,6 +1303,7 @@ impl PaintIndex {
     /// equivalent position inside a copy of that range that began at `to`.
     pub(crate) fn rebased(&self, from: &Self, to: &Self) -> Self {
         Self {
+            frame: to.frame,
             scene_index: shift_index(self.scene_index, from.scene_index, to.scene_index),
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: shift_index(
@@ -4172,6 +4188,8 @@ impl Window {
         let tracker = self.retention.tracker.clone();
         self.retention.views.flush_draw_writes(&tracker);
         self.retention.adopted.clear();
+        debug_assert!(self.retention.deferred_splice.is_empty());
+        self.retention.deferred_splice.clear();
         self.retention.views.sweep();
         self.sweep_row_stores();
         debug_assert!(self.retention.stack.is_empty());
@@ -4201,6 +4219,7 @@ impl Window {
         let tracker = self.retention.tracker.clone();
         self.retention.causes = tracker.causes_since(&mut self.retention.causes_baseline);
         self.retention.views.begin_frame(&tracker, &views, &inputs);
+        self.retention.clear_carried();
         for entity in views.drain() {
             self.mark_view_dirty(entity);
         }
@@ -4439,6 +4458,7 @@ impl Window {
         } else {
             tooltip_element = self.prepaint_tooltip(cx);
         }
+        self.finish_carried_prepaint();
 
         self.mouse_hit_test = if self.pointer.absent {
             HitTest::default()
@@ -4478,6 +4498,7 @@ impl Window {
         } else if let Some(mut tooltip_element) = tooltip_element {
             tooltip_element.paint(self, cx);
         }
+        self.finish_carried_paint();
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
@@ -4617,7 +4638,15 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (
+                    element,
+                    parent_node,
+                    current_view,
+                    rem_size,
+                    absolute_offset,
+                    prepaint_range,
+                    view_key,
+                ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
@@ -4630,10 +4659,14 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        deferred_draw.view_key,
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
 
+                // Views drawn inside the draw are nested in the view that requested it.
+                let pushed = view_key.is_some();
+                self.retention.stack.extend(view_key);
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
                     self.with_rendered_view(current_view, |window| {
@@ -4645,7 +4678,27 @@ impl Window {
                     });
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
                 } else {
-                    self.reuse_prepaint(prepaint_range, cx);
+                    let mut around = self.retention.take_deferred_children(&prepaint_range);
+                    if around.is_empty() {
+                        self.reuse_prepaint(prepaint_range.clone(), cx);
+                        self.rebase_carried_prepaint(
+                            &prepaint_range,
+                            &[(prepaint_range.clone(), prepaint_start.clone())],
+                        );
+                    } else {
+                        let stretches = crate::view::prepaint_around(
+                            self,
+                            cx,
+                            view_key,
+                            prepaint_range.clone(),
+                            &mut around,
+                        );
+                        self.rebase_carried_prepaint(&prepaint_range, &stretches);
+                        self.next_frame.deferred_draws[deferred_draw_ix].spliced = around;
+                    }
+                }
+                if pushed {
+                    self.retention.stack.pop();
                 }
                 let prepaint_end = self.prepaint_index();
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
@@ -4656,6 +4709,7 @@ impl Window {
             self.text_style_stack.clear();
             round_start = round_end;
         }
+        self.finish_carried_prepaint();
     }
 
     fn paint_deferred_draws(&mut self, cx: &mut App) {
@@ -4664,6 +4718,7 @@ impl Window {
         // Paint all deferred draws in priority order.
         // Since prepaint has already processed nested deferreds, we just paint them all.
         if self.next_frame.deferred_draws.len() == 0 {
+            self.finish_carried_paint();
             return;
         }
 
@@ -4687,14 +4742,28 @@ impl Window {
                         });
                     })
                 })
+            } else if deferred_draw.spliced.is_empty() {
+                let old = deferred_draw.paint_range.clone();
+                self.reuse_paint(old.clone(), cx);
+                self.rebase_carried_paint(&old, &[(old.clone(), paint_start.clone())]);
             } else {
-                self.reuse_paint(deferred_draw.paint_range.clone(), cx);
+                let old = deferred_draw.paint_range.clone();
+                let stretches = crate::view::paint_around(
+                    self,
+                    cx,
+                    old.clone(),
+                    &mut deferred_draw.spliced,
+                    content_mask,
+                    deferred_draw.rem_size,
+                );
+                self.rebase_carried_paint(&old, &stretches);
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
         }
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
+        self.finish_carried_paint();
     }
 
     fn deferred_draw_traversal_order(&mut self) -> SmallVec<[usize; 8]> {
@@ -4706,6 +4775,7 @@ impl Window {
 
     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
         PrepaintStateIndex {
+            frame: self.retention.views.frame_epoch,
             hitboxes_index: self.next_frame.hitboxes.len(),
             tooltips_index: self.next_frame.tooltip_requests.len(),
             deferred_draws_index: self.next_frame.deferred_draws.len(),
@@ -4815,6 +4885,8 @@ impl Window {
                     absolute_offset: deferred_draw.absolute_offset,
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
+                    view_key: deferred_draw.view_key,
+                    spliced: Vec::new(),
                 }),
         );
 
@@ -4831,6 +4903,7 @@ impl Window {
 
     pub(crate) fn paint_index(&self) -> PaintIndex {
         PaintIndex {
+            frame: self.retention.views.frame_epoch,
             scene_index: self.next_frame.scene.len(),
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.next_frame.debug_bounds_records.len(),
@@ -5552,6 +5625,8 @@ impl Window {
             absolute_offset,
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            view_key: self.retention.stack.last().copied(),
+            spliced: Vec::new(),
         });
     }
 
