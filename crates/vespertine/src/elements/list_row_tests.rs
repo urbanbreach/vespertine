@@ -1191,3 +1191,85 @@ fn unchanged_frames_rebuild_nothing(cx: &mut TestAppContext) {
         assert!(take_renders(&win).is_empty(), "{kind:?}");
     }
 }
+
+/// Remeasuring rows invalidates the
+/// records of those rows only (PRF-005 R1, R3): a transcript that grows its last message
+/// every frame rebuilds that message and replays the rest.
+#[crate::test]
+fn a9_remeasuring_rebuilds_only_the_remeasured_rows(cx: &mut TestAppContext) {
+    struct Transcript {
+        state: ListState,
+        texts: Rc<RefCell<Vec<String>>>,
+        renders: Log,
+    }
+    impl Render for Transcript {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            window.request_animation_frame();
+            let (texts, renders) = (self.texts.clone(), self.renders.clone());
+            div().size_full().child(
+                list(self.state.clone(), move |ix, _, _| {
+                    renders.borrow_mut().push(ix);
+                    div()
+                        .h(px(ROW_HEIGHT))
+                        .child(texts.borrow()[ix].clone())
+                        .into_any_element()
+                })
+                .id("transcript")
+                .w_full()
+                .h(px(VIEWPORT)),
+            )
+        }
+    }
+
+    let count = 60;
+    let texts = Rc::new(RefCell::new(
+        (0..count).map(|ix| format!("row {ix}")).collect::<Vec<_>>(),
+    ));
+    let renders = Log::default();
+    let state = ListState::new(count, ListAlignment::Top, px(0.)).measure_all();
+    let handle: AnyWindowHandle = cx
+        .add_window({
+            let (texts, renders, state) = (texts.clone(), renders.clone(), state.clone());
+            move |_, _| Transcript {
+                state,
+                texts,
+                renders,
+            }
+        })
+        .into();
+    let frame = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            window.simulate_next_frame(cx);
+        })
+        .unwrap();
+        cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+    };
+    for _ in 0..4 {
+        frame(cx);
+    }
+    renders.borrow_mut().clear();
+    cx.update_window(handle, |_, window, _| window.reset_frame_stats())
+        .unwrap();
+
+    for _ in 0..3 {
+        frame(cx);
+    }
+    assert!(
+        renders.borrow().is_empty(),
+        "animation frames alone rebuild no row: {:?}",
+        renders.borrow()
+    );
+
+    for frame_ix in 0..3 {
+        texts.borrow_mut()[3].push_str(" more");
+        state.remeasure_items(3..4);
+        frame(cx);
+        let built: BTreeSet<usize> = renders.borrow_mut().drain(..).collect();
+        assert_eq!(
+            built,
+            BTreeSet::from([3]),
+            "frame {frame_ix}: only the remeasured row is built"
+        );
+    }
+}

@@ -956,7 +956,8 @@ mod appended {
         fn checked(&self, text: &str) -> Arc<LineLayout> {
             let cached = layout(&self.window, text, &self.font);
             let platform = self.platform(text);
-            let tolerance = 0.001f32.max(platform.width.0 * 8.0 * f32::EPSILON);
+            let units = 8.0 + 2.0 * (text.len() as f32).sqrt() + APPEND_MAX_CHAIN as f32;
+            let tolerance = 0.001f32.max(platform.width.0 * units * f32::EPSILON);
             assert!(
                 layouts_agree_within(&cached, &platform, tolerance),
                 "`{text}` differs from platform shaping"
@@ -1000,6 +1001,22 @@ mod appended {
         let before = f.system.shape_stats().platform_line_shapes;
         f.checked(&stream(next));
         assert_eq!(f.system.shape_stats().platform_line_shapes - before, 1);
+    }
+
+    #[test]
+    fn a_long_streamed_line_keeps_appended_shaping_enabled_through_the_sampled_checks() {
+        let f = fixture();
+        f.checked(&stream(0));
+        // Past the initial checks and the first sampled comparison, on a line whose width is
+        // thousands of pixels: the comparison tolerates the rounding of long sums.
+        let steps = APPEND_CHECK_INTERVAL as usize + APPEND_MAX_CHAIN as usize;
+        for words in 1..=steps {
+            f.checked(&stream(words));
+        }
+        let stats = f.system.shape_stats();
+        assert!(!stats.append_disabled);
+        assert_eq!(stats.appended_lines, assembled_of(steps));
+        assert!(stats.append_checks > APPEND_INITIAL_CHECKS);
     }
 
     #[test]

@@ -135,9 +135,13 @@ struct StateInner {
     reservation_extra: Pixels,
     /// The focus handle of the row that held focus at the last layout.
     last_focus_id: Option<FocusId>,
-    /// Bumped whenever rows may have changed identity or content (splices, resets,
-    /// remeasures, windowing changes): retained rows recorded before are obsolete.
+    /// Bumped whenever rows may have changed identity (splices, resets, windowing changes):
+    /// retained rows recorded before are obsolete. Remeasured rows are listed in `remeasured`
+    /// instead.
     revision: u64,
+    /// Mounted rows remeasured since the retained rows were last opened: only their records
+    /// are obsolete.
+    remeasured: Vec<Range<usize>>,
     /// Scroll mutations made through the state (scrollbar offsets, programmatic scrolls);
     /// each explains one notification of the list's owner.
     scroll_marks: u64,
@@ -473,6 +477,7 @@ impl ListState {
             reservation_extra: px(0.),
             last_focus_id: None,
             revision: 0,
+            remeasured: Vec::new(),
             scroll_marks: 0,
             at_end_version: Rc::new(Cell::new(0)),
             at_end_answer: Cell::new(None),
@@ -581,7 +586,7 @@ impl ListState {
 
     fn remeasure_items_with_scroll_anchor(&self, range: Range<usize>, scroll_anchor: ScrollAnchor) {
         let state = &mut *self.edit();
-        state.revision += 1;
+        state.note_remeasured(range.clone());
         let window_start = state.mounted_range().start;
         let logical_range = window_start + range.start..window_start + range.end;
 
@@ -1357,6 +1362,22 @@ impl Drop for StateEdit<'_> {
 }
 
 impl StateInner {
+    /// Records that the mounted rows in `range` were remeasured. The record stays short: many
+    /// ranges collapse into the one that covers them.
+    fn note_remeasured(&mut self, range: Range<usize>) {
+        const MAX_RANGES: usize = 16;
+        if range.is_empty() {
+            return;
+        }
+        self.remeasured.push(range);
+        if self.remeasured.len() > MAX_RANGES {
+            let start = self.remeasured.iter().map(|r| r.start).min().unwrap_or(0);
+            let end = self.remeasured.iter().map(|r| r.end).max().unwrap_or(0);
+            self.remeasured.clear();
+            self.remeasured.push(start..end);
+        }
+    }
+
     /// Whether the list is scrolled to the end; see [`ListState::is_scrolled_to_end`].
     fn at_end(&self) -> Option<bool> {
         let bounds = self.last_layout_bounds?;
@@ -2863,15 +2884,15 @@ impl Element for List {
                 state.last_content_width = Some(content_width);
             }
 
-            // Rows are retained for lists that have an identity to key them by and size
-            // themselves (a list that infers its size renders and measures every visible row
-            // to do so); not while accessibility is active.
+            // Rows are retained for lists that size themselves (a list that infers its size
+            // renders and measures every visible row to do so), keyed by the list's id; not while accessibility is active.
             let mut session = match id {
                 Some(id)
                     if self.sizing_behavior == ListSizingBehavior::Auto
                         && window.rows_enabled() =>
                 {
                     Some(row_replay::RowSession::begin(
+                        std::mem::take(&mut state.remeasured),
                         window,
                         id,
                         bounds,
@@ -2883,6 +2904,7 @@ impl Element for List {
                     ))
                 }
                 Some(id) => {
+                    state.remeasured.clear();
                     window.row_store_clear(id);
                     None
                 }

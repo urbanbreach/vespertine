@@ -44,7 +44,7 @@ pub(crate) const APPEND_TAILS: usize = 4;
 /// Longest chain of lines that each extend the previous one's layout before the next line is
 /// shaped in full again. Every link adds the rounding error of one addition to the positions
 /// of the words it shapes; the full shaping anchors the chain.
-pub(crate) const APPEND_MAX_CHAIN: u32 = 6;
+pub(crate) const APPEND_MAX_CHAIN: u32 = 32;
 
 /// Incrementally shaped lines compared with full platform shaping before sampling starts.
 pub(crate) const APPEND_INITIAL_CHECKS: u64 = 16;
@@ -691,7 +691,11 @@ impl ShapeCaches {
         let layout = if validate {
             ShapeCounters::bump(&self.counters.append_checks);
             let platform_layout = self.platform_shape(platform, text, font_size, runs);
-            if layouts_agree_within(&layout, &platform_layout, append_tolerance(&layout)) {
+            if layouts_agree_within(
+                &layout,
+                &platform_layout,
+                append_tolerance(&layout, found.chain),
+            ) {
                 layout
             } else {
                 let mut append = self.append.lock();
@@ -1050,11 +1054,14 @@ pub(crate) fn layouts_agree(synthesized: &LineLayout, platform: &LineLayout) -> 
     layouts_agree_within(synthesized, platform, NUMERIC_TOLERANCE)
 }
 
-/// The agreement tolerance for an assembled line: [`NUMERIC_TOLERANCE`], or a few units in the
-/// last place of the line's width when that is larger (positions of long lines are not
-/// representable more finely, and a sum in a different order differs by such units).
-fn append_tolerance(layout: &LineLayout) -> f32 {
-    NUMERIC_TOLERANCE.max(layout.width.0.abs() * 8.0 * f32::EPSILON)
+/// The agreement tolerance for a line assembled at link `chain` of a chain:
+/// [`NUMERIC_TOLERANCE`], or the units in the last place of the line's width that a sum in a
+/// different order can differ by when that is larger. The platform accumulates one advance per
+/// glyph, so its own width is off by about the square root of the glyph count in such units; the
+/// chain adds one rounding per link.
+fn append_tolerance(layout: &LineLayout, chain: u32) -> f32 {
+    let units = 8.0 + 2.0 * (layout.len as f32).sqrt() + chain as f32;
+    NUMERIC_TOLERANCE.max(layout.width.0.abs() * units * f32::EPSILON)
 }
 
 /// [`layouts_agree`] with an explicit position tolerance in logical pixels.

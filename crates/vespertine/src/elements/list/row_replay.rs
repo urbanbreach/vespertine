@@ -19,6 +19,7 @@ use crate::{
 use std::{
     any::TypeId,
     collections::{BTreeMap, BTreeSet},
+    ops::Range,
 };
 
 /// What a frame does with one retained row.
@@ -66,6 +67,7 @@ impl RowSession {
     /// nothing tracked explains or the row callback is not the one that rendered them.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn begin(
+        remeasured: Vec<Range<usize>>,
         window: &mut Window,
         list: &GlobalElementId,
         bounds: Bounds<Pixels>,
@@ -101,7 +103,7 @@ impl RowSession {
         }
         let ambiguous = window.rows_owner_ambiguous_with(marks.saturating_sub(stored_marks))
             || stored_type != Some(render_type);
-        let (rows, constructed, last_scroll_px, moving_down) = {
+        let (mut rows, constructed, last_scroll_px, moving_down) = {
             let store = window.row_store(list);
             store.geometry = Some(geometry);
             store.render_type = Some(render_type);
@@ -114,6 +116,14 @@ impl RowSession {
                 store.moving_down,
             )
         };
+        for range in remeasured {
+            let stale: Vec<usize> = rows.range(range).map(|(ix, _)| *ix).collect();
+            for ix in stale {
+                if let Some(key) = rows.remove(&ix) {
+                    window.row_drop(key);
+                }
+            }
+        }
         if ambiguous {
             for key in rows.values() {
                 window.row_mark_suspect(*key);
