@@ -1,11 +1,11 @@
 //! FID-RND-008: the same layered surface plate as a styled element (left) and painted from a
 //! canvas in the canonical layer order (right).
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, BorderStyle, BoxShadow, Corners, Edges, Hsla, IntoElement,
-    ParentElement, Styled, TextAlign, TextRun, Window, black, canvas, div, font, linear_color_stop,
+    ParentElement, Styled, TextAlign, Window, black, canvas, div, font, linear_color_stop,
     linear_gradient, point, px, quad, white,
 };
 
@@ -84,14 +84,7 @@ fn canvas_plate(left: f32, top: f32) -> AnyElement {
                 BorderStyle::default(),
             ));
             window.paint_inset_shadows(bounds, radii, &shadows);
-            let run = TextRun {
-                len: "Plate".len(),
-                font: font(SANS),
-                color: hex(0xF0F1F3),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
+            let run = plain_run("Plate", font(SANS), hex(0xF0F1F3));
             let line = window
                 .text_system()
                 .shape_line("Plate".into(), px(14.), &[run], None);

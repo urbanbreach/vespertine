@@ -1,11 +1,11 @@
 //! FID-RND-003-1/2/3: ordered Gaussian backdrop blur (ordering, per-corner radii, frosted
 //! panel over stripes, floating card with a nested overlay).
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, BorderStyle, Bounds, Corners, Hsla, IntoElement, Pixels, Styled, TextAlign,
-    TextRun, Window, canvas, fill, font, point, px, quad, rgba, size,
+    Window, canvas, fill, font, point, px, quad, rgba, size,
 };
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
@@ -46,14 +46,7 @@ fn text_at(
     left: f32,
     baseline: f32,
 ) {
-    let run = TextRun {
-        len: text.len(),
-        font: font(SANS),
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let run = plain_run(text, font(SANS), color);
     let line = window
         .text_system()
         .shape_line(text.into(), px(size_px), &[run], None);

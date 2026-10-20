@@ -56,9 +56,9 @@ impl Render for Field {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let error = validate(self.index, &self.text);
         div()
-            .flex()
-            .flex_col()
             .gap(px(4.0))
+            .flex_col()
+            .flex()
             .child(
                 div()
                     .text_size(px(12.0))

@@ -163,10 +163,10 @@ impl Render for Page {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self.settings.read(cx).page;
         div()
-            .p(px(12.0))
-            .flex()
-            .flex_col()
             .gap(px(6.0))
+            .flex()
+            .p(px(12.0))
+            .flex_col()
             .child(
                 div()
                     .font_weight(FontWeight::BOLD)
@@ -367,9 +367,9 @@ impl Render for Showcase {
                     .child(self.sidebar.clone())
                     .child(
                         div()
-                            .flex_1()
-                            .flex()
                             .flex_col()
+                            .flex()
+                            .flex_1()
                             .child(self.page.clone())
                             .child(self.table.clone()),
                     ),

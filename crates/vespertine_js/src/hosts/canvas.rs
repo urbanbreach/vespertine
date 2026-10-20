@@ -461,12 +461,12 @@ fn paint_command(command: &Command, bounds: Bounds<Pixels>, window: &mut Window,
                 font.weight = FontWeight(*weight);
             }
             let run = TextRun {
-                len: line_text.len(),
-                font,
-                color: color.unwrap_or(style.color),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
+                color: color.unwrap_or(style.color),
+                font,
+                len: line_text.len(),
             };
             let line = window
                 .text_system()

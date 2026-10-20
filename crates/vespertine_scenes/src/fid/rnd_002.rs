@@ -3,11 +3,11 @@
 //! overflow clipping with independent corners, plain solid fill sharing a batch with a
 //! gradient quad).
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, Bounds, Hsla, IntoElement, ParentElement, Pixels, Styled,
-    TextAlign, TextRun, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point,
+    TextAlign, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point,
     px, size,
 };
 
@@ -43,14 +43,7 @@ fn text_at(
     left: f32,
     top: f32,
 ) {
-    let run = TextRun {
-        len: text.len(),
-        font: font(SANS),
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let run = plain_run(text, font(SANS), color);
     let line = window
         .text_system()
         .shape_line(text.into(), px(size_px), &[run], None);

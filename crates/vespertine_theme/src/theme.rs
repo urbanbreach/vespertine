@@ -61,20 +61,30 @@ pub enum SurfaceTreatment {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColorTable {
+    /// Primary text.
+    pub text: Color,
+    /// Muted text.
+    pub text_muted: Color,
+    /// Faint text.
+    pub text_faint: Color,
+    /// Text on `solid`.
+    pub on_solid: Color,
+    /// Text cursor.
+    pub cursor: Color,
     /// Main content plane.
     pub background: Color,
     /// Surrounding chrome.
     pub shell: Color,
-    /// Raised surface.
-    pub raised: Color,
+    /// Input surface.
+    pub input: Color,
     /// Card surface.
     pub card: Color,
+    /// Raised surface.
+    pub raised: Color,
     /// Dialog surface.
     pub dialog: Color,
     /// Overlay surface.
     pub overlay: Color,
-    /// Input surface.
-    pub input: Color,
     /// Solid emphasis fill.
     pub solid: Color,
     /// Hover wash.
@@ -85,34 +95,24 @@ pub struct ColorTable {
     pub border: Color,
     /// Strong border.
     pub border_strong: Color,
-    /// Primary text.
-    pub text: Color,
-    /// Muted text.
-    pub text_muted: Color,
-    /// Faint text.
-    pub text_faint: Color,
-    /// Text on `solid`.
-    pub on_solid: Color,
     /// Danger status.
     pub danger: Color,
     /// Muted danger companion.
     pub danger_muted: Color,
-    /// Warning status.
-    pub warning: Color,
-    /// Muted warning companion.
-    pub warning_muted: Color,
     /// Success status.
     pub success: Color,
     /// Muted success companion.
     pub success_muted: Color,
-    /// Text cursor.
-    pub cursor: Color,
+    /// Warning status.
+    pub warning: Color,
+    /// Muted warning companion.
+    pub warning_muted: Color,
+    /// Diff hunk headers.
+    pub diff_hunk: Color,
     /// Added diff lines.
     pub diff_add: Color,
     /// Deleted diff lines.
     pub diff_delete: Color,
-    /// Diff hunk headers.
-    pub diff_hunk: Color,
 }
 
 impl ColorTable {
@@ -135,22 +135,22 @@ impl ColorTable {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccentRoles {
-    /// Primary accent.
-    pub primary: Color,
-    /// Stronger accent used as a fill behind `on`.
-    pub strong: Color,
-    /// Translucent accent wash.
-    pub wash: Color,
-    /// Foreground drawn on `strong`.
-    pub on: Color,
+    /// Glyph ramp: light, primary, deep.
+    pub glyph: [Color; 3],
     /// Selection wash.
     pub selection: Color,
     /// Caret color.
     pub caret: Color,
     /// Activity indicator color.
     pub activity: Color,
-    /// Glyph ramp: light, primary, deep.
-    pub glyph: [Color; 3],
+    /// Primary accent.
+    pub primary: Color,
+    /// Translucent accent wash.
+    pub wash: Color,
+    /// Stronger accent used as a fill behind `on`.
+    pub strong: Color,
+    /// Foreground drawn on `strong`.
+    pub on: Color,
 }
 
 /// Syntax categories: the 24 of THM-002 plus optional markup categories.
@@ -300,29 +300,29 @@ impl SyntaxMap {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalPalette {
-    /// Terminal background.
-    pub background: Color,
-    /// Terminal foreground.
-    pub foreground: Color,
-    /// Terminal selection.
-    pub selection: Color,
     /// ANSI colors: indices 0-7 normal, 8-15 bright.
     pub ansi: [Color; 16],
+    /// Terminal foreground.
+    pub foreground: Color,
+    /// Terminal background.
+    pub background: Color,
+    /// Terminal selection.
+    pub selection: Color,
 }
 
 /// Source metadata, kept apart from semantic token values (THM-004 R3).
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct SourceMetadata {
-    /// Format name (for example `vscode`).
-    pub format: String,
     /// Source URL or local path.
     pub url: String,
-    /// Revision (`local` for user supplied files).
-    pub revision: String,
     /// License text.
     pub license: String,
+    /// Format name (for example `vscode`).
+    pub format: String,
     /// Hash of the source asset.
     pub asset_hash: String,
+    /// Revision (`local` for user supplied files).
+    pub revision: String,
 }
 
 impl SourceMetadata {
@@ -346,16 +346,16 @@ fn default_frost_tint_alpha() -> f64 {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemeVariant {
+    /// Display name.
+    pub name: String,
     /// Identifier, unique across the registry.
     pub id: String,
     /// Identifier of the family this variant belongs to.
     pub family_id: String,
-    /// Display name.
-    pub name: String,
-    /// Dark or light.
-    pub appearance: Appearance,
     /// Recommended surface treatment.
     pub surface: SurfaceTreatment,
+    /// Dark or light.
+    pub appearance: Appearance,
     /// Semantic colors.
     pub colors: ColorTable,
     /// Accent roles.

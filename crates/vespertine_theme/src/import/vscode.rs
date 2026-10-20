@@ -243,24 +243,22 @@ const ACCENT_KEYS: &[&str] = &[
     "tab.activeBorder",
 ];
 
-const ANSI_KEYS: [&str; 16] = [
-    "terminal.ansiBlack",
-    "terminal.ansiRed",
-    "terminal.ansiGreen",
-    "terminal.ansiYellow",
-    "terminal.ansiBlue",
-    "terminal.ansiMagenta",
-    "terminal.ansiCyan",
-    "terminal.ansiWhite",
-    "terminal.ansiBrightBlack",
-    "terminal.ansiBrightRed",
-    "terminal.ansiBrightGreen",
-    "terminal.ansiBrightYellow",
-    "terminal.ansiBrightBlue",
-    "terminal.ansiBrightMagenta",
-    "terminal.ansiBrightCyan",
-    "terminal.ansiBrightWhite",
+const ANSI_NAMES: [&str; 8] = [
+    "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White",
 ];
+
+/// The VS Code key of ANSI color `index` (0-7 normal, 8-15 bright).
+fn ansi_key(index: usize) -> String {
+    let prefix = if index < ANSI_NAMES.len() {
+        ""
+    } else {
+        "Bright"
+    };
+    format!(
+        "terminal.ansi{prefix}{}",
+        ANSI_NAMES[index % ANSI_NAMES.len()]
+    )
+}
 
 /// Ordered candidate TextMate scopes per syntax category.
 fn syntax_scopes(category: SyntaxCategory) -> &'static [&'static str] {
@@ -691,9 +689,10 @@ fn build_raw(
     }
 
     let mut ansi: [Option<Candidate>; 16] = Default::default();
-    for (index, key) in ANSI_KEYS.iter().enumerate() {
-        ansi[index] = colors.get(key).map(|color| Candidate {
-            source_key: (*key).to_string(),
+    for (index, slot) in ansi.iter_mut().enumerate() {
+        let key = ansi_key(index);
+        *slot = colors.get(key.as_str()).map(|color| Candidate {
+            source_key: key,
             color: *color,
         });
     }

@@ -12,7 +12,9 @@ use vespertine_theme::document::{DocumentTheme, SyntaxCategory, SyntaxPalette};
 use vespertine_theme::theme::{SyntaxCategory as ThemeCategory, ThemeVariant};
 
 /// The twenty-four syntax categories of THM-002 R11, spelled as their theme keys.
-pub const CATEGORY_KEYS: [&str; 24] = [
+pub const CATEGORY_KEYS: [&str; 24] = join_keys([LEADING_KEYS, STRUCTURE_KEYS, MARKUP_KEYS]);
+
+const LEADING_KEYS: &[&str] = &[
     "comment",
     "keyword",
     "string",
@@ -31,13 +33,27 @@ pub const CATEGORY_KEYS: [&str; 24] = [
     "variable",
     "variableSpecial",
     "parameter",
-    "operator",
-    "punctuation",
-    "tag",
-    "attribute",
-    "label",
-    "invalid",
 ];
+
+const STRUCTURE_KEYS: &[&str] = &["operator", "punctuation", "tag"];
+
+const MARKUP_KEYS: &[&str] = &["attribute", "label", "invalid"];
+
+const fn join_keys(parts: [&[&'static str]; 3]) -> [&'static str; 24] {
+    let mut keys = [""; 24];
+    let mut filled = 0;
+    let mut part = 0;
+    while part < parts.len() {
+        let mut index = 0;
+        while index < parts[part].len() {
+            keys[filled] = parts[part][index];
+            filled += 1;
+            index += 1;
+        }
+        part += 1;
+    }
+    keys
+}
 
 impl TokenKind {
     /// The palette category key of this kind (TXT-007 R11; `embedded` uses `punctuation`).

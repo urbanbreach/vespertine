@@ -37,16 +37,16 @@ pub enum SourceKind {
 /// What the owner supplies with an import.
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub struct ImportOptions {
-    /// Family identifier.
-    pub family_id: String,
-    /// Family display name.
-    pub family_name: String,
     /// Source URL text; a blank value records the local path.
     pub source_url: String,
-    /// Revision; blank records `local`.
-    pub revision: String,
+    /// Family display name.
+    pub family_name: String,
     /// License text; blank records `User supplied`.
     pub license: String,
+    /// Family identifier.
+    pub family_id: String,
+    /// Revision; blank records `local`.
+    pub revision: String,
 }
 
 impl ImportOptions {
@@ -120,14 +120,14 @@ pub struct VariantReport {
 /// A variant that could not be compiled.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct VariantFailure {
-    /// The identifier the variant would have had.
-    pub id: String,
-    /// Display name.
-    pub name: String,
-    /// The source file.
-    pub path: PathBuf,
     /// Readable message.
     pub message: String,
+    /// The source file.
+    pub path: PathBuf,
+    /// Display name.
+    pub name: String,
+    /// The identifier the variant would have had.
+    pub id: String,
 }
 
 /// The result of compiling a source.

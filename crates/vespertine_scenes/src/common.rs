@@ -1,6 +1,6 @@
 //! Small helpers shared by the scenes.
 
-use vespertine::{Hsla, hsla, rgb};
+use vespertine::{Font, Hsla, TextRun, hsla, rgb};
 
 pub const INK: u32 = 0x1f2328;
 pub const BORDER: u32 = 0xd0d7de;
@@ -23,4 +23,16 @@ pub fn hsl_deg(hue_degrees: u32, saturation: f32, lightness: f32) -> Hsla {
         lightness,
         1.0,
     )
+}
+
+/// A single undecorated text run covering all of `text`.
+pub fn plain_run(text: &str, font: Font, color: Hsla) -> TextRun {
+    TextRun {
+        len: text.len(),
+        font,
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }
 }

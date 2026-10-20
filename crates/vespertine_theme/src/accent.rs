@@ -10,10 +10,11 @@ pub fn derive_accent(primary: Color, background: Color, appearance: Appearance) 
     let dark = appearance.is_dark();
     let primary = primary.ensure_contrast(background, 3.0);
     let on = primary.best_on_color();
-    let mut strong = primary;
-    if on.contrast(strong) < 4.5 {
-        strong = strong.ensure_contrast(on, 4.5);
-    }
+    let strong = if on.contrast(primary) < 4.5 {
+        primary.ensure_contrast(on, 4.5)
+    } else {
+        primary
+    };
     let light_glyph = if dark {
         primary.mix(Color::WHITE, 0.28)
     } else {

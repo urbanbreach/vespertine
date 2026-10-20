@@ -31,7 +31,7 @@ fn assert_step(label: &str, color: Rgba, hex: u32, alpha: f32) {
     );
 }
 
-const SYNTAX_KEYS: [&str; 24] = [
+const SYNTAX_KEYS_HEAD: [&str; 18] = [
     "comment",
     "keyword",
     "string",
@@ -50,13 +50,20 @@ const SYNTAX_KEYS: [&str; 24] = [
     "variable",
     "variableSpecial",
     "parameter",
-    "operator",
-    "punctuation",
-    "tag",
-    "attribute",
-    "label",
-    "invalid",
 ];
+
+const SYNTAX_KEYS_STRUCTURE: [&str; 3] = ["operator", "punctuation", "tag"];
+
+const SYNTAX_KEYS_MARKUP: [&str; 3] = ["attribute", "label", "invalid"];
+
+fn syntax_keys() -> Vec<&'static str> {
+    [
+        &SYNTAX_KEYS_HEAD[..],
+        &SYNTAX_KEYS_STRUCTURE[..],
+        &SYNTAX_KEYS_MARKUP[..],
+    ]
+    .concat()
+}
 
 #[test]
 fn a1_invalid_values_select_the_dark_base() {
@@ -275,7 +282,7 @@ fn a2_syntax_category_defaults() {
             ("label", amber),
             ("invalid", danger_hex),
         ];
-        assert_eq!(expected.map(|(key, _)| key), SYNTAX_KEYS);
+        assert_eq!(syntax_keys(), expected.map(|(key, _)| key));
         for (key, hex) in expected {
             let category = SyntaxCategory::from_key(key).unwrap();
             assert_eq!(category.key(), key);
@@ -287,7 +294,7 @@ fn a2_syntax_category_defaults() {
             );
         }
     }
-    assert_eq!(SyntaxCategory::ALL.map(SyntaxCategory::key), SYNTAX_KEYS);
+    assert_eq!(syntax_keys(), SyntaxCategory::ALL.map(SyntaxCategory::key));
     assert!(SyntaxCategory::from_key("nope").is_none());
     // Softened indigo is the 0.72-saturation version of the accent base.
     assert_step(

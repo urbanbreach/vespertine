@@ -947,12 +947,8 @@ impl Library {
     /// naming one is repointed.
     pub fn remove(&mut self, id: &str) -> Result<Vec<String>, LibraryError> {
         let position = self.position(id)?;
-        let variant_ids: Vec<String> = self.entries[position]
-            .family
-            .variants
-            .iter()
-            .map(|variant| variant.id.clone())
-            .collect();
+        let family = &self.entries[position].family;
+        let variant_ids: Vec<String> = family.variants.iter().map(|v| v.id.clone()).collect();
         let mut entries = self.entries.clone();
         entries.remove(position);
         self.commit(entries)?;

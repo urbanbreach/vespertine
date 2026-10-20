@@ -1,11 +1,11 @@
 //! FID-RND-009-1/2: vector primitives and text painted from a canvas, and canvas text equal to
 //! ordinary text under a shared clip.
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, Corners, IntoElement, LineCap, LineJoin, ParentElement, PathBuilder,
-    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, TextRun, Window, canvas, div, fill,
+    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, Window, canvas, div, fill,
     font, point, px, size,
 };
 
@@ -22,14 +22,7 @@ fn root() -> vespertine::Div {
 
 /// One shaped line in the default font settings with its line box top-left at `origin`.
 fn paint_text(text: &'static str, origin: Point<Pixels>, window: &mut Window, cx: &mut App) {
-    let run = TextRun {
-        len: text.len(),
-        font: font(SANS),
-        color: hex(0xF0F1F3),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let run = plain_run(text, font(SANS), hex(0xF0F1F3));
     let line = window
         .text_system()
         .shape_line(text.into(), px(14.), &[run], None);

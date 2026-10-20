@@ -10,22 +10,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppearanceMode {
+    /// Always dark.
+    Dark,
+    /// Always light.
+    Light,
     /// Follow the appearance last reported by the platform.
     #[default]
     System,
-    /// Always light.
-    Light,
-    /// Always dark.
-    Dark,
 }
 
 impl AppearanceMode {
     /// The effective appearance given the last platform report.
     pub fn effective(self, platform: Appearance) -> Appearance {
         match self {
-            AppearanceMode::System => platform,
-            AppearanceMode::Light => Appearance::Light,
             AppearanceMode::Dark => Appearance::Dark,
+            AppearanceMode::Light => Appearance::Light,
+            AppearanceMode::System => platform,
         }
     }
 }
@@ -33,17 +33,17 @@ impl AppearanceMode {
 /// One variant identifier for light and one for dark.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ThemeSelection {
-    /// Variant used while the effective appearance is light.
-    pub light: String,
     /// Variant used while the effective appearance is dark.
     pub dark: String,
+    /// Variant used while the effective appearance is light.
+    pub light: String,
 }
 
 impl Default for ThemeSelection {
     fn default() -> Self {
         Self {
-            light: DEFAULT_LIGHT_ID.to_string(),
             dark: DEFAULT_DARK_ID.to_string(),
+            light: DEFAULT_LIGHT_ID.to_string(),
         }
     }
 }
@@ -98,13 +98,13 @@ pub enum AccentSelection {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SurfacePreference {
+    /// Opaque surfaces.
+    Opaque,
+    /// Frosted surfaces.
+    Frosted,
     /// Use the variant's recommendation.
     #[default]
     ThemeDefault,
-    /// Frosted surfaces.
-    Frosted,
-    /// Opaque surfaces.
-    Opaque,
 }
 
 impl SurfacePreference {

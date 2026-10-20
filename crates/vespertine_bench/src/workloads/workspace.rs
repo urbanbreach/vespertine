@@ -137,9 +137,9 @@ impl Render for Workspace {
                     .child(self.left.clone())
                     .child(
                         div()
-                            .flex_1()
-                            .flex()
                             .flex_col()
+                            .flex()
+                            .flex_1()
                             .children(self.center.iter().cloned()),
                     )
                     .child(self.right.clone()),

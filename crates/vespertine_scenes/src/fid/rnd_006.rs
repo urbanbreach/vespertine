@@ -19,17 +19,17 @@ fn texture_a(window: &Window) -> Option<SurfaceSource> {
     let (device, queue) = context.downcast::<wgpu::Device, wgpu::Queue>()?;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("fid_rnd_006_texture_a"),
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        dimension: wgpu::TextureDimension::D2,
+        view_formats: &[],
+        mip_level_count: 1,
+        sample_count: 1,
         size: wgpu::Extent3d {
             width: TEXTURE_SIDE,
             height: TEXTURE_SIDE,
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
     });
     let mut texels = Vec::with_capacity((TEXTURE_SIDE * TEXTURE_SIDE * 4) as usize);
     for _row in 0..TEXTURE_SIDE {

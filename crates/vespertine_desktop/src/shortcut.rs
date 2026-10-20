@@ -232,20 +232,20 @@ impl Shortcut {
     /// The X11 keysym of the key.
     pub fn x11_keysym(&self) -> u32 {
         match self.key.as_str() {
-            "space" => 0x20,
-            "tab" => 0xff09,
-            "enter" => 0xff0d,
-            "backspace" => 0xff08,
-            "delete" => 0xffff,
-            "insert" => 0xff63,
             "up" => 0xff52,
             "down" => 0xff54,
             "left" => 0xff51,
             "right" => 0xff53,
-            "home" => 0xff50,
-            "end" => 0xff57,
+            "space" => 0x20,
             "pageup" => 0xff55,
             "pagedown" => 0xff56,
+            "home" => 0xff50,
+            "end" => 0xff57,
+            "delete" => 0xffff,
+            "insert" => 0xff63,
+            "backspace" => 0xff08,
+            "enter" => 0xff0d,
+            "tab" => 0xff09,
             key => {
                 if let Some(number) = function_key_number(key) {
                     0xffbe + number - 1

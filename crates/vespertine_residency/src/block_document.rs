@@ -115,13 +115,8 @@ pub struct BlockDocument<M: BlockModel> {
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
-    let mut length = a
-        .as_bytes()
-        .iter()
-        .zip(b.as_bytes())
-        .take_while(|(x, y)| x == y)
-        .count();
-    while !(a.is_char_boundary(length) && b.is_char_boundary(length)) {
+    let mut length = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+    while !a.is_char_boundary(length) || !b.is_char_boundary(length) {
         length -= 1;
     }
     length

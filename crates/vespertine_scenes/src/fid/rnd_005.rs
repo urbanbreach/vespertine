@@ -1,11 +1,11 @@
 //! FID-RND-005-1/2: composite-time transformed and blurred glyph painting (a rotated and a
 //! blurred "A"; blurred and rotated bold text inside a rounded clip with a right edge fade).
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, EdgeFade, FontId, GlyphId, Hsla, IntoElement, ParentElement, Pixels,
-    Point, ScaledPixels, Styled, TextRun, TransformationMatrix, Window, canvas, div, font, point,
+    Point, ScaledPixels, Styled, TransformationMatrix, Window, canvas, div, font, point,
     px, radians, size,
 };
 
@@ -25,14 +25,7 @@ fn shape(window: &mut Window, text: &str, bold: bool, size: f32) -> Glyphs {
     if bold {
         font = font.bold();
     }
-    let run = TextRun {
-        len: text.len(),
-        font,
-        color: hex(0xFFFFFF),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let run = plain_run(text, font, hex(0xFFFFFF));
     let line = window
         .text_system()
         .shape_line(text.to_string().into(), px(size), &[run], None);

@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use crate::common::{SANS, hex};
+use crate::common::{plain_run, SANS, hex};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, ContentMask, Corners, EdgeFade, Hsla, IntoElement, Pixels,
-    RenderImage, Styled, TextAlign, TextRun, Window, canvas, fill, font, point, px, size,
+    RenderImage, Styled, TextAlign, Window, canvas, fill, font, point, px, size,
 };
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
@@ -33,14 +33,7 @@ fn text_at(
     left: f32,
     top: f32,
 ) {
-    let run = TextRun {
-        len: text.len(),
-        font: font(SANS),
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
+    let run = plain_run(text, font(SANS), color);
     let line = window
         .text_system()
         .shape_line(text.into(), px(size_px), &[run], None);

@@ -12,14 +12,14 @@ use vespertine::{Hsla, Rgba};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Color {
+    /// Alpha channel (255 is opaque).
+    pub a: u8,
     /// Red channel.
     pub r: u8,
     /// Green channel.
     pub g: u8,
     /// Blue channel.
     pub b: u8,
-    /// Alpha channel (255 is opaque).
-    pub a: u8,
 }
 
 /// Failure to parse the text form of a [`Color`].
@@ -115,15 +115,16 @@ impl Color {
     /// Relative luminance of the color's RGB channels (alpha ignored): linearized channels
     /// weighted 0.2126, 0.7152, 0.0722.
     pub fn luminance(self) -> f64 {
-        fn linear(channel: u8) -> f64 {
+        let linear = |channel: u8| -> f64 {
             let value = f64::from(channel) / 255.0;
-            if value <= 0.04045 {
-                value / 12.92
-            } else {
+            if value > 0.04045 {
                 ((value + 0.055) / 1.055).powf(2.4)
+            } else {
+                value / 12.92
             }
-        }
-        0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
+        };
+        let [red, green, blue] = [self.r, self.g, self.b].map(linear);
+        0.2126 * red + 0.7152 * green + 0.0722 * blue
     }
 
     /// WCAG contrast ratio of this color as a foreground over `background`. A translucent
@@ -178,14 +179,11 @@ impl Color {
 
 impl fmt::Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.a == 255 {
-            write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+        let Color { r, g, b, a } = *self;
+        if a == 255 {
+            write!(f, "#{r:02x}{g:02x}{b:02x}")
         } else {
-            write!(
-                f,
-                "#{:02x}{:02x}{:02x}{:02x}",
-                self.r, self.g, self.b, self.a
-            )
+            write!(f, "#{r:02x}{g:02x}{b:02x}{a:02x}")
         }
     }
 }

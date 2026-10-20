@@ -10,13 +10,13 @@
 //! image under a 64 MiB residency budget; rows are requested while they intersect the viewport
 //! and released when they leave. Part B is identical in both scenes.
 
-use crate::common::{INK, SANS, WHITE, hex};
+use crate::common::{plain_run, INK, SANS, WHITE, hex};
 use crate::corpus;
 use crate::scene::{Scene, register_scene};
 use std::sync::Arc;
 use vespertine::{
     AnyElement, App, AppContext as _, Entity, Font, ImageSource, IntoElement, ParentElement,
-    RenderImage, SharedString, Styled, TextRun, Window, WindowTextSystem, div, font, hsla, img, px,
+    RenderImage, SharedString, Styled, Window, WindowTextSystem, div, font, hsla, img, px,
 };
 use vespertine_residency::{
     BlockDocument, BlockModel, ImageResidency, ParsedBlock, ResidencyConfig,
@@ -65,14 +65,7 @@ impl BlockModel for Paragraphs {
         if text.is_empty() {
             return LINE_HEIGHT;
         }
-        let run = TextRun {
-            len: text.len(),
-            font: self.font.clone(),
-            color: hex(INK),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
+        let run = plain_run(text, self.font.clone(), hex(INK));
         self.text_system
             .shape_text(
                 SharedString::from(text.to_string()),
