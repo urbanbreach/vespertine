@@ -1,7 +1,7 @@
 // Floating surfaces and dismissal layers (CMP-002 R1-R10, R17).
 
 import React from "react";
-import { defaultFinalFocus, mergeStyles, pushDismissLayer, resolveFocusTarget } from "@vespertine/host";
+import { defaultFinalFocus, isTopDismissLayer, mergeStyles, pushDismissLayer, resolveFocusTarget } from "@vespertine/host";
 import { flushSync, useRenderer } from "../root.js";
 import { renderSlot } from "./slot.js";
 
@@ -109,20 +109,21 @@ const LayerContext = React.createContext(null);
  *
  * - Only the top layer receives an unprevented Escape. `onEscapeKeyDown(event)` runs first and
  *   may `preventDefault()` to keep the layer open; otherwise `onDismiss("escape")` runs.
- * - An outside press calls `onDismiss("outside")`; `pressFlag` (a trigger's press flag) makes it
- *   ignore a press on the layer's own trigger.
+ * - An outside press calls `onDismiss("outside", { top })` (`top`: whether the layer is the top
+ *   of the stack, so presses belonging to a nested layer can be told apart); `pressFlag` (a
+ *   trigger's press flag) makes it ignore a press on the layer's own trigger.
  * - `initialFocus` and `finalFocus` accept a node, a node reference, a boolean or a function
  *   (`finalFocus` receives the focus owner captured at open time); unset or `true` selects the
  *   default: `defaultFocus()` for the initial focus, and for the final focus the captured owner
  *   if focus is still inside the layer or nowhere (falling back to `trigger()`), so a press that
- *   moved focus elsewhere keeps it.
+ *   moved focus elsewhere keeps it; with `preferTrigger` a mounted trigger comes first.
  * - While `open` turns false the layer closes at once (focus restoration included) even if the
  *   caller keeps the content mounted for an exit animation.
  *
  * @param {object} props
  */
 export const DismissableLayer = React.forwardRef(function DismissableLayer(
-  { open = true, children, onEscapeKeyDown, onDismiss, initialFocus, finalFocus, defaultFocus, trigger, pressFlag, onOutsideDown, ...rest },
+  { open = true, children, onEscapeKeyDown, onDismiss, initialFocus, finalFocus, defaultFocus, trigger, preferTrigger, pressFlag, onOutsideDown, ...rest },
   ref,
 ) {
   const renderer = useRenderer();
@@ -132,7 +133,7 @@ export const DismissableLayer = React.forwardRef(function DismissableLayer(
   // parent (child effects run first) can still declare its ancestry.
   const [layer] = React.useState(() => ({ parent, onEscape() {}, initialFocus: () => null, finalFocus: () => null }));
   const options = React.useRef(null);
-  options.current = { onEscapeKeyDown, onDismiss, initialFocus, finalFocus, defaultFocus, trigger, pressFlag, onOutsideDown };
+  options.current = { onEscapeKeyDown, onDismiss, initialFocus, finalFocus, defaultFocus, trigger, preferTrigger, pressFlag, onOutsideDown };
 
   React.useEffect(() => {
     if (!open) return undefined;
@@ -154,21 +155,29 @@ export const DismissableLayer = React.forwardRef(function DismissableLayer(
     layer.initialFocus = () =>
       resolveFocusTarget(options.current.initialFocus, () => options.current.defaultFocus?.(nodeRef.current) ?? null);
     layer.finalFocus = (previous) => {
-      const fallback = defaultFinalFocus(renderer, { layer: () => nodeRef.current, trigger: options.current.trigger });
+      const fallback = defaultFinalFocus(renderer, {
+        layer: () => nodeRef.current,
+        trigger: options.current.trigger,
+        triggerFirst: options.current.preferTrigger === true,
+      });
       const choice = options.current.finalFocus;
       const target = typeof choice === "function" ? () => choice(previous) : choice;
       return resolveFocusTarget(target, () => fallback(previous));
     };
+    // The focus target must exist natively before the layer moves focus to it (a layer that is
+    // open on the very first commit registers before that commit's batch was flushed).
+    nodeRef.current?.tree?.flush();
     return pushDismissLayer(renderer, layer);
   }, [open, renderer, layer]);
 
   const handleOutside = React.useCallback((event) => {
     const { onOutsideDown, onDismiss, pressFlag } = options.current;
     onOutsideDown?.(event);
+    const info = { top: isTopDismissLayer(renderer, layer) };
     // The deferred dismissal runs outside the event dispatch, so it applies synchronously itself.
-    if (pressFlag) pressFlag.defer(() => flushSync(() => onDismiss?.("outside")));
-    else onDismiss?.("outside");
-  }, []);
+    if (pressFlag) pressFlag.defer(() => flushSync(() => onDismiss?.("outside", info)));
+    else onDismiss?.("outside", info);
+  }, [renderer, layer]);
 
   const setRef = React.useCallback(
     (node) => {

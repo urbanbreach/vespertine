@@ -142,7 +142,7 @@ declare module "react" {
   }
 }
 
-// ---- Headless components (CMP-001, CMP-002, CMP-004, CMP-005) ----------------------------------
+// ---- Headless components (CMP-001, CMP-002, CMP-003, CMP-004, CMP-005, CMP-006) ----------------------------------
 
 export type StyleOrFunction<State> = Record<string, unknown> | ((state: State) => Record<string, unknown> | undefined);
 
@@ -211,11 +211,13 @@ export const FloatingLayer: React.ForwardRefExoticComponent<FloatingLayerProps &
 export interface DismissableLayerProps extends HostProps {
   open?: boolean;
   onEscapeKeyDown?(event: { key: "escape"; preventDefault(): void; readonly defaultPrevented: boolean }): void;
-  onDismiss?(reason: "escape" | "outside"): void;
+  onDismiss?(reason: "escape" | "outside", info?: { top: boolean }): void;
   initialFocus?: FocusTarget;
   finalFocus?: boolean | HostRef | { current: HostRef | null } | ((previous: number | null) => HostRef | boolean | null | undefined);
   defaultFocus?(node: HostRef | null): number | null;
   trigger?(): HostRef | null;
+  /** A mounted trigger wins over the captured focus owner as the default final focus. */
+  preferTrigger?: boolean;
   pressFlag?: { consumes(): boolean; defer(fn: () => void): void };
 }
 export const DismissableLayer: React.ForwardRefExoticComponent<DismissableLayerProps & React.RefAttributes<HostRef>>;
@@ -274,4 +276,95 @@ export namespace Select {
   const Separator: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
   const ScrollUpButton: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
   const ScrollDownButton: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+}
+
+export namespace Dialog {
+  /** Renders no element: it provides the dialog state to its parts. */
+  function Root(props: {
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?(open: boolean): void;
+    /** Modal dialogs occlude the page and trap Tab (default true). */
+    modal?: boolean;
+    /** A press on the backdrop (or outside a nonmodal popup) does not close the dialog. */
+    disablePointerDismissal?: boolean;
+    /** Escape does not close the dialog (it is still consumed by it). */
+    disableEscapeDismissal?: boolean;
+    children?: ReactNode;
+  }): ReactNode;
+  type ActivationProps = Omit<SlotProps, "style"> & {
+    disabled?: boolean;
+    style?: StyleOrFunction<{ open: boolean; disabled: boolean }>;
+    onClick?(event: NativeEvent): void;
+  };
+  /** Requests `open = true` after the caller's activation; exposes `aria-expanded`. */
+  const Trigger: React.ForwardRefExoticComponent<ActivationProps & React.RefAttributes<HostRef>>;
+  /** Requests `open = false` after the caller's activation. */
+  const Close: React.ForwardRefExoticComponent<ActivationProps & React.RefAttributes<HostRef>>;
+  /** The full-window deferred layer (priority 0), mounted only while open. */
+  const Portal: React.ForwardRefExoticComponent<HostProps & React.RefAttributes<HostRef>>;
+  /** Absolute, inset 0; a pointer press runs the caller's `onPointerDown`, then closes the dialog. */
+  const Backdrop: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Popup: React.ForwardRefExoticComponent<
+    HostProps & {
+      initialFocus?: FocusTarget;
+      finalFocus?: DismissableLayerProps["finalFocus"];
+      onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"];
+    } & React.RefAttributes<HostRef>
+  >;
+  /** Role `heading` at level 2 unless overridden. */
+  const Title: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Description: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+}
+
+export namespace Combobox {
+  type ItemState = { selected: boolean; highlighted: boolean; disabled: boolean };
+  const Root: React.ForwardRefExoticComponent<
+    HostProps & {
+      items?: readonly any[];
+      /** A string, or an array of strings when `multiple`; null for none. */
+      value?: string | string[] | null;
+      defaultValue?: string | string[] | null;
+      onValueChange?(value: any): void;
+      inputValue?: string;
+      defaultInputValue?: string;
+      onInputValueChange?(value: string): void;
+      open?: boolean;
+      defaultOpen?: boolean;
+      onOpenChange?(open: boolean): void;
+      multiple?: boolean;
+      disabled?: boolean;
+      /** Highlight the first enabled filtered item on every edit. */
+      autoHighlight?: boolean | "always";
+      /** `null` disables filtering; React passes the raw query. */
+      filter?: ((item: any, query: string, toString: (item: any) => string) => boolean) | null;
+      itemToStringValue?(item: any): string;
+    } & React.RefAttributes<HostRef>
+  >;
+  const Input: React.ForwardRefExoticComponent<HostProps & { readOnly?: boolean } & React.RefAttributes<HostRef>>;
+  const Trigger: React.ForwardRefExoticComponent<
+    Omit<SlotProps, "style"> & { disabled?: boolean; style?: StyleOrFunction<{ open: boolean; disabled: boolean }> } & React.RefAttributes<HostRef>
+  >;
+  const Value: React.ForwardRefExoticComponent<
+    Omit<HostProps, "children"> & { placeholder?: ReactNode; children?: ReactNode | ((value: string | string[] | null) => ReactNode) } & React.RefAttributes<HostRef>
+  >;
+  const Content: React.ForwardRefExoticComponent<
+    FloatingLayerProps & { onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"] } & React.RefAttributes<HostRef>
+  >;
+  const List: React.ForwardRefExoticComponent<
+    Omit<SlotProps, "children"> & { children?: ReactNode | ((item: any, index: number) => ReactNode) } & React.RefAttributes<HostRef>
+  >;
+  const Item: React.ForwardRefExoticComponent<
+    Omit<SlotProps, "style" | "children"> & {
+      value: string;
+      disabled?: boolean;
+      style?: StyleOrFunction<ItemState>;
+      children?: ReactNode | ((state: ItemState) => ReactNode);
+    } & React.RefAttributes<HostRef>
+  >;
+  /** Mounts only when no item passes the filter. */
+  const Empty: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Group: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Label: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
+  const Separator: React.ForwardRefExoticComponent<SlotProps & React.RefAttributes<HostRef>>;
 }

@@ -158,6 +158,10 @@ function createState(renderer) {
   }
 
   return {
+    /** Whether `layer` is the top layer of the stack (the one that owns Escape). */
+    isTopLayer(layer) {
+      return layers.length > 0 && layers[layers.length - 1].layer === layer;
+    },
     ids: {
       next() {
         return nextId++;
@@ -209,4 +213,9 @@ export function createRendererState(renderer) {
 
 export function pushDismissLayer(renderer, layer, options) {
   return createRendererState(renderer).pushLayer(layer, options);
+}
+
+/** Whether `layer` (as registered with `pushDismissLayer`) is the top layer of the renderer's stack. */
+export function isTopDismissLayer(renderer, layer) {
+  return createRendererState(renderer).isTopLayer(layer);
 }

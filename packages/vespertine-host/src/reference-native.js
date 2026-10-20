@@ -101,6 +101,14 @@ export function createReferenceNative() {
       this.calls.push(["focusPrevious"]);
     }
 
+    focusNextWithin(id) {
+      this.calls.push(["focusNextWithin", id]);
+    }
+
+    focusPreviousWithin(id) {
+      this.calls.push(["focusPreviousWithin", id]);
+    }
+
     scrollIntoView(id, options) {
       this.calls.push(["scrollIntoView", id, options]);
     }

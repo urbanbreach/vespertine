@@ -587,22 +587,22 @@ test("CMP-005 A2: the highlight starts on the selected item, also when it mounts
   const ui = mount(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(false) }));
   assert.deepEqual(highlighted(ui, ["a", "c"]), [], "no selected item is registered yet");
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(true) }));
-  await settle();
+  await settle(40);
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["c"], "the selected item that mounts late takes the highlight");
   ui.key("content", "up");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["a"]);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: [] }));
-  await settle();
+  await settle(40);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(true) }));
-  await settle();
+  await settle(40);
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["c"]);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(false) }));
-  await settle();
+  await settle(40);
   assert.deepEqual(highlighted(ui, ["a", "c"]), [], "removing the selected, highlighted item leaves no highlight");
   ui.key("content", "down");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["a"]);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "a" }, items: [] }));
-  await settle();
+  await settle(40);
   assert.deepEqual(highlighted(ui, ["a", "c"]), []);
 });
 

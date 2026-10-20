@@ -7,7 +7,7 @@ export {
   unregisterEventHandler,
   unregisterEventHandlers,
 } from "./handlers.js";
-export { createRendererState, pushDismissLayer } from "./renderer-state.js";
+export { createRendererState, isTopDismissLayer, pushDismissLayer } from "./renderer-state.js";
 export {
   observeSelectedText,
   observeWindowInsets,
@@ -53,14 +53,29 @@ export {
   createPressFlag,
   createTooltipProvider,
   createTooltipRoot,
+  DIALOG_PORTAL_PRIORITY,
+  DIALOG_TITLE_LEVEL,
+  backdropStyle,
   defaultFinalFocus,
+  dismissalCloses,
+  displayText,
   edgeIndex,
+  filterItems,
+  firstEnabled,
+  highlightAfterEdit,
+  identityString,
   isControlled,
   isWithin,
   mergeSlotProps,
   mergeStyles,
+  popupStyle,
+  portalProps,
   rankMatches,
   requestControlledChange,
   resolveStyle,
+  selectionList,
+  stepHighlight,
   stepIndex,
+  toggleSelection,
+  trapTab,
 } from "./components/index.js";

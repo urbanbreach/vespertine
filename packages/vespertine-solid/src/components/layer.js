@@ -10,7 +10,7 @@
 // turns false (or the layer is disposed), not when the content is finally removed.
 
 import { batch, createContext, createEffect, mergeProps, onCleanup, splitProps, untrack, useContext } from "solid-js";
-import { defaultFinalFocus, mergeStyles, pushDismissLayer, resolveFocusTarget } from "@vespertine/host";
+import { defaultFinalFocus, isTopDismissLayer, mergeStyles, pushDismissLayer, resolveFocusTarget } from "@vespertine/host";
 import { createComponent, createElement, insert, spread } from "../renderer.js";
 import { useRenderer } from "../root.js";
 import { renderSlot } from "./slot.js";
@@ -86,13 +86,14 @@ const LayerContext = createContext(null);
  *
  * - Only the top layer receives an unprevented Escape. `onEscapeKeyDown(event)` runs first and
  *   may `preventDefault()` to keep the layer open; otherwise `onDismiss("escape")` runs.
- * - An outside press calls `onDismiss("outside")`; `pressFlag` (a trigger's press flag) makes it
- *   ignore a press on the layer's own trigger.
+ * - An outside press calls `onDismiss("outside", { top })` (`top`: whether the layer is the top
+ *   of the stack, so presses belonging to a nested layer can be told apart); `pressFlag` (a
+ *   trigger's press flag) makes it ignore a press on the layer's own trigger.
  * - `initialFocus` and `finalFocus` accept a node, a node reference, a boolean or a function
  *   (`finalFocus` receives the focus owner captured at open time); unset or `true` selects the
  *   default: `defaultFocus()` for the initial focus, and for the final focus the captured owner
  *   if focus is still inside the layer or nowhere (falling back to `trigger()`), so a press that
- *   moved focus elsewhere keeps it.
+ *   moved focus elsewhere keeps it; with `preferTrigger` a mounted trigger comes first.
  * - While `open` turns false the layer closes at once (focus restoration included) even if the
  *   caller keeps the content mounted for an exit animation.
  *
@@ -108,6 +109,7 @@ export function DismissableLayer(props) {
     "finalFocus",
     "defaultFocus",
     "trigger",
+    "preferTrigger",
     "pressFlag",
     "onOutsideDown",
     "ref",
@@ -137,7 +139,7 @@ export function DismissableLayer(props) {
     };
     layer.initialFocus = () => resolveFocusTarget(local.initialFocus, () => local.defaultFocus?.(node) ?? null);
     layer.finalFocus = (previous) => {
-      const fallback = defaultFinalFocus(renderer, { layer: () => node, trigger: local.trigger });
+      const fallback = defaultFinalFocus(renderer, { layer: () => node, trigger: local.trigger, triggerFirst: local.preferTrigger === true });
       const choice = local.finalFocus;
       const target = typeof choice === "function" ? () => choice(previous) : choice;
       return resolveFocusTarget(target, () => fallback(previous));
@@ -150,17 +152,18 @@ export function DismissableLayer(props) {
 
   const handleOutside = (event) => {
     local.onOutsideDown?.(event);
+    const info = { top: isTopDismissLayer(renderer, layer) };
     // The deferred dismissal runs outside the event dispatch, so it applies synchronously itself.
     const tree = node?.tree;
     const dismiss = () => {
       try {
-        batch(() => local.onDismiss?.("outside"));
+        batch(() => local.onDismiss?.("outside", info));
       } finally {
         tree?.flush();
       }
     };
     if (local.pressFlag) local.pressFlag.defer(dismiss);
-    else local.onDismiss?.("outside");
+    else local.onDismiss?.("outside", info);
   };
 
   return createComponent(LayerContext.Provider, {

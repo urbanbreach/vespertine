@@ -13,6 +13,8 @@ export { ErrorView, normalizeFailure, stackRows } from "./error-view.js";
 export { findRanges, useTextSearch, useWindowInsets, useWindowSize } from "./hooks.js";
 export {
   Button,
+  Combobox,
+  Dialog,
   DismissableLayer,
   FloatingLayer,
   Select,

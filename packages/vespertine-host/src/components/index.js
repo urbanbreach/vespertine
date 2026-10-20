@@ -11,3 +11,22 @@ export {
   createTooltipRoot,
 } from "./tooltip.js";
 export { defaultFinalFocus, isWithin } from "./focus.js";
+export {
+  DIALOG_PORTAL_PRIORITY,
+  DIALOG_TITLE_LEVEL,
+  backdropStyle,
+  dismissalCloses,
+  popupStyle,
+  portalProps,
+  trapTab,
+} from "./dialog.js";
+export {
+  displayText,
+  filterItems,
+  firstEnabled,
+  highlightAfterEdit,
+  identityString,
+  selectionList,
+  stepHighlight,
+  toggleSelection,
+} from "./combobox.js";

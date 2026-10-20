@@ -62,7 +62,7 @@ export function createTextSearch(options: () => {
 };
 export function findRanges(texts: string | string[], query: string, options?: { caseSensitive?: boolean; wholeWord?: boolean }): [number, number][];
 
-// ---- Headless components (CMP-001, CMP-002, CMP-004, CMP-005) ----------------------------------
+// ---- Headless components (CMP-001, CMP-002, CMP-003, CMP-004, CMP-005, CMP-006) ----------------------------------
 //
 // Solid differences from React (see the header comments of src/components): asChild needs one
 // intrinsic host element child and replaces (never merges) style; the caller style of a floating
@@ -174,12 +174,14 @@ export function anchoredProps(options?: {
 export interface DismissableLayerProps extends SlotProps {
   open?: boolean;
   onEscapeKeyDown?(event: { key: "escape"; preventDefault(): void; readonly defaultPrevented: boolean }): void;
-  onDismiss?(reason: "escape" | "outside"): void;
+  onDismiss?(reason: "escape" | "outside", info?: { top: boolean }): void;
   onOutsideDown?(event: NativeEvent): void;
   initialFocus?: FocusTarget;
   finalFocus?: boolean | HostElement | { current: HostElement | null } | ((previous: number | null) => HostElement | boolean | null | undefined);
   defaultFocus?(node: HostElement | null): number | null;
   trigger?(): HostElement | null;
+  /** A mounted trigger wins over the captured focus owner as the default final focus. */
+  preferTrigger?: boolean;
   pressFlag?: { consumes(): boolean; defer(fn: () => void): void };
 }
 export function DismissableLayer(props: DismissableLayerProps): SolidJSX.Element;
@@ -255,6 +257,93 @@ export namespace Select {
   function ScrollDownButton(props: SlotProps): SolidJSX.Element;
   /** The text of resolved children (strings, numbers and host nodes). */
   function textOf(node: unknown): string;
+}
+
+export namespace Dialog {
+  /** Renders no element: it provides the dialog state to its parts. */
+  function Root(props: {
+    open?: boolean;
+    defaultOpen?: boolean;
+    onOpenChange?(open: boolean): void;
+    /** Modal dialogs occlude the page and trap Tab (default true). */
+    modal?: boolean;
+    /** A press on the backdrop (or outside a nonmodal popup) does not close the dialog. */
+    disablePointerDismissal?: boolean;
+    /** Escape does not close the dialog (it is still consumed by it). */
+    disableEscapeDismissal?: boolean;
+    children?: SolidJSX.Element;
+  }): SolidJSX.Element;
+  type ActivationProps = Omit<SlotProps, "style"> & {
+    disabled?: boolean;
+    style?: StyleOrFunction<{ open: boolean; disabled: boolean }>;
+    onClick?(event: NativeEvent): void;
+  };
+  /** Requests `open = true` after the caller's activation; exposes `aria-expanded`. */
+  function Trigger(props: ActivationProps): SolidJSX.Element;
+  /** Requests `open = false` after the caller's activation. */
+  function Close(props: ActivationProps): SolidJSX.Element;
+  /** The full-window deferred layer (priority 0), mounted only while open. */
+  function Portal(props: SlotProps): SolidJSX.Element;
+  /** Absolute, inset 0; a pointer press runs the caller's `onPointerDown`, then closes the dialog. */
+  function Backdrop(props: SlotProps): SolidJSX.Element;
+  function Popup(
+    props: SlotProps & {
+      initialFocus?: FocusTarget;
+      finalFocus?: DismissableLayerProps["finalFocus"];
+      onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"];
+    },
+  ): SolidJSX.Element;
+  /** Role `heading` at level 2 unless overridden. */
+  function Title(props: SlotProps): SolidJSX.Element;
+  function Description(props: SlotProps): SolidJSX.Element;
+}
+
+export namespace Combobox {
+  type ItemState = { readonly selected: boolean; readonly highlighted: boolean; readonly disabled: boolean };
+  function Root(
+    props: Omit<SlotProps, "asChild"> & {
+      items?: readonly any[];
+      /** A string, or an array of strings when `multiple`; null for none. */
+      value?: string | string[] | null;
+      defaultValue?: string | string[] | null;
+      onValueChange?(value: any): void;
+      inputValue?: string;
+      defaultInputValue?: string;
+      onInputValueChange?(value: string): void;
+      open?: boolean;
+      defaultOpen?: boolean;
+      onOpenChange?(open: boolean): void;
+      multiple?: boolean;
+      disabled?: boolean;
+      /** Highlight the first enabled filtered item on every edit. */
+      autoHighlight?: boolean | "always";
+      /** `null` disables filtering; Solid passes the trimmed lowercase query. */
+      filter?: ((item: any, query: string, toString: (item: any) => string) => boolean) | null;
+      itemToStringValue?(item: any): string;
+    },
+  ): SolidJSX.Element;
+  function Input(props: Omit<SlotProps, "asChild"> & { readOnly?: boolean }): SolidJSX.Element;
+  function Trigger(
+    props: Omit<SlotProps, "style"> & { disabled?: boolean; style?: StyleOrFunction<{ open: boolean; disabled: boolean }> },
+  ): SolidJSX.Element;
+  function Value(
+    props: Omit<SlotProps, "asChild" | "children"> & { placeholder?: SolidJSX.Element; children?: SolidJSX.Element | ((value: string | string[] | null) => SolidJSX.Element) },
+  ): SolidJSX.Element;
+  function Content(props: FloatingLayerProps & { onEscapeKeyDown?: DismissableLayerProps["onEscapeKeyDown"] }): SolidJSX.Element;
+  function List(props: Omit<SlotProps, "children"> & { children?: SolidJSX.Element | ((item: any, index: number) => SolidJSX.Element) }): SolidJSX.Element;
+  function Item(
+    props: Omit<SlotProps, "style" | "children"> & {
+      value: string;
+      disabled?: boolean;
+      style?: StyleOrFunction<ItemState>;
+      children?: SolidJSX.Element | ((state: ItemState) => SolidJSX.Element);
+    },
+  ): SolidJSX.Element;
+  /** Mounts only when no item passes the filter. */
+  function Empty(props: SlotProps): SolidJSX.Element;
+  function Group(props: SlotProps): SolidJSX.Element;
+  function Label(props: SlotProps): SolidJSX.Element;
+  function Separator(props: SlotProps): SolidJSX.Element;
 }
 
 declare global {

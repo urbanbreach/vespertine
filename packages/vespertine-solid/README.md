@@ -31,17 +31,31 @@ render(() => <Counter />, { window: { title: "Counter" } });
 * Primitives: `createWindowSize`, `createWindowInsets`, `createSelectedText`, `createTextSearch` and the
   shared `findRanges`. Context access: `useOptionalRendererContext` (undefined outside a root) and
   `useRendererContext` (throws).
-* Headless components (CMP-001, CMP-002, CMP-004, CMP-005): `Button` and `buttonProps` with
+* Headless components (CMP-001 to CMP-006): `Button` and `buttonProps` with
   `createButtonLatch`, `renderSlot` (`asChild` composition), `createControllableState` (returns
   `[accessor, request]`), `FloatingLayer`, `DismissableLayer`, `createPresence`, the compound
-  `Tooltip` (Provider, Root, Trigger, Content) and `Select` (Root, Trigger, Value, Content, Item,
-  Group, Label, Separator, ScrollUpButton, ScrollDownButton). Components never destructure props, so
-  reactive getters stay reactive. Solid-specific behavior: `asChild` needs exactly one intrinsic host
+  `Tooltip` (Provider, Root, Trigger, Content), `Select` (Root, Trigger, Value, Content, Item,
+  Group, Label, Separator, ScrollUpButton, ScrollDownButton), `Dialog` (Root, Trigger, Portal,
+  Backdrop, Popup, Title, Description, Close) and `Combobox` (Root, Input, Trigger, Value, Content,
+  List, Item, Empty, Group, Label, Separator). Components never destructure props, so reactive
+  getters stay reactive. Solid-specific behavior: `asChild` needs exactly one intrinsic host
   element child and its properties (style included) replace the child's, only handlers composing;
   the caller style of a floating layer applies to the inner container only; tooltip provider
   settings and root hoverability are captured at construction and a newer timer overwrites the
   tracked handle without cancelling the earlier one; a select binds no Ctrl-N/Ctrl-P, keeps popup
-  navigation while disabled (selection stays blocked) and initializes its highlight on an open request.
+  navigation while disabled (selection stays blocked) and initializes its highlight on an open
+  request; the combobox filters by substring in the original order (custom filters get the trimmed
+  lowercase query), binds no Ctrl-N/Ctrl-P or trigger arrow keys, shows the raw selected strings
+  (placeholder only for null), applies the highlight policy through its input setter and records
+  an item's disabled flag at construction.
+* `Dialog` renders no element of its own. The portal (a deferred full-window `anchored` layer at
+  priority 0) and the popup mount only while open; the popup is a dismissal layer (a select opened
+  from inside closes before the dialog), a modal popup traps Tab with `focusNextWithin` /
+  `focusPreviousWithin` and a nonmodal one does not, `initialFocus` / `finalFocus` follow the
+  focus-target contract (default: the popup, then the trigger or the previously focused element;
+  a `ref` host element is a valid target), and `disablePointerDismissal` /
+  `disableEscapeDismissal` on the root switch the two dismissals (Escape is consumed either way).
+  The backdrop's press handler is `onPointerDown`.
 * `@vespertine/solid/testing` mounts trees in the offscreen native test host.
 
 Tests: `npm test` (Node) or `bun test`; `cargo test -p vespertine_js_node --test adapters` runs both.

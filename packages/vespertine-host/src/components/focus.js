@@ -18,19 +18,21 @@ export function isWithin(ancestor, id) {
 /**
  * The default final focus of a layer: the captured prior focus, but only if focus is still inside
  * the layer or nowhere; focus that an outside press moved elsewhere is kept. A prior target that
- * is no longer mounted falls back to the owning trigger when it is mounted.
+ * is no longer mounted falls back to the owning trigger when it is mounted. With `triggerFirst`
+ * (dialogs, CMP-003 R6) the mounted trigger wins over the captured target.
  *
  * @param {object} renderer
- * @param {{ layer: () => object | null, trigger?: () => object | null }} nodes the layer's node
- *   and its trigger's node (read when the layer closes)
+ * @param {{ layer: () => object | null, trigger?: () => object | null, triggerFirst?: boolean }} nodes
+ *   the layer's node and its trigger's node (read when the layer closes)
  */
-export function defaultFinalFocus(renderer, { layer, trigger }) {
+export function defaultFinalFocus(renderer, { layer, trigger, triggerFirst = false }) {
   return (previous) => {
     const focused = renderer.getFocusedElement?.() ?? null;
     const layerNode = layer();
     const inside = focused === null || focused === undefined || isWithin(layerNode, focused);
     if (!inside) return null;
     const triggerNode = trigger?.() ?? null;
+    if (triggerFirst && triggerNode?.mounted) return triggerNode.id;
     const root = layerNode?.tree?.container ?? triggerNode?.tree?.container ?? null;
     const previousMounted = previous !== null && previous !== undefined && (root === null || findById(root, previous) !== null);
     if (previousMounted) return previous;

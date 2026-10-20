@@ -25,6 +25,8 @@ export { render, resetRender } from "./convenience.js";
 export { createSelectedText, createTextSearch, createWindowInsets, createWindowSize, findRanges } from "./primitives.js";
 export {
   Button,
+  Combobox,
+  Dialog,
   DismissableLayer,
   FloatingLayer,
   Select,

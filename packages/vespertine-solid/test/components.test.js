@@ -26,6 +26,8 @@ import {
 } from "../src/index.js";
 import { c, h, installFakeTime, microtasks, mount, settle, textOf } from "./components-helpers.js";
 
+const click = (ui, testId) => ui.emit(testId, { type: "click", button: 0 });
+
 test("the public API is exported", () => {
   for (const part of [Button, DismissableLayer, FloatingLayer, buttonProps, createButtonLatch, createControllableState, createPresence, renderSlot, mergeStyles, resolveStyle, composeHandlers]) {
     assert.equal(typeof part, "function");
@@ -635,6 +637,102 @@ test("CMP-004 A2(d), R9: unmount cancels the tracked timers", async () => {
     assert.equal(time.pendingTimers - before, 0, "the tracked open timer was cancelled");
     time.advance(1000);
     assert.equal(ui.renderer.elements.size, 0);
+    assert.deepEqual(ui.errors, []);
+  });
+});
+
+test("CMP-004 A2(c): a pointer-down on an open tooltip closes it and updates the last close time", async () => {
+  await withTime(async (time) => {
+    const ui = mount(() => tooltipApp({ provider: { delayDuration: 700, skipDelayDuration: 300 }, root: { defaultOpen: true } }));
+    assert.ok(ui.has("content"));
+    ui.emit("trigger", { type: "pointerDown", button: 0 });
+    await settle();
+    assert.equal(ui.has("content"), false, "the press closes it");
+    await advance(time, 300);
+    ui.emit("trigger", { type: "enter" });
+    await settle();
+    assert.ok(ui.has("content"), "re-entering exactly 300 ms after the pointer-down close opens immediately (the skip window is inclusive)");
+    ui.emit("trigger", { type: "pointerDown", button: 0 });
+    await advance(time, 301);
+    ui.emit("trigger", { type: "enter" });
+    await advance(time, 699);
+    assert.equal(ui.has("content"), false, "301 ms after the close the full delay applies");
+    await advance(time, 1);
+    assert.ok(ui.has("content"));
+  });
+});
+
+test("CMP-004 A2(c): a click on an open tooltip closes it and updates the last close time", async () => {
+  await withTime(async (time) => {
+    const ui = mount(() => tooltipApp({ provider: { delayDuration: 700, skipDelayDuration: 300 }, root: { defaultOpen: true } }));
+    click(ui, "trigger");
+    await settle();
+    assert.equal(ui.has("content"), false, "the click closes it");
+    await advance(time, 250);
+    ui.emit("trigger", { type: "enter" });
+    await settle();
+    assert.ok(ui.has("content"), "re-entering 250 ms after the click close opens immediately");
+  });
+});
+
+test("CMP-004 A2(a): roots without a provider share the default provider's last close time", async () => {
+  await withTime(async (time) => {
+    const bare = (root) =>
+      c(
+        Tooltip.Root,
+        mergeProps({ testId: "root", delayDuration: 700 }, root),
+        () => c(Tooltip.Trigger, { testId: "trigger" }, () => h("text", {}, "?")),
+        () => c(Tooltip.Content, { testId: "content" }, () => h("text", {}, "tip")),
+      );
+    const first = mount(() => bare({ defaultOpen: true }));
+    const second = mount(() => bare({}));
+    first.emit("trigger", { type: "blur" });
+    await settle();
+    assert.equal(first.has("content"), false);
+    await advance(time, 200);
+    second.emit("trigger", { type: "enter" });
+    await settle();
+    assert.ok(second.has("content"), "another root without a provider opens at once inside the shared skip window");
+    second.emit("trigger", { type: "blur" });
+    await advance(time, 400);
+    second.emit("trigger", { type: "enter" });
+    await advance(time, 699);
+    assert.equal(second.has("content"), false, "outside the skip window the root's own 700 ms delay applies");
+    await advance(time, 1);
+    assert.ok(second.has("content"));
+  });
+});
+
+test("CMP-004 A2(b): a hoverable tooltip closes 80 ms after leaving the trigger, and a re-entry of the trigger cancels the close", async () => {
+  await withTime(async (time) => {
+    const ui = mount(() => tooltipApp({ provider: { delayDuration: 0 } }));
+    ui.emit("trigger", { type: "enter" });
+    await settle();
+    assert.ok(ui.has("content"));
+    ui.emit("trigger", { type: "leave" });
+    await advance(time, 79);
+    assert.ok(ui.has("content"));
+    ui.emit("trigger", { type: "enter" });
+    await advance(time, 200);
+    assert.ok(ui.has("content"), "re-entering the trigger within the grace cancels the pending close");
+    ui.emit("trigger", { type: "leave" });
+    await advance(time, 80);
+    assert.equal(ui.has("content"), false, "the close fires exactly at 80 ms");
+  });
+});
+
+test("CMP-004 A2(d): unmounting cancels a pending close as well as a pending open", async () => {
+  await withTime(async (time) => {
+    const requests = [];
+    const ui = mount(() => tooltipApp({ root: { defaultOpen: true, onOpenChange: (open) => requests.push(open) } }));
+    const before = time.pendingTimers;
+    ui.emit("trigger", { type: "leave" });
+    assert.equal(time.pendingTimers - before, 1, "the close grace is pending");
+    ui.root.unmount();
+    await settle();
+    assert.equal(time.pendingTimers - before, 0, "unmount cancelled the tracked close timer");
+    time.advance(1000);
+    assert.deepEqual(requests, [], "no close request fired after the unmount");
     assert.deepEqual(ui.errors, []);
   });
 });

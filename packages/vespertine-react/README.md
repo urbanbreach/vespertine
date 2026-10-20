@@ -30,15 +30,27 @@ render(React.createElement(App), { window: { title: "Hello", width: 640, height:
   loop. It also installs the runtime error display (DEV-010): an uncaught failure replaces the tree
   with a readable error view and a Reload control that remounts the last submitted tree.
 * Hooks: `useWindowSize`, `useWindowInsets`, `useTextSearch` and the shared `findRanges`.
-* Headless components (CMP-001, CMP-002, CMP-004, CMP-005): `Button` and `buttonProps`
+* Headless components (CMP-001 to CMP-006): `Button` and `buttonProps`
   (role, tab index and Enter/Space/click activation for any control), `asChild` composition for
   every part (`renderSlot`), `FloatingLayer` and `DismissableLayer` (window-scoped Escape and
-  focus ownership), the compound `Tooltip` (Provider, Root, Trigger, Content) and `Select` (Root,
-  Trigger, Value, Content, Item, Group, Label, Separator, ScrollUpButton, ScrollDownButton).
+  focus ownership), the compound `Tooltip` (Provider, Root, Trigger, Content), `Select` (Root,
+  Trigger, Value, Content, Item, Group, Label, Separator, ScrollUpButton, ScrollDownButton),
+  `Dialog` (Root, Trigger, Portal, Backdrop, Popup, Title, Description, Close) and `Combobox`
+  (Root, Input, Trigger, Value, Content, List, Item, Empty, Group, Label, Separator).
   Popup content accepts a native exit target (`exit`, `transition`) and stays mounted, inert,
   until it completes. React-specific behavior: opacity and radii of a floating surface reach its
-  outer anchored surface, Ctrl-N/Ctrl-P step a select, a disabled select blocks navigation and
-  selection, and tooltip scheduling replaces the earlier timer of the same kind.
+  outer anchored surface, Ctrl-N/Ctrl-P step a select or combobox, a disabled select blocks
+  navigation and selection, tooltip scheduling replaces the earlier timer of the same kind, the
+  default combobox filter ranks prefix matches first and hands custom filters the raw query, a
+  disabled combobox blocks navigation and submit, and the combobox value display converts and
+  joins labels (placeholder for an empty selection).
+* `Dialog` renders no element of its own. The portal (a deferred full-window `anchored` layer at
+  priority 0) and the popup mount only while open; the popup is a dismissal layer (a select opened
+  from inside closes before the dialog), a modal popup traps Tab with `focusNextWithin` /
+  `focusPreviousWithin` and a nonmodal one does not, `initialFocus` / `finalFocus` follow the
+  focus-target contract (default: the popup, then the trigger or the previously focused element),
+  and `disablePointerDismissal` / `disableEscapeDismissal` on the root switch the two dismissals
+  (Escape is consumed either way). The backdrop's press handler is `onPointerDown`.
 * `@vespertine/react/testing` mounts trees in the offscreen native test host.
 
 Tests: `npm test` (Node) or `bun test`; `cargo test -p vespertine_js_node --test adapters` runs both.

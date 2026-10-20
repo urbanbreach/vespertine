@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  backdropStyle,
   buttonProps,
   classifyKey,
   composeHandlers,
@@ -11,13 +12,23 @@ import {
   createPressFlag,
   createTooltipProvider,
   createTooltipRoot,
+  dismissalCloses,
+  displayText,
   edgeIndex,
+  filterItems,
+  highlightAfterEdit,
   mergeSlotProps,
   mergeStyles,
+  popupStyle,
+  portalProps,
   rankMatches,
   requestControlledChange,
   resolveStyle,
+  selectionList,
+  stepHighlight,
   stepIndex,
+  toggleSelection,
+  trapTab,
 } from "../src/index.js";
 import { installFakeTime } from "./helpers.js";
 
@@ -363,4 +374,100 @@ test("CMP-004 A3 (core): replacing timers leaves one open timer; overwriting lea
     t.time.advance(600);
     assert.deepEqual(t.log, [[700, true]], "the earlier timer still fired");
   });
+});
+
+test("CMP-003 R3, R4, R5: portal, backdrop and popup defaults", () => {
+  const modal = portalProps();
+  assert.deepEqual([modal.fill, modal.deferred, modal.priority, modal.occlude], ["window", true, 0, true]);
+  assert.deepEqual(modal.style, { display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "transparent" });
+  const nonmodal = portalProps({ modal: false });
+  assert.equal(nonmodal.occlude, false);
+  assert.equal(nonmodal.style.pointerEvents, "none");
+  assert.deepEqual(backdropStyle(), { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 });
+  assert.equal(backdropStyle({ modal: false }).pointerEvents, "none");
+  assert.deepEqual(popupStyle(), { pointerEvents: "auto", keyboardFocusDim: false });
+});
+
+test("CMP-003 R7: the Tab trap moves within the popup, Shift reverses, and nothing else is handled", () => {
+  const moves = [];
+  const popup = { focusNextWithin: () => moves.push("next"), focusPreviousWithin: () => moves.push("previous") };
+  assert.equal(trapTab(key("tab"), popup), true);
+  assert.equal(trapTab(key("tab", { shift: true }), popup), true);
+  assert.deepEqual(moves, ["next", "previous"]);
+  const prevented = key("tab");
+  prevented.preventDefault();
+  assert.equal(trapTab(prevented, popup), false, "a prevented key is left alone");
+  assert.equal(trapTab(key("tab", { ctrl: true }), popup), false);
+  assert.equal(trapTab(key("a"), popup), false);
+  const handled = key("tab");
+  trapTab(handled, popup);
+  assert.equal(handled.defaultPrevented, true, "the default is prevented");
+  assert.deepEqual(moves, ["next", "previous", "next"]);
+});
+
+test("CMP-003 R9, R10: dismissal policy", () => {
+  const policy = (over = {}) => ({ modal: true, disablePointerDismissal: false, disableEscapeDismissal: false, ...over });
+  assert.equal(dismissalCloses("escape", policy()), true);
+  assert.equal(dismissalCloses("escape", policy({ disableEscapeDismissal: true })), false);
+  assert.equal(dismissalCloses("outside", policy()), false, "a modal dialog is dismissed through its backdrop");
+  assert.equal(dismissalCloses("outside", policy({ modal: false })), true);
+  assert.equal(dismissalCloses("outside", policy({ modal: false, disablePointerDismissal: true })), false);
+  assert.equal(dismissalCloses("outside", policy({ modal: false }), { top: false }), false, "a nested layer owns the press");
+});
+
+test("CMP-006 R2: default filtering ranks prefix matches in React and keeps the order in Solid", () => {
+  const items = ["xab", "ab", "zab", "abz", "qq"];
+  assert.deepEqual(filterItems(items, " AB ", { flavor: "react" }), ["ab", "abz", "xab", "zab"]);
+  assert.deepEqual(filterItems(items, " AB ", { flavor: "solid" }), ["xab", "ab", "zab", "abz"]);
+  assert.deepEqual(filterItems(items, "  ", { flavor: "react" }), items);
+  assert.deepEqual(filterItems(items, "  ", { flavor: "solid" }), items);
+});
+
+test("CMP-006 R2: a null filter keeps everything and custom filters get the flavor's query", () => {
+  const items = ["a", "b"];
+  assert.deepEqual(filterItems(items, "zzz", { flavor: "react", filter: null }), items);
+  const seen = [];
+  const filter = (item, query, toString) => {
+    seen.push([item, query, toString(item)]);
+    return item === "b";
+  };
+  assert.deepEqual(filterItems(items, " Q ", { flavor: "react", filter }), ["b"]);
+  assert.deepEqual(seen[0], ["a", " Q ", "a"], "React passes the raw query");
+  seen.length = 0;
+  filterItems(items, " Q ", { flavor: "solid", filter });
+  assert.deepEqual(seen[0], ["a", "q", "a"], "Solid passes the trimmed lowercase query");
+  assert.deepEqual(filterItems([{ n: "Kiwi" }], "ki", { flavor: "solid", itemToString: (item) => item.n }), [{ n: "Kiwi" }]);
+});
+
+test("CMP-006 R6: selection toggling keeps the array order and the display differs by flavor", () => {
+  assert.deepEqual(selectionList(null), []);
+  assert.deepEqual(selectionList("a"), ["a"]);
+  assert.deepEqual(toggleSelection(null, "a"), ["a"]);
+  assert.deepEqual(toggleSelection(["b", "a"], "c"), ["b", "a", "c"]);
+  assert.deepEqual(toggleSelection(["b", "a", "c"], "a"), ["b", "c"]);
+  assert.equal(displayText(null, { flavor: "react" }), null);
+  assert.equal(displayText("", { flavor: "react" }), null);
+  assert.equal(displayText([], { flavor: "react" }), null);
+  assert.equal(displayText(["a", "b"], { flavor: "react", itemToString: (v) => v.toUpperCase() }), "A, B");
+  assert.equal(displayText(null, { flavor: "solid" }), null);
+  assert.equal(displayText("", { flavor: "solid" }), "");
+  assert.equal(displayText([], { flavor: "solid" }), "");
+  assert.equal(displayText(["a", "b"], { flavor: "solid", itemToString: (v) => v.toUpperCase() }), "a, b");
+});
+
+test("CMP-006 R4, R5: the highlight after an edit and stepping with wraparound over disabled entries", () => {
+  const disabled = new Set(["b"]);
+  const options = { items: ["a", "b", "c"], query: "", flavor: "react", disabled };
+  assert.equal(highlightAfterEdit({ ...options, autoHighlight: false }), null);
+  assert.equal(highlightAfterEdit({ ...options, autoHighlight: true }), "a");
+  assert.equal(highlightAfterEdit({ ...options, autoHighlight: "always" }), "a");
+  assert.equal(highlightAfterEdit({ ...options, autoHighlight: true, query: "b" }), null, "only a disabled match");
+  const strings = ["a", "b", "c"];
+  assert.equal(stepHighlight(strings, disabled, null, 1), "a");
+  assert.equal(stepHighlight(strings, disabled, null, -1), "c");
+  assert.equal(stepHighlight(strings, disabled, "a", 1), "c", "the disabled entry is skipped");
+  assert.equal(stepHighlight(strings, disabled, "c", 1), "a", "wraparound");
+  assert.equal(stepHighlight(strings, disabled, "gone", 1), "a", "a highlight outside the list starts over");
+  assert.equal(stepHighlight([], disabled, null, 1), null);
+  assert.equal(stepHighlight(strings, new Set(strings), "a", 1), "a", "nothing available keeps the highlight");
 });

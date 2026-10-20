@@ -41,6 +41,7 @@ Extras beyond the specified renderer API: `closeWindow()`, `requestRepaint()`, `
 | Structural comparison (R3) | `sameMutationValue`, `serializeCustomProp` |
 | Event routing, layers (R1, R4, R5) | `createRendererState`, `pushDismissLayer`, `createHandlerMap`, `registerEventHandler`, `unregisterEventHandler`, `unregisterEventHandlers` |
 | Focus targets (R6) | `resolveFocusTarget` |
+| Headless dialog and combobox logic (CMP-003, CMP-006) | `portalProps`, `backdropStyle`, `popupStyle`, `trapTab`, `dismissalCloses`, `filterItems`, `displayText`, `toggleSelection`, `selectionList`, `highlightAfterEdit`, `stepHighlight`, `isTopDismissLayer` |
 | Geometry and selection (R7) | `readWindowSize`, `readWindowInsets`, `observeWindowSize`, `observeWindowInsets`, `observeSelectedText` |
 | Renderer and frame loop (R8) | `createNativeRenderer`, `startFrameLoop` |
 | Idle GC (APP-008) | `collectGarbageWhenIdle` |
