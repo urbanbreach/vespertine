@@ -6,6 +6,9 @@
 //! interaction state are the same, the view's previous output is replayed and its
 //! `render`, layout, prepaint and paint do not run again. When only views nested in a
 //! clean view changed, the clean view replays its own output around the rebuilt children.
+//! A view built again inside such a clean view runs with what the clean view's wrappers
+//! establish around it (inertness, edge fade, rounded clip), exactly as if the whole view had
+//! been built again.
 //!
 //! Views drawn inside a deferred draw (popovers, menus, anything under `deferred`) are retained
 //! independently of the view that owns the draw: when the owner is replayed, the draw is replayed
@@ -26,7 +29,8 @@
 //! - The versioned scroll and list state the view read (see the virtual-list and scroll
 //!   documentation).
 //! - A change of the view's bounds, content mask, inherited text style, inherited
-//!   opacity or rem size.
+//!   opacity, rem size, inertness or inherited paint scope (edge fade, rounded clip; the
+//!   `edge_faded` and `rounded_clip` wrappers declare theirs while prepainting).
 //! - A window refresh, a resize, a focus refresh, an active drag, inspector element
 //!   picking, and the first frame after accessibility is activated reconstruct every
 //!   view for that frame.

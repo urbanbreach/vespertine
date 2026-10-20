@@ -13,7 +13,8 @@ use super::{
 use crate::key_dispatch::DispatchNodeId;
 use crate::taffy::LayoutKeyContext;
 use crate::{
-    Bounds, ContentMask, EntityId, GlobalElementId, HitboxId, LayoutId, Pixels, TextStyle,
+    Bounds, ContentMask, EdgeFade, EntityId, GlobalElementId, HitboxId, LayoutId, Pixels,
+    ScopeParams, TextStyle,
 };
 use smallvec::SmallVec;
 use std::{any::TypeId, ops::Range};
@@ -47,6 +48,10 @@ pub(crate) struct CacheKey {
     pub context: u64,
     /// Inside an inert subtree: such views contribute no input or accessibility output.
     pub inert: bool,
+    /// The paint scopes (edge fade, rounded clip) the view inherits: the recorded primitives
+    /// carry them, so a replay requires them unchanged.
+    pub scope: ScopeParams,
+    pub edge_fade: Option<EdgeFade>,
 }
 
 /// Ambient window state a view was built in, kept so the view can be built
@@ -61,12 +66,24 @@ pub(crate) struct Ambient {
     pub retention_context: u64,
     /// Prepaint-phase state; `None` until the view was prepainted.
     pub prepaint: Option<PrepaintAmbient>,
+    /// The inherited scopes in force while the view was painted; `None` until it was painted.
+    pub paint: Option<ScopeState>,
+}
+
+/// The scoped state the window carries into descendants: inertness and the paint scopes.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct ScopeState {
+    pub inert_depth: u32,
+    pub paint_scope: ScopeParams,
+    pub edge_fade: Option<EdgeFade>,
+    pub curved_clip_ancestors: u32,
 }
 
 #[derive(Clone)]
 pub(crate) struct PrepaintAmbient {
     pub content_mask: ContentMask<Pixels>,
     pub opacity: f32,
+    pub scope: ScopeState,
     pub element_offset: crate::Point<Pixels>,
     /// Index of the parent of the view's wrapper node in the dispatch tree of
     /// the frame the view was prepainted in.
@@ -77,6 +94,7 @@ pub(crate) struct PrepaintAmbient {
 pub(crate) enum AmbientPhase {
     Layout,
     Prepaint,
+    Paint,
 }
 
 pub(crate) struct ViewRecord {
@@ -1040,6 +1058,8 @@ impl Window {
             rem_size: self.rem_size(),
             context: self.retention.context,
             inert: self.inert_depth > 0,
+            scope: self.paint_scope,
+            edge_fade: self.edge_fade,
         }
     }
 
@@ -1098,6 +1118,7 @@ impl Window {
             image_caches: self.image_cache_stack.clone(),
             retention_context: self.retention.context,
             prepaint: None,
+            paint: None,
         }
     }
 
@@ -1108,6 +1129,7 @@ impl Window {
         PrepaintAmbient {
             content_mask: self.content_mask(),
             opacity: self.element_opacity,
+            scope: self.scope_state(),
             element_offset: self.element_offset(),
             dispatch_parent: dispatch
                 .active_node_id()
@@ -1130,14 +1152,14 @@ impl Window {
             ambient.rem_override.clone(),
         );
         let mut rendered = ambient.rendered_entities.clone();
-        if phase == AmbientPhase::Prepaint {
+        if phase != AmbientPhase::Layout {
             // The prepaint and paint entry points push the view themselves.
             rendered.pop();
         }
         let rendered = std::mem::replace(&mut self.rendered_entity_stack, rendered);
         let images = std::mem::replace(&mut self.image_cache_stack, ambient.image_caches.clone());
         let context = std::mem::replace(&mut self.retention.context, ambient.retention_context);
-        let prepaint_state = (phase == AmbientPhase::Prepaint)
+        let prepaint_state = (phase != AmbientPhase::Layout)
             .then(|| ambient.prepaint.as_ref())
             .flatten()
             .map(|prepaint| {
@@ -1150,6 +1172,16 @@ impl Window {
                     std::mem::replace(&mut self.element_opacity, prepaint.opacity),
                 )
             });
+        // What the view inherited from its clean ancestors, which a splice does not run again:
+        // inertness and the paint scopes, as of the phase being run.
+        let scope = match phase {
+            AmbientPhase::Layout => None,
+            AmbientPhase::Prepaint => ambient.prepaint.as_ref().map(|prepaint| prepaint.scope),
+            AmbientPhase::Paint => ambient
+                .paint
+                .or_else(|| ambient.prepaint.as_ref().map(|prepaint| prepaint.scope)),
+        }
+        .map(|scope| self.replace_scope_state(scope));
         let result = f(self);
         self.element_id_stack = ids;
         self.text_style_stack = text;
@@ -1162,7 +1194,30 @@ impl Window {
             self.element_offset_stack = offset;
             self.element_opacity = opacity;
         }
+        if let Some(scope) = scope {
+            self.replace_scope_state(scope);
+        }
         result
+    }
+
+    /// The inertness and paint scopes in force.
+    pub(crate) fn scope_state(&self) -> ScopeState {
+        ScopeState {
+            inert_depth: self.inert_depth,
+            paint_scope: self.paint_scope,
+            edge_fade: self.edge_fade,
+            curved_clip_ancestors: self.curved_clip_ancestors,
+        }
+    }
+
+    /// Installs `scope` and returns the state it replaced.
+    fn replace_scope_state(&mut self, scope: ScopeState) -> ScopeState {
+        let previous = self.scope_state();
+        self.inert_depth = scope.inert_depth;
+        self.paint_scope = scope.paint_scope;
+        self.edge_fade = scope.edge_fade;
+        self.curved_clip_ancestors = scope.curved_clip_ancestors;
+        previous
     }
 
     /// After the prepaint output of `key` was copied from `old` in stretches

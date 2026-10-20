@@ -84,6 +84,8 @@ pub(crate) mod read_tracker;
 use read_tracker::ViewKey;
 pub(crate) mod retained;
 #[cfg(test)]
+mod retained_scope_tests;
+#[cfg(test)]
 mod retained_tests;
 pub(crate) mod rows;
 pub(crate) mod scroll_layers;

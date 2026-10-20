@@ -1,6 +1,6 @@
 use crate::{
-    AnyElement, App, Bounds, ContentMask, EdgeFade, Element, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, ScrollHandle, Window,
+    AnyElement, App, Bounds, EdgeFade, Element, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, Pixels, ScrollHandle, Window,
 };
 
 /// Wraps `child` so that everything painted inside it fades toward the edges of the
@@ -116,8 +116,9 @@ impl EdgeFaded {
         self
     }
 
-    /// Gates the vertical edges with a paint-time predicate returning
-    /// `(top overflow, bottom overflow)`, combined with the enable flags by logical AND.
+    /// Gates the vertical edges with a predicate returning `(top overflow, bottom overflow)`,
+    /// combined with the enable flags by logical AND. It runs at paint time and once more
+    /// before the child's prepaint, so it must be cheap and free of side effects.
     pub fn fade_overflow_y_with(
         mut self,
         predicate: impl Fn(&mut Window, &mut App) -> (bool, bool) + 'static,
@@ -186,7 +187,12 @@ impl Element for EdgeFaded {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.child.prepaint(window, cx);
+        // The fade only modulates alpha at paint time, but views nested in the wrapper are
+        // recorded with it: declaring it here (as resolved before the child's prepaint) lets
+        // their retained output follow it, and the paint pass still resolves it again.
+        let fade = self.resolve(_bounds, window, cx);
+        let child = &mut self.child;
+        window.with_edge_fade(Some(fade), |window| child.prepaint(window, cx));
     }
 
     fn paint(
@@ -267,7 +273,7 @@ impl Element for RoundedClip {
         cx: &mut App,
     ) {
         let child = &mut self.child;
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        window.with_rounded_clip(bounds, self.radius, |window| {
             child.prepaint(window, cx);
         });
     }

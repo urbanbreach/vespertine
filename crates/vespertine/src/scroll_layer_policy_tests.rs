@@ -511,17 +511,19 @@ fn a3_r8_an_inherited_curved_clip_bypasses_layers(cx: &mut TestAppContext) {
 
 #[crate::test]
 fn a3_r8_a_paint_scope_of_an_ancestor_bypasses_layers(cx: &mut TestAppContext) {
-    // A rounded clip and an edge fade cut or fade every primitive on its own.
+    // A rounded clip and an edge fade cut or fade every primitive on its own. The wrappers
+    // declare their scope while prepainting, so the block is never recorded, and no
+    // recording fails either.
     let probes = scroll_ineligible(cx, |_, _| page(rounded_clip(px(12.), rows(ROWS))), 10);
     assert_never_cached(&probes, "a rounded clip scope");
-    assert!(probes.iter().any(|probe| probe.retry > 0), "{probes:#?}");
+    assert!(probes.iter().all(|probe| probe.retry == 0), "{probes:#?}");
     let probes = scroll_ineligible(
         cx,
         |_, _| page(edge_faded(px(16.), true, true, rows(ROWS))),
         10,
     );
     assert_never_cached(&probes, "an edge fade scope");
-    assert!(probes.iter().any(|probe| probe.retry > 0), "{probes:#?}");
+    assert!(probes.iter().all(|probe| probe.retry == 0), "{probes:#?}");
 }
 
 #[crate::test]

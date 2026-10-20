@@ -708,12 +708,13 @@ fn build_view(
     let mut ambient = window.capture_ambient();
     // The prepaint-phase context of an earlier build stays valid until the view is
     // prepainted again; a view built out of band for a splice is prepainted in it.
-    ambient.prepaint = window
+    let earlier = window
         .retention
         .views
         .get(key)
-        .and_then(|record| record.ambient.as_ref())
-        .and_then(|ambient| ambient.prepaint.clone());
+        .and_then(|record| record.ambient.as_ref());
+    ambient.prepaint = earlier.and_then(|ambient| ambient.prepaint.clone());
+    ambient.paint = earlier.and_then(|ambient| ambient.paint);
     window.begin_view_phase(key);
     window.begin_layout_owner();
     window.retention.layout_state_sink.push(Vec::new());
@@ -1249,6 +1250,7 @@ fn paint_view(entity_id: EntityId, state: &mut ViewState, window: &mut Window, c
         } => {
             let key = *key;
             let start = window.paint_index();
+            let painted_scope = element.is_some().then(|| window.scope_state());
             if let Some(element) = element {
                 window.begin_view_phase(key);
                 element.paint(window, cx);
@@ -1271,6 +1273,9 @@ fn paint_view(entity_id: EntityId, state: &mut ViewState, window: &mut Window, c
             let end = window.paint_index();
             if let Some(record) = window.retention.views.get_mut(key) {
                 record.paint = Some(start..end);
+                if let (Some(ambient), Some(scope)) = (record.ambient.as_mut(), painted_scope) {
+                    std::rc::Rc::make_mut(ambient).paint = Some(scope);
+                }
             }
         }
     });
@@ -1355,7 +1360,7 @@ fn paint_stretches(
         let (Some(node), Some(mut child_state)) = (child.wrapper_node, child.state.take()) else {
             continue;
         };
-        window.with_ambient(&ambient, AmbientPhase::Prepaint, |window| {
+        window.with_ambient(&ambient, AmbientPhase::Paint, |window| {
             window.next_frame.dispatch_tree.set_active_node(node);
             let mut paint =
                 |window: &mut Window| paint_view(entity_id, &mut child_state, window, cx);

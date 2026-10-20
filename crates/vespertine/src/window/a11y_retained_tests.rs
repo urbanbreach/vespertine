@@ -154,7 +154,7 @@ fn reset(cx: &mut TestAppContext, window: AnyWindowHandle) {
 }
 /// The tree update the platform received last, in comparable form: node ids are replaced by
 /// the order of their first appearance, since two windows hold different root entities.
-fn tree(cx: &mut TestAppContext, window: AnyWindowHandle) -> String {
+pub(super) fn tree(cx: &mut TestAppContext, window: AnyWindowHandle) -> String {
     cx.update_window(window, |_, window, _| {
         let update = window
             .platform_window
