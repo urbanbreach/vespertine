@@ -474,6 +474,9 @@ mod fallback {
 /// let a stale answer through. No step is ordered by a delay: the test proceeds only once the
 /// kernel reports each thread asleep (blocked on the held lock), which nothing else in the
 /// sequence can cause.
+///
+/// Linux only: the handshake reads the thread state from `/proc`.
+#[cfg(target_os = "linux")]
 mod registration_race {
     use super::*;
     use std::{sync::mpsc, time::Duration};
