@@ -115,12 +115,16 @@ impl Pool {
 
     /// Validates and maps a shared-memory pool announcement.
     ///
+    /// Only the helper connection constructs pools: the announced descriptors may be shared with
+    /// other writers, so the mapped bytes are only ever exposed through [`Pool::slot_bytes`],
+    /// which demands the live [`Lease`] of the slot.
+    ///
     /// The announcement is rejected (and its descriptors closed) when: the kind is not "shm"; the
     /// format is not "BGRA8888"; the generation is zero; a dimension is outside 1..8192; the scale
     /// is outside 0.5..4; the stride is below width x 4; there is not exactly one descriptor per
     /// slot; a slot's size is below stride x height; or a descriptor is not a memory file sealed
     /// against shrinking and at least as large as announced (so reading it can never fault).
-    pub fn from_announcement(
+    pub(crate) fn from_announcement(
         object: &Map<String, Value>,
         fds: Vec<OwnedFd>,
     ) -> Result<Pool, String> {
@@ -184,15 +188,24 @@ impl Pool {
         self.slots.len()
     }
 
-    /// The full contents of `slot` (stride x height bytes), or `None` when out of range.
-    pub fn slot_bytes(&self, slot: u32) -> Option<&[u8]> {
-        let mapping = self.slots.get(slot as usize)?;
+    /// The full contents of the slot `lease` owns (stride x height bytes), or `None` when the
+    /// lease belongs to another generation or names a slot this pool does not have.
+    ///
+    /// The returned bytes borrow the lease, so the slot cannot be handed back to the helper (which
+    /// overwrites released slots) while they are in use.
+    pub fn slot_bytes<'a>(&'a self, lease: &'a Lease) -> Option<&'a [u8]> {
+        if lease.generation != self.generation {
+            return None;
+        }
+        let mapping = self.slots.get(lease.slot as usize)?;
         // SAFETY: the mapping is `len` readable bytes that stay mapped as long as `self` lives,
-        // and the memory file is sealed against shrinking (checked in `map_slot`).
+        // and the memory file is sealed against shrinking (checked in `map_slot`). The live lease
+        // means the helper treats the slot as owned by the application and does not write it.
         Some(unsafe { std::slice::from_raw_parts(mapping.ptr, mapping.len) })
     }
 
-    /// A pool backed by anonymous memory files created here, for scripted helpers in tests.
+    /// A pool announcement backed by anonymous memory files created here, for scripted helpers
+    /// in tests (it yields descriptors only; the helper connection maps them).
     #[doc(hidden)]
     pub fn announcement_for_tests(
         generation: u64,
@@ -324,9 +337,12 @@ impl Drop for Lease {
 }
 
 /// A frame whose pixels live in a shared-memory slot owned by the application until released.
+///
+/// The frame owns the slot's [`Lease`] for its whole life: the pixels can be borrowed only while
+/// the lease is held, and giving the slot back ([`BufferFrame::release`] or drop) consumes the
+/// frame, so no borrow can outlive the hand-back.
 pub struct BufferFrame {
     pool: Arc<Pool>,
-    slot: u32,
     pub seq: u64,
     pub width: u32,
     pub height: u32,
@@ -334,20 +350,29 @@ pub struct BufferFrame {
     /// Bounding rectangle of every pixel that changed since the previously uploaded frame,
     /// including the damage of buffer frames dropped in between.
     pub damage: Damage,
-    lease: Option<Lease>,
+    lease: Lease,
 }
 
 impl BufferFrame {
-    pub(crate) fn new(pool: Arc<Pool>, slot: u32, seq: u64, damage: Damage, lease: Lease) -> Self {
+    /// A frame of the slot `lease` owns in `pool`.
+    ///
+    /// # Panics
+    ///
+    /// When the lease belongs to another generation or names a slot the pool lacks; the page
+    /// validates both before it takes the lease.
+    pub(crate) fn new(pool: Arc<Pool>, seq: u64, damage: Damage, lease: Lease) -> Self {
+        assert!(
+            lease.generation == pool.generation && (lease.slot as usize) < pool.slot_count(),
+            "a buffer frame needs a lease of its own pool"
+        );
         Self {
             width: pool.width,
             height: pool.height,
             scale: pool.scale,
             pool,
-            slot,
             seq,
             damage,
-            lease: Some(lease),
+            lease,
         }
     }
 
@@ -356,7 +381,7 @@ impl BufferFrame {
     }
 
     pub fn slot(&self) -> u32 {
-        self.slot
+        self.lease.slot
     }
 
     pub fn stride(&self) -> u32 {
@@ -366,13 +391,13 @@ impl BufferFrame {
     /// The whole slot: `stride x height` bytes of BGRA straight-alpha rows.
     pub fn pixels(&self) -> &[u8] {
         self.pool
-            .slot_bytes(self.slot)
-            .expect("slot validated at arrival")
+            .slot_bytes(&self.lease)
+            .expect("lease checked at construction")
     }
 
-    /// Returns the slot to the helper now instead of at drop.
-    pub fn release(&mut self) {
-        self.lease = None;
+    /// Returns the slot to the helper now instead of at drop; the frame is gone afterwards.
+    pub fn release(self) {
+        drop(self);
     }
 }
 
@@ -517,10 +542,14 @@ mod tests {
         write_memfd(&fds[0], 64 + 4 * 7, &[1, 2, 3, 4]);
         let pool = Pool::from_announcement(&object, fds).unwrap();
         assert_eq!((pool.slot_count(), pool.stride, pool.scale), (2, 64, 2.0));
-        let bytes = pool.slot_bytes(0).unwrap();
+        let noop: Arc<dyn Fn(u64, u32) + Send + Sync> = Arc::new(|_, _| {});
+        let lease = Lease::new(noop.clone(), 1, 0);
+        let bytes = pool.slot_bytes(&lease).unwrap();
         assert_eq!(bytes.len(), 64 * 4);
         assert_eq!(&bytes[64 + 28..64 + 32], &[1, 2, 3, 4]);
-        assert!(pool.slot_bytes(2).is_none());
+        // Slot bytes are only handed to the lease of that slot and generation.
+        assert!(pool.slot_bytes(&Lease::new(noop.clone(), 1, 2)).is_none());
+        assert!(pool.slot_bytes(&Lease::new(noop, 2, 0)).is_none());
     }
 
     #[test]
@@ -584,20 +613,28 @@ mod tests {
             Arc::new(move |generation, slot| sink.lock().unwrap().push((generation, slot)));
         let (object, fds) = Pool::announcement_for_tests(3, 2, 2, 64, 1.0, 2);
         let pool = Arc::new(Pool::from_announcement(&object, fds).unwrap());
-        let mut frame = BufferFrame::new(
+        let frame = BufferFrame::new(
             pool.clone(),
-            1,
             1,
             Damage::full(2, 2),
             Lease::new(release.clone(), 3, 1),
         );
+        assert_eq!(frame.pixels().len(), 64 * 2);
         frame.release();
-        frame.release();
-        drop(frame);
-        let frame = BufferFrame::new(pool, 0, 2, Damage::full(2, 2), Lease::new(release, 3, 0));
+        assert_eq!(*released.lock().unwrap(), vec![(3, 1)]);
+        let frame = BufferFrame::new(pool, 2, Damage::full(2, 2), Lease::new(release, 3, 0));
         assert_eq!(*released.lock().unwrap(), vec![(3, 1)]);
         drop(frame);
         assert_eq!(*released.lock().unwrap(), vec![(3, 1), (3, 0)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "lease of its own pool")]
+    fn a_frame_refuses_a_lease_of_another_pool() {
+        let release: Arc<dyn Fn(u64, u32) + Send + Sync> = Arc::new(|_, _| {});
+        let (object, fds) = Pool::announcement_for_tests(3, 2, 2, 64, 1.0, 2);
+        let pool = Arc::new(Pool::from_announcement(&object, fds).unwrap());
+        let _ = BufferFrame::new(pool, 1, Damage::full(2, 2), Lease::new(release, 4, 0));
     }
 
     #[test]
@@ -608,7 +645,6 @@ mod tests {
         let release: Arc<dyn Fn(u64, u32) + Send + Sync> = Arc::new(|_, _| {});
         let frame = Frame::Buffer(BufferFrame::new(
             pool,
-            0,
             1,
             Damage::full(1000, 2),
             Lease::new(release, 1, 0),

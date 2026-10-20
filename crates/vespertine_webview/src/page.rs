@@ -326,7 +326,7 @@ impl PageShared {
             damage = damage.union(previous.damage);
         }
         let lease = Lease::new(self.release.clone(), generation, slot);
-        let frame = Frame::Buffer(BufferFrame::new(pool, slot, seq, damage, lease));
+        let frame = Frame::Buffer(BufferFrame::new(pool, seq, damage, lease));
         let replaced = frames.pending.replace(frame);
         drop(frames);
         drop(replaced);

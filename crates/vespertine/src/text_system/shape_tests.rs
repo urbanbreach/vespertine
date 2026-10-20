@@ -55,6 +55,8 @@ struct TestShaper {
     /// cannot see.
     skew_triple_nines: AtomicBool,
     on_layout: Mutex<Option<Hook>>,
+    /// Runs at the start of every `font_id` lookup, before any platform state is locked.
+    on_font_id: Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>,
 }
 
 impl TestShaper {
@@ -83,30 +85,8 @@ impl TestShaper {
             _ => size * 0.5,
         }
     }
-}
 
-impl PlatformTextSystem for TestShaper {
-    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        if self.fail_add_fonts.load(Ordering::SeqCst) {
-            bail!("installation failed");
-        }
-        let mut state = self.state.lock();
-        for bytes in fonts {
-            state.families.insert(
-                String::from_utf8_lossy(&bytes).into_owned(),
-                FamilySpec::FULL,
-            );
-        }
-        Ok(())
-    }
-
-    fn all_font_names(&self) -> Vec<String> {
-        let mut names: Vec<_> = self.state.lock().families.keys().cloned().collect();
-        names.sort();
-        names
-    }
-
-    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+    fn lookup(&self, descriptor: &Font) -> Result<FontId> {
         self.font_id_calls.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock();
         let Some(spec) = state.families.get(descriptor.family.as_str()).copied() else {
@@ -143,6 +123,39 @@ impl PlatformTextSystem for TestShaper {
                 state.faces.len() - 1
             });
         Ok(FontId(ix))
+    }
+}
+
+impl PlatformTextSystem for TestShaper {
+    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+        if self.fail_add_fonts.load(Ordering::SeqCst) {
+            bail!("installation failed");
+        }
+        let mut state = self.state.lock();
+        for bytes in fonts {
+            state.families.insert(
+                String::from_utf8_lossy(&bytes).into_owned(),
+                FamilySpec::FULL,
+            );
+        }
+        Ok(())
+    }
+
+    fn all_font_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self.state.lock().families.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+        let result = self.lookup(descriptor);
+        // After the answer is computed and no platform state is locked: a parked thread holds
+        // an answer that a concurrent registration then makes stale.
+        let hook = self.on_font_id.lock().clone();
+        if let Some(hook) = hook {
+            hook(descriptor.family.as_str());
+        }
+        result
     }
 
     fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
@@ -448,6 +461,134 @@ mod fallback {
             .unwrap();
         let direct = shaper.face(system.resolve_font(&bold));
         assert_eq!(direct.family, "No Such Family");
+    }
+}
+
+/// A font registered while another thread is inside the platform lookup (TXT-002): the lookup's
+/// answer was computed against the previous font set and must not survive the registration.
+///
+/// The test parks the lookup inside the platform, holds one cache lock so the registration stops
+/// part way (after installing the font, before it has advanced the generation), lets the lookup
+/// finish, and only then releases the lock: the lookup's insertion races the registration's
+/// clear exactly where a generation checked outside the lock would let a stale answer through.
+mod registration_race {
+    use super::*;
+    use std::{sync::mpsc, time::Duration};
+
+    #[derive(Clone, Copy)]
+    enum Cache {
+        FontIds,
+        Fallbacks,
+    }
+
+    fn hold_write_lock<R>(system: &TextSystem, cache: Cache, during: impl FnOnce() -> R) -> R {
+        match cache {
+            Cache::FontIds => {
+                let _gate = system.font_ids_by_font.write();
+                during()
+            }
+            Cache::Fallbacks => {
+                let _gate = system.fallback_resolutions.write();
+                during()
+            }
+        }
+    }
+
+    fn wait_for(mut condition: impl FnMut() -> bool) {
+        for _ in 0..1000 {
+            if condition() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("condition not reached");
+    }
+
+    /// Runs `resolve` on a thread parked inside the platform lookup of `blocked`, registers the
+    /// font named `registered` meanwhile (stopped at the `cache` lock), then lets both finish.
+    fn register_during_lookup(
+        shaper: &Arc<TestShaper>,
+        system: &TextSystem,
+        cache: Cache,
+        blocked: &'static str,
+        resolve: impl FnOnce(&TextSystem) + Send,
+        registered: &'static str,
+    ) {
+        let (reached, reached_rx) = mpsc::channel();
+        let (resume, resume_rx) = mpsc::channel::<()>();
+        let (reached, resume_rx) = (Mutex::new(reached), Mutex::new(resume_rx));
+        let armed = AtomicBool::new(true);
+        *shaper.on_font_id.lock() = Some(Arc::new(move |family: &str| {
+            if family == blocked && armed.swap(false, Ordering::SeqCst) {
+                reached.lock().send(()).unwrap();
+                resume_rx.lock().recv().unwrap();
+            }
+        }));
+        std::thread::scope(|scope| {
+            let resolver = scope.spawn(|| resolve(system));
+            reached_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the lookup reached the platform");
+            let registrar = hold_write_lock(system, cache, || {
+                let registrar = scope.spawn(|| {
+                    system
+                        .add_fonts(vec![Cow::Borrowed(registered.as_bytes())])
+                        .unwrap();
+                });
+                wait_for(|| shaper.state.lock().families.contains_key(registered));
+                // The registration is now waiting for the cache lock.
+                std::thread::sleep(Duration::from_millis(100));
+                resume.send(()).unwrap();
+                // The lookup finishes against the previous font set and queues its insertion.
+                std::thread::sleep(Duration::from_millis(100));
+                registrar
+            });
+            resolver.join().unwrap();
+            registrar.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn a_stale_font_id_answer_does_not_survive_a_concurrent_registration() {
+        let shaper = TestShaper::with_families(&[]);
+        let system = text_system(&shaper);
+        let wanted = font("Late Family");
+        register_during_lookup(
+            &shaper,
+            &system,
+            Cache::FontIds,
+            "Late Family",
+            |system| assert!(system.font_id(&font("Late Family")).is_err()),
+            "Late Family",
+        );
+        assert_eq!(system.font_generation(), 1);
+        assert!(
+            system.font_id(&wanted).is_ok(),
+            "the registered family resolves"
+        );
+    }
+
+    #[test]
+    fn a_stale_fallback_does_not_survive_a_concurrent_registration() {
+        let shaper = TestShaper::with_families(&[("Adwaita Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let missing = font("No Such Family");
+        register_during_lookup(
+            &shaper,
+            &system,
+            Cache::Fallbacks,
+            "Adwaita Sans",
+            |system| {
+                let id = system.resolve_font(&font("No Such Family"));
+                assert_eq!(id, system.font_id(&font("Adwaita Sans")).unwrap());
+            },
+            "Helvetica",
+        );
+        assert_eq!(system.font_generation(), 1);
+        // Helvetica precedes Adwaita Sans in the fallback stack: the choice made against the
+        // previous font set must not outlive the registration.
+        let id = system.resolve_font(&missing);
+        assert_eq!(shaper.face(id).family, "Helvetica");
     }
 }
 

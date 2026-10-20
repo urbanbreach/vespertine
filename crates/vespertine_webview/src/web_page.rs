@@ -110,7 +110,7 @@ impl FrameView {
                     image: RefCell::new(wrap_image(width, height, packed)),
                 }
             }
-            (Frame::Buffer(mut buffer), Some((device, queue))) => {
+            (Frame::Buffer(buffer), Some((device, queue))) => {
                 let mut shadow = previous.as_mut().and_then(|old| old.shadow.take());
                 let texture =
                     crate::gpu::upload(&mut self.slot, &device, &queue, &buffer, &mut shadow);

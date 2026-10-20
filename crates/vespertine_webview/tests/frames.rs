@@ -174,7 +174,7 @@ fn a_pool_announcement_maps_both_slots_and_buffer_frames_release_their_slot() {
     assert!(wait_until(Duration::from_secs(5), || page.pool().is_some()));
     buffer(&peer, 1, 0, 1, 40, 30, [0, 0, 40, 30]);
     assert!(wait_until(Duration::from_secs(5), || page.has_pending_frame()));
-    let mut frame = page.take_frame().unwrap();
+    let frame = page.take_frame().unwrap();
     let Frame::Buffer(buffer_frame) = &frame else {
         panic!("expected a buffer frame");
     };
@@ -187,14 +187,15 @@ fn a_pool_announcement_maps_both_slots_and_buffer_frames_release_their_slot() {
     let packed = frame.packed_pixels();
     assert_eq!(&packed[160 + 39 * 4..160 + 39 * 4 + 4], &[10, 20, 30, 255]);
     peer.assert_no_more("release", 0);
-    if let Frame::Buffer(buffer_frame) = &mut frame {
-        buffer_frame.release();
-    }
+    // Releasing consumes the frame: its pixels cannot be borrowed afterwards.
+    let Frame::Buffer(buffer_frame) = frame else {
+        unreachable!("matched above");
+    };
+    buffer_frame.release();
     let releases = peer.wait_named("release", 1);
     assert_eq!(releases[0]["generation"], 1);
     assert_eq!(releases[0]["slot"], 0);
-    // Dropping releases exactly once.
-    drop(frame);
+    // The consumed frame leaves nothing to release a second time.
     peer.assert_no_more("release", 1);
 }
 

@@ -9,7 +9,7 @@ Rows (under a `## <AREA>` section, header `| Spec | Acceptance | Verified by |`)
 
 * `test:<crate>:<name>` must exist in a test executable of the crate (all test executables are built
   once with `cargo test --workspace --no-run`, or only the needed crates when `--spec` is given),
-  must not be `#[ignore]`d, and must pass (`<executable> --exact <names...>`).
+  must not be `#[ignore]`d, and must pass (`<executable> --exact <names...>`, which must also exit 0).
 * `example:<crate>:<name>` is built (dev profile) and run for 10 s in the current graphical
   session; it passes if it exits 0 or is still running at the timeout. Examples that verify painted
   frames need a display that delivers frame callbacks, and a compositor sends none to a blanked
@@ -257,9 +257,14 @@ def check_tests(rows, packages, no_filter):
                     results.setdefault(match.group(1), []).append(match.group(2))
             for name in selected:
                 states = results.get(name, [])
-                if states and all(state == "ok" for state in states):
+                clean = bool(states) and all(state == "ok" for state in states)
+                if clean and outcome.returncode == 0:
                     continue
                 reason = "did not run" if not states else "/".join(sorted(set(states)))
+                if outcome.returncode != 0:
+                    # An executable that aborts or fails in teardown after printing `ok` lines has
+                    # not verified anything.
+                    reason += f" ({os.path.basename(executable)} exited with status {outcome.returncode})"
                 for row in names[name]:
                     row.errors.append(f"test `{crate}:{name}` {reason}")
 

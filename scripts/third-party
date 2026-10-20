@@ -228,8 +228,12 @@ def npm_packages():
             package = json.load(open(os.path.join(directory, path, "package.json")))
             first_party[package["name"]] = (package.get("version", ""), package.get("license", ""))
     third = dict(licenses)
-    npm = run("npm", "ls", "--package-lock-only", "--all", "--json", cwd=directory, check=False)
-    if npm.returncode == 0 and npm.stdout.strip():
+    try:
+        npm = run("npm", "ls", "--package-lock-only", "--all", "--json", cwd=directory, check=False)
+    except OSError:
+        # npm is not installed (or cannot be launched): the lockfile licenses stand.
+        npm = None
+    if npm is not None and npm.returncode == 0 and npm.stdout.strip():
         listed = {}
 
         def walk(node):

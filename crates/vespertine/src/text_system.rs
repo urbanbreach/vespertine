@@ -348,8 +348,14 @@ impl TextSystem {
     /// Layouts already in progress may complete against the previous font set.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         self.platform_text_system.add_fonts(fonts)?;
-        self.font_ids_by_font.write().clear();
-        self.fallback_resolutions.write().clear();
+        // Clearing the caches and advancing the generation is one step under both cache locks.
+        // Every cache insertion re-checks the generation under its own lock, so an answer
+        // computed against the previous font set either lands before the clear (and is cleared)
+        // or finds the new generation and is discarded.
+        let mut font_ids = self.font_ids_by_font.write();
+        let mut fallbacks = self.fallback_resolutions.write();
+        font_ids.clear();
+        fallbacks.clear();
         self.missing_glyph_reporter.reset();
         self.font_generation.fetch_add(1, Ordering::Release);
         Ok(())
@@ -399,12 +405,12 @@ impl TextSystem {
         } else {
             let generation = self.font_generation.load(Ordering::Acquire);
             let font_id = self.platform_text_system.font_id(font);
-            // A font added while the platform was resolving makes this answer stale: it would
-            // otherwise survive the cache clear of `add_fonts`.
+            // A font added while the platform was resolving makes this answer stale: the
+            // generation is checked under the cache lock, which `add_fonts` holds while it
+            // clears the cache and advances the generation.
+            let mut cache = self.font_ids_by_font.write();
             if self.font_generation.load(Ordering::Acquire) == generation {
-                self.font_ids_by_font
-                    .write()
-                    .insert(font.clone(), clone_font_id_result(&font_id));
+                cache.insert(font.clone(), clone_font_id_result(&font_id));
             }
             font_id
         }
@@ -439,6 +445,7 @@ impl TextSystem {
     }
 
     fn resolve_font_uncached(&self, font: &Font) -> FontId {
+        let generation = self.font_generation.load(Ordering::Acquire);
         if let Ok(font_id) = self.font_id(font) {
             return font_id;
         }
@@ -446,12 +453,10 @@ impl TextSystem {
             return *font_id;
         }
 
-        let generation = self.font_generation.load(Ordering::Acquire);
         let remember = |font_id: FontId| {
+            let mut cache = self.fallback_resolutions.write();
             if self.font_generation.load(Ordering::Acquire) == generation {
-                self.fallback_resolutions
-                    .write()
-                    .insert(font.clone(), font_id);
+                cache.insert(font.clone(), font_id);
             }
             font_id
         };
