@@ -187,3 +187,7 @@ path = "examples/markdown_stream.rs"
 [[example]]
 name = "code_editor"
 path = "examples/code_editor.rs"
+
+[[example]]
+name = "workbench"
+path = "examples/workbench/main.rs"

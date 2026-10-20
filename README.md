@@ -14,6 +14,10 @@ cargo build --workspace --all-targets --release
 cargo run --release --example hello_world
 # Force X11 rather than Wayland, using your desktop's DISPLAY value:
 env -u WAYLAND_DISPLAY cargo run --release --example hello_world
+# The agent workbench, built only from Vespertine components; the scripted run drives the
+# window for 60 seconds, asserts its invariants and exits 0 on success:
+cargo run --release --example workbench
+cargo run --release --example workbench -- --scripted 60
 ```
 
 ## Cross-target checks
