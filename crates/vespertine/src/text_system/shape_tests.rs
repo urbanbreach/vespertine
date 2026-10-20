@@ -469,8 +469,11 @@ mod fallback {
 ///
 /// The test parks the lookup inside the platform, holds one cache lock so the registration stops
 /// part way (after installing the font, before it has advanced the generation), lets the lookup
-/// finish, and only then releases the lock: the lookup's insertion races the registration's
-/// clear exactly where a generation checked outside the lock would let a stale answer through.
+/// finish its platform call, and only then releases the lock: the lookup's insertion is queued
+/// behind the registration's clear exactly where a generation checked outside the lock would
+/// let a stale answer through. No step is ordered by a delay: the test proceeds only once the
+/// kernel reports each thread asleep (blocked on the held lock), which nothing else in the
+/// sequence can cause.
 mod registration_race {
     use super::*;
     use std::{sync::mpsc, time::Duration};
@@ -495,13 +498,30 @@ mod registration_race {
     }
 
     fn wait_for(mut condition: impl FnMut() -> bool) {
-        for _ in 0..1000 {
+        for _ in 0..6000 {
             if condition() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("condition not reached");
+    }
+
+    /// The calling thread's `/proc` task directory name (`<pid>/task/<tid>`).
+    fn current_task() -> String {
+        std::fs::read_link("/proc/thread-self")
+            .expect("/proc/thread-self")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Whether the kernel reports the task as sleeping (here: parked on a lock).
+    fn is_asleep(task: &str) -> bool {
+        let stat = std::fs::read_to_string(format!("/proc/{task}/stat")).expect("task stat");
+        // The state letter follows the parenthesized command name.
+        stat.rsplit(')')
+            .next()
+            .is_some_and(|rest| rest.trim_start().starts_with('S'))
     }
 
     /// Runs `resolve` on a thread parked inside the platform lookup of `blocked`, registers the
@@ -516,31 +536,50 @@ mod registration_race {
     ) {
         let (reached, reached_rx) = mpsc::channel();
         let (resume, resume_rx) = mpsc::channel::<()>();
-        let (reached, resume_rx) = (Mutex::new(reached), Mutex::new(resume_rx));
+        let (awake, awake_rx) = mpsc::channel();
+        let (task_tx, task_rx) = mpsc::channel::<(&'static str, String)>();
+        let (reached, resume_rx, awake) = (
+            Mutex::new(reached),
+            Mutex::new(resume_rx),
+            Mutex::new(awake),
+        );
         let armed = AtomicBool::new(true);
         *shaper.on_font_id.lock() = Some(Arc::new(move |family: &str| {
             if family == blocked && armed.swap(false, Ordering::SeqCst) {
                 reached.lock().send(()).unwrap();
                 resume_rx.lock().recv().unwrap();
+                awake.lock().send(()).unwrap();
             }
         }));
+        let timeout = Duration::from_secs(30);
         std::thread::scope(|scope| {
-            let resolver = scope.spawn(|| resolve(system));
+            let lookup_tasks = task_tx.clone();
+            let resolver = scope.spawn(move || {
+                lookup_tasks.send(("lookup", current_task())).unwrap();
+                resolve(system)
+            });
             reached_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(timeout)
                 .expect("the lookup reached the platform");
             let registrar = hold_write_lock(system, cache, || {
-                let registrar = scope.spawn(|| {
+                let registrar = scope.spawn(move || {
+                    task_tx.send(("registration", current_task())).unwrap();
                     system
                         .add_fonts(vec![Cow::Borrowed(registered.as_bytes())])
                         .unwrap();
                 });
+                let tasks: std::collections::HashMap<_, _> = (0..2)
+                    .map(|_| task_rx.recv_timeout(timeout).expect("thread started"))
+                    .collect();
+                // The font is installed in the platform, so the registration has only the cache
+                // locks left; once it sleeps it is queued on the held lock.
                 wait_for(|| shaper.state.lock().families.contains_key(registered));
-                // The registration is now waiting for the cache lock.
-                std::thread::sleep(Duration::from_millis(100));
+                wait_for(|| is_asleep(&tasks["registration"]));
                 resume.send(()).unwrap();
-                // The lookup finishes against the previous font set and queues its insertion.
-                std::thread::sleep(Duration::from_millis(100));
+                // The lookup has left the platform with its stale answer; once it sleeps again
+                // its insertion is queued behind the registration.
+                awake_rx.recv_timeout(timeout).expect("the lookup resumed");
+                wait_for(|| is_asleep(&tasks["lookup"]));
                 registrar
             });
             resolver.join().unwrap();
