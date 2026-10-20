@@ -3,12 +3,12 @@
 //! overflow clipping with independent corners, plain solid fill sharing a batch with a
 //! gradient quad).
 
-use crate::common::{plain_run, SANS, hex};
+use crate::common::{SANS, hex, plain_run};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, Bounds, Hsla, IntoElement, ParentElement, Pixels, Styled,
-    TextAlign, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point,
-    px, size,
+    TextAlign, Window, canvas, div, fill, font, linear_color_stop, linear_gradient, point, px,
+    size,
 };
 
 fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {

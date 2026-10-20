@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::common::{plain_run, SANS, hex};
+use crate::common::{SANS, hex, plain_run};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, ContentMask, Corners, EdgeFade, Hsla, IntoElement, Pixels,

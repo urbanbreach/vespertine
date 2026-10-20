@@ -1,7 +1,7 @@
 //! FID-RND-008: the same layered surface plate as a styled element (left) and painted from a
 //! canvas in the canonical layer order (right).
 
-use crate::common::{plain_run, SANS, hex};
+use crate::common::{SANS, hex, plain_run};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Background, BorderStyle, BoxShadow, Corners, Edges, Hsla, IntoElement,

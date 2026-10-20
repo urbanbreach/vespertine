@@ -1,12 +1,12 @@
 //! FID-RND-009-1/2: vector primitives and text painted from a canvas, and canvas text equal to
 //! ordinary text under a shared clip.
 
-use crate::common::{plain_run, SANS, hex};
+use crate::common::{SANS, hex, plain_run};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, Bounds, Corners, IntoElement, LineCap, LineJoin, ParentElement, PathBuilder,
-    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, Window, canvas, div, fill,
-    font, point, px, size,
+    PathStyle, Pixels, Point, StrokeOptions, Styled, TextAlign, Window, canvas, div, fill, font,
+    point, px, size,
 };
 
 fn root() -> vespertine::Div {

@@ -1,7 +1,7 @@
 //! FID-RND-003-1/2/3: ordered Gaussian backdrop blur (ordering, per-corner radii, frosted
 //! panel over stripes, floating card with a nested overlay).
 
-use crate::common::{plain_run, SANS, hex};
+use crate::common::{SANS, hex, plain_run};
 use crate::scene::{Scene, register_scene};
 use vespertine::{
     AnyElement, App, BorderStyle, Bounds, Corners, Hsla, IntoElement, Pixels, Styled, TextAlign,

@@ -10,7 +10,7 @@
 //! image under a 64 MiB residency budget; rows are requested while they intersect the viewport
 //! and released when they leave. Part B is identical in both scenes.
 
-use crate::common::{plain_run, INK, SANS, WHITE, hex};
+use crate::common::{INK, SANS, WHITE, hex, plain_run};
 use crate::corpus;
 use crate::scene::{Scene, register_scene};
 use std::sync::Arc;
