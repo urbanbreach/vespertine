@@ -283,6 +283,9 @@ run_gates() {
     fi
     echo "land: gate: cargo fmt --all --check"
     cargo fmt --all --check
+    echo "land: gate: rustfmt --check crates/vespertine_scenes/src/{perf,fid}/*.rs"
+    # build.rs includes these files by path, so cargo fmt does not see them.
+    rustfmt --check crates/vespertine_scenes/src/perf/*.rs crates/vespertine_scenes/src/fid/*.rs
     echo "land: gate: cargo clippy --workspace --all-targets -- -D warnings"
     cargo clippy --workspace --all-targets -- -D warnings
     echo "land: gate: cargo test --workspace"
