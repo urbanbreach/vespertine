@@ -185,6 +185,37 @@ fn sprites_sort_by_order_texture_tile_and_original_index() {
 }
 
 #[test]
+fn single_texture_sprite_arrays_sort_like_a_stable_comparison_sort() {
+    let mut scratch = SortScratch::default();
+    // Short and long arrays (comparison and radix paths), dense and sparse orders, tile
+    // identities spanning one, three and four bytes.
+    for seed in 0..12u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let count = if seed % 2 == 0 {
+            rng.random_range(2..RADIX_MIN_LEN)
+        } else {
+            rng.random_range(RADIX_MIN_LEN..3000usize)
+        };
+        let max_order = [3u32, 40, 100_000][seed as usize % 3];
+        let tile_span = [16u32, 70_000, u32::MAX][(seed as usize / 2) % 3];
+        let mut sprites: Vec<_> = (0..count)
+            .map(|i| {
+                sprite(
+                    rng.random_range(1..=max_order),
+                    7,
+                    rng.random_range(0..tile_span),
+                    i as u32,
+                )
+            })
+            .collect();
+        let expected = expected_sprites(&sprites);
+        sort_sprites(&mut sprites, &mut scratch);
+        let actual: Vec<_> = sprites.iter().map(|s| s.blur as u32).collect();
+        assert_eq!(actual, expected, "seed {seed} count {count}");
+    }
+}
+
+#[test]
 fn already_sorted_input_is_not_moved() {
     let mut scratch = SortScratch::default();
     let mut quads: Vec<_> = (0..64).map(|i| quad(1 + i / 4, i as f32)).collect();

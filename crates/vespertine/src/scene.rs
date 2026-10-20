@@ -64,10 +64,30 @@ pub struct Scene {
     curved_clip_stack: Vec<CurvedClipScope>,
 }
 
+// `Scene::clear` skips dropping paint operations of a frame without paths and surfaces.
+const _: () = {
+    assert!(!std::mem::needs_drop::<Shadow>());
+    assert!(!std::mem::needs_drop::<Quad>());
+    assert!(!std::mem::needs_drop::<Underline>());
+    assert!(!std::mem::needs_drop::<MonochromeSprite>());
+    assert!(!std::mem::needs_drop::<SubpixelSprite>());
+    assert!(!std::mem::needs_drop::<PolychromeSprite>());
+    assert!(!std::mem::needs_drop::<BackdropBlur>());
+    assert!(!std::mem::needs_drop::<CurvedClipShape>());
+};
+
 #[expect(missing_docs)]
 impl Scene {
     pub fn clear(&mut self) {
-        self.paint_operations.clear();
+        if self.paths.is_empty() && self.surfaces.is_empty() {
+            // Only paths and surfaces own heap data (every one is also in `paths` or
+            // `surfaces`); every other operation is plain `Copy` data, so there is nothing to
+            // drop and walking a frame of sprite operations one by one would touch each of them.
+            // SAFETY: the operations left behind need no drop.
+            unsafe { self.paint_operations.set_len(0) };
+        } else {
+            self.paint_operations.clear();
+        }
         self.order_index.begin_frame();
         self.layer_stack.clear();
         self.curved_clip_stack.clear();

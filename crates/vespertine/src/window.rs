@@ -110,8 +110,8 @@ pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
 use self::pointer::{PointerState, pointer_within_keyboard_slop};
 use self::present::PresentCallback;
 use crate::text_system::glyph_store::{
-    GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore, RasterStore,
-    quantize_emoji_origin, quantize_glyph_origin,
+    GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore, RequestKey,
+    RunKey, quantize_emoji_origin, quantize_glyph_origin,
 };
 use crate::util::{
     atomic_incr_if_not_zero, ceil_to_device_pixel, floor_to_device_pixel, round_half_toward_zero,
@@ -6052,7 +6052,7 @@ impl Window {
         self.glyph_store.counters.bump(GlyphCounter::RenderPolicy);
         let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
-        let raster_run_hash = RasterStore::run_hash(&RenderGlyphParams {
+        let raster_run = RunKey::new(&RenderGlyphParams {
             font_id,
             glyph_id: GlyphId(0),
             font_size,
@@ -6067,7 +6067,7 @@ impl Window {
             color,
             subpixel_rendering,
             dilation,
-            raster_run_hash,
+            raster_run,
         }
     }
 
@@ -6095,7 +6095,9 @@ impl Window {
     ) -> Result<()> {
         let glyph_origin = origin.scale(line.scale_factor);
         let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
-        let params = RenderGlyphParams {
+        let run = &style.raster_run;
+        let key = run.request(glyph_id, subpixel_variant);
+        let params = || RenderGlyphParams {
             font_id: style.font_id,
             glyph_id,
             font_size,
@@ -6106,9 +6108,13 @@ impl Window {
             dilation: style.dilation,
         };
 
-        let slot = RasterStore::slot_for(style.raster_run_hash, glyph_id, subpixel_variant);
-        let Some(sprite) =
-            self.resolve_glyph_sprite(slot, &params, integer_origin, &line.snapped_mask)?
+        let Some(sprite) = self.resolve_glyph_sprite(
+            run.slot(&key),
+            key,
+            params,
+            integer_origin,
+            &line.snapped_mask,
+        )?
         else {
             return Ok(());
         };
@@ -6146,7 +6152,8 @@ impl Window {
     fn resolve_glyph_sprite(
         &mut self,
         slot: usize,
-        params: &RenderGlyphParams,
+        key: RequestKey,
+        params: impl Fn() -> RenderGlyphParams,
         integer_origin: Point<ScaledPixels>,
         mask: &ContentMask<ScaledPixels>,
     ) -> Result<Option<GlyphSprite>> {
@@ -6156,19 +6163,20 @@ impl Window {
         let counters = &self.glyph_store.counters;
         self.glyph_store.raster.resolve(
             slot,
-            params,
+            key,
             integer_origin,
             mask,
             frame,
-            |params| {
+            || {
                 counters.bump(GlyphCounter::RasterBoundsQuery);
-                text_system.raster_bounds(params)
+                text_system.raster_bounds(&params())
             },
             || {
                 counters.bump(GlyphCounter::AtlasAccess);
+                let params = params();
                 Ok(sprite_atlas
                     .get_or_insert_with(params.clone().into(), &mut || {
-                        let (size, bytes) = text_system.rasterize_glyph(params)?;
+                        let (size, bytes) = text_system.rasterize_glyph(&params)?;
                         Ok(Some((size, Cow::Owned(bytes))))
                     })?
                     .expect("Callback above only errors or returns Some"))
@@ -6357,9 +6365,15 @@ impl Window {
             dilation: 0,
         };
 
-        let slot = RasterStore::slot_index(&params);
-        let Some(sprite) =
-            self.resolve_glyph_sprite(slot, &params, integer_origin, &line.snapped_mask)?
+        let run = RunKey::new(&params);
+        let key = run.request(params.glyph_id, params.subpixel_variant);
+        let Some(sprite) = self.resolve_glyph_sprite(
+            run.slot(&key),
+            key,
+            || params.clone(),
+            integer_origin,
+            &line.snapped_mask,
+        )?
         else {
             return Ok(());
         };

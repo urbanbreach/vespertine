@@ -217,8 +217,8 @@ pub(crate) struct GlyphRunStyle {
     pub color: Hsla,
     pub subpixel_rendering: bool,
     pub dilation: u8,
-    /// [`RasterStore::run_hash`] of the requests of this run's glyphs.
-    pub raster_run_hash: u64,
+    /// The part of the raster-store request key that all glyphs of this run share.
+    pub raster_run: RunKey,
 }
 
 impl GlyphRunStyle {
@@ -322,13 +322,94 @@ impl RecentFontBounds {
     }
 }
 
+/// A render request packed into three words: equal requests have equal keys, and only they do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RequestKey {
+    font: u64,
+    size_scale: u64,
+    glyph: u64,
+}
+
+impl RequestKey {
+    /// Marks an unoccupied slot: no request sets the top bit of its glyph word.
+    const EMPTY: Self = Self {
+        font: 0,
+        size_scale: 0,
+        glyph: 1 << 63,
+    };
+}
+
+/// The part of a request key that every glyph of a run shares, and the hash of that part.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RunKey {
+    font: u64,
+    size_scale: u64,
+    flags: u64,
+    hash: u64,
+}
+
+impl RunKey {
+    /// The run key of a request; its glyph and subpixel variant do not matter.
+    pub(crate) fn new(params: &RenderGlyphParams) -> Self {
+        let font = params.font_id.0 as u64;
+        let size_scale = u64::from(params.font_size.0.to_bits())
+            | (u64::from(params.scale_factor.to_bits()) << 32);
+        let flags = (u64::from(params.is_emoji) << 48)
+            | (u64::from(params.subpixel_rendering) << 49)
+            | (u64::from(params.dilation) << 50);
+        let mut hasher = SlotHasher(0);
+        hasher.mix(font);
+        hasher.mix(size_scale);
+        hasher.mix(flags);
+        Self {
+            font,
+            size_scale,
+            flags,
+            hash: hasher.0,
+        }
+    }
+
+    /// The key of one glyph of the run at a subpixel variant.
+    #[inline]
+    pub(crate) fn request(&self, glyph_id: GlyphId, variant: Point<u8>) -> RequestKey {
+        RequestKey {
+            font: self.font,
+            size_scale: self.size_scale,
+            glyph: self.flags
+                | u64::from(glyph_id.0)
+                | (u64::from(variant.x) << 32)
+                | (u64::from(variant.y) << 40),
+        }
+    }
+
+    /// The slot of a request of this run.
+    #[inline]
+    pub(crate) fn slot(&self, request: &RequestKey) -> usize {
+        let mut hasher = SlotHasher(self.hash);
+        hasher.mix(request.glyph);
+        // The multiplicative hash mixes into the high bits.
+        (hasher.0 >> (64 - RASTER_STORE_SLOTS.trailing_zeros())) as usize
+    }
+}
+
 struct RasterSlot {
-    params: RenderGlyphParams,
+    key: RequestKey,
     bounds: Bounds<DevicePixels>,
     /// The sprite's pixel size. It only depends on the render request, so it is kept across frames.
     sprite_size: Option<Size<DevicePixels>>,
     /// The atlas tile and the frame in which it was looked up.
     tile: Option<(AtlasTile, u64)>,
+}
+
+impl RasterSlot {
+    fn empty() -> Self {
+        Self {
+            key: RequestKey::EMPTY,
+            bounds: Bounds::default(),
+            sprite_size: None,
+            tile: None,
+        }
+    }
 }
 
 /// A glyph sprite resolved by [`RasterStore::resolve`].
@@ -340,7 +421,7 @@ pub(crate) struct GlyphSprite {
 
 /// A direct-mapped store of raster bounds, known sprite sizes and same-frame atlas tiles.
 pub(crate) struct RasterStore {
-    slots: Vec<Option<RasterSlot>>,
+    slots: Vec<RasterSlot>,
 }
 
 impl RasterStore {
@@ -348,49 +429,27 @@ impl RasterStore {
         Self { slots: Vec::new() }
     }
 
-    /// Hash of the fields of a request that stay the same for every glyph of a run.
-    #[inline]
-    pub(crate) fn run_hash(params: &RenderGlyphParams) -> u64 {
-        let mut hasher = SlotHasher(0);
-        hasher.mix(params.font_id.0 as u64);
-        hasher.mix(u64::from(params.font_size.0.to_bits()) | (u64::from(params.dilation) << 32));
-        hasher.mix(
-            u64::from(params.scale_factor.to_bits())
-                | (u64::from(params.is_emoji) << 32)
-                | (u64::from(params.subpixel_rendering) << 33),
-        );
-        hasher.0
-    }
-
-    /// The slot of a glyph and subpixel variant within a run with hash `run_hash`.
-    #[inline]
-    pub(crate) fn slot_for(run_hash: u64, glyph_id: GlyphId, variant: Point<u8>) -> usize {
-        let mut hasher = SlotHasher(run_hash);
-        hasher.mix(
-            u64::from(glyph_id.0) | (u64::from(variant.x) << 32) | (u64::from(variant.y) << 40),
-        );
-        // The multiplicative hash mixes into the high bits.
-        (hasher.0 >> (64 - RASTER_STORE_SLOTS.trailing_zeros())) as usize
-    }
-
     /// Hash of every field of the request, reduced to a slot index.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn slot_index(params: &RenderGlyphParams) -> usize {
-        Self::slot_for(
-            Self::run_hash(params),
-            params.glyph_id,
-            params.subpixel_variant,
-        )
+        let run = RunKey::new(params);
+        run.slot(&run.request(params.glyph_id, params.subpixel_variant))
     }
 
     pub(crate) fn clear(&mut self) {
-        self.slots.iter_mut().for_each(|slot| *slot = None);
+        self.slots
+            .iter_mut()
+            .for_each(|slot| *slot = RasterSlot::empty());
     }
 
     /// Returns the number of occupied slots.
     #[cfg(test)]
     pub(crate) fn occupied(&self) -> usize {
-        self.slots.iter().flatten().count()
+        self.slots
+            .iter()
+            .filter(|slot| slot.key != RequestKey::EMPTY)
+            .count()
     }
 
     /// Resolves the sprite of a glyph request placed at a whole-pixel origin.
@@ -402,27 +461,27 @@ impl RasterStore {
     pub(crate) fn resolve(
         &mut self,
         slot: usize,
-        params: &RenderGlyphParams,
+        key: RequestKey,
         integer_origin: Point<ScaledPixels>,
         mask: &ContentMask<ScaledPixels>,
         frame: u64,
-        query_bounds: impl FnOnce(&RenderGlyphParams) -> Result<Bounds<DevicePixels>>,
+        query_bounds: impl FnOnce() -> Result<Bounds<DevicePixels>>,
         make_tile: impl FnOnce() -> Result<AtlasTile>,
     ) -> Result<Option<GlyphSprite>> {
         if self.slots.is_empty() {
-            self.slots.resize_with(RASTER_STORE_SLOTS, || None);
+            self.slots
+                .resize_with(RASTER_STORE_SLOTS, RasterSlot::empty);
         }
-        let entry = &mut self.slots[slot];
-        if !entry.as_ref().is_some_and(|slot| slot.params == *params) {
-            let bounds = query_bounds(params)?;
-            *entry = Some(RasterSlot {
-                params: params.clone(),
+        let slot = &mut self.slots[slot];
+        if slot.key != key {
+            let bounds = query_bounds()?;
+            *slot = RasterSlot {
+                key,
                 bounds,
                 sprite_size: None,
                 tile: None,
-            });
+            };
         }
-        let slot = entry.as_mut().expect("slot was just filled");
         if slot.bounds.is_zero() {
             return Ok(None);
         }
@@ -794,11 +853,11 @@ mod tests {
             store
                 .resolve(
                     RasterStore::slot_index(params),
-                    params,
+                    RunKey::new(params).request(params.glyph_id, params.subpixel_variant),
                     origin,
                     mask,
                     frame,
-                    |params| {
+                    || {
                         self.queries.set(self.queries.get() + 1);
                         // Encode the request in the bounds: width from the glyph, height from the variant.
                         Ok(bounds(
