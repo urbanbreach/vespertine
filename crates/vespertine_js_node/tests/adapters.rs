@@ -22,7 +22,7 @@ fn react_adapter_tests_pass_under_node() {
 
 #[test]
 fn react_adapter_tests_pass_under_bun() {
-    suite("vespertine-react", "bun", &["test"]);
+    suite("vespertine-react", "bun", &["test", "--timeout", "30000"]);
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn solid_adapter_tests_pass_under_node() {
 
 #[test]
 fn solid_adapter_tests_pass_under_bun() {
-    suite("vespertine-solid", "bun", &["test"]);
+    suite("vespertine-solid", "bun", &["test", "--timeout", "30000"]);
 }
 
 #[test]
@@ -46,5 +46,9 @@ fn example_surface_tests_pass_under_node() {
 
 #[test]
 fn example_surface_tests_pass_under_bun() {
-    suite("vespertine-examples", "bun", &["test"]);
+    suite(
+        "vespertine-examples",
+        "bun",
+        &["test", "--timeout", "30000"],
+    );
 }

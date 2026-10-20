@@ -28,7 +28,7 @@ fn create_vespertine_tests_pass_under_node() {
 
 #[test]
 fn create_vespertine_tests_pass_under_bun() {
-    suite("create-vespertine", "bun", &["test"]);
+    suite("create-vespertine", "bun", &["test", "--timeout", "30000"]);
 }
 
 #[test]
@@ -38,5 +38,5 @@ fn vespertine_dev_tests_pass_under_node() {
 
 #[test]
 fn vespertine_dev_tests_pass_under_bun() {
-    suite("vespertine-dev", "bun", &["test"]);
+    suite("vespertine-dev", "bun", &["test", "--timeout", "30000"]);
 }

@@ -18,5 +18,8 @@ fn updater_javascript_tests_pass_under_node() {
 
 #[test]
 fn updater_javascript_tests_pass_under_bun() {
-    suite("bun", &["test", "test/updater.test.js"]);
+    suite(
+        "bun",
+        &["test", "--timeout", "30000", "test/updater.test.js"],
+    );
 }

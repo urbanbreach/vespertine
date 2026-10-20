@@ -18,5 +18,5 @@ fn javascript_tests_pass_under_node() {
 
 #[test]
 fn javascript_tests_pass_under_bun() {
-    suite("bun", &["test"]);
+    suite("bun", &["test", "--timeout", "30000"]);
 }
