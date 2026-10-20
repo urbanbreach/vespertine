@@ -402,10 +402,10 @@ impl RenderOnce for StatusSection {
                 )
                 .w(px(24.0))
                 .h(px(24.0))
-                .flex_none()
-                .flex()
                 .items_center()
                 .justify_center()
+                .flex()
+                .flex_none()
                 .rounded(px(6.0))
                 .text_color(colors.muted)
                 .child(close_glyph(colors.muted)),

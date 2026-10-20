@@ -461,12 +461,12 @@ impl Render for ChartView {
         let paint_colors = colors.clone();
 
         let mut row = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
             .items_center()
-            .gap_x(px(14.0))
+            .flex()
+            .flex_wrap()
+            .flex_row()
             .gap_y(px(2.0))
+            .gap_x(px(14.0))
             .min_h(px(READOUT_HEIGHT))
             .mb(px(READOUT_GAP))
             .text_size(px(READOUT_TEXT))
@@ -488,10 +488,10 @@ impl Render for ChartView {
                 .unwrap_or(colors.text);
             row = row.child(
                 div()
-                    .flex()
-                    .flex_row()
                     .items_center()
+                    .flex()
                     .gap(px(6.0))
+                    .flex_row()
                     .child(
                         div()
                             .w(px(8.0))

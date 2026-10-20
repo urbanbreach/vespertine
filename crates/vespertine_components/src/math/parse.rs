@@ -54,14 +54,14 @@ fn syntax<T>(message: impl Into<String>) -> Result<T, MathError> {
 /// TeX atom classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Class {
-    Ord,
-    Op,
-    Bin,
-    Rel,
     Open,
     Close,
+    Ord,
     Punct,
+    Op,
     Inner,
+    Rel,
+    Bin,
 }
 
 /// Where scripts of an atom go.

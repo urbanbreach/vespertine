@@ -336,13 +336,13 @@ impl DiagramCache {
     /// Discards every entry and returns the media to release (source toggles stay).
     pub fn drain(&mut self) -> Vec<DiagramMedia> {
         self.new_requests.clear();
-        self.entries
-            .drain()
-            .filter_map(|(_, entry)| match entry.state {
-                State::Ready(media) => Some(media),
-                _ => None,
-            })
-            .collect()
+        let mut released = Vec::new();
+        for (_, entry) in self.entries.drain() {
+            if let State::Ready(media) = entry.state {
+                released.push(media);
+            }
+        }
+        released
     }
 
     /// Number of entries.

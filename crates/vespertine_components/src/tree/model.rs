@@ -438,29 +438,33 @@ impl TreeModel {
 
     /// The selected paths in visible order.
     pub fn selected_paths(&self) -> Vec<String> {
-        self.rows
-            .iter()
-            .filter(|row| row.is_entry() && self.selection.contains(&row.path))
-            .map(|row| row.path.clone())
-            .collect()
+        let mut paths = Vec::new();
+        for row in &self.rows {
+            if row.is_entry() && self.selection.contains(&row.path) {
+                paths.push(row.path.clone());
+            }
+        }
+        paths
+    }
+
+    /// Whether any proper ancestor of `path` is selected.
+    fn has_selected_ancestor(&self, path: &str) -> bool {
+        let mut ancestor = parent_path(path);
+        while !ancestor.is_empty() {
+            if self.selection.contains(ancestor) {
+                return true;
+            }
+            ancestor = parent_path(ancestor);
+        }
+        false
     }
 
     /// The selected paths that have no selected ancestor, in visible order. Ancestry is checked
     /// by walking the entry's own parents.
     pub fn selection_roots(&self) -> Vec<String> {
-        self.selected_paths()
-            .into_iter()
-            .filter(|path| {
-                let mut ancestor = parent_path(path);
-                while !ancestor.is_empty() {
-                    if self.selection.contains(ancestor) {
-                        return false;
-                    }
-                    ancestor = parent_path(ancestor);
-                }
-                true
-            })
-            .collect()
+        let mut roots = self.selected_paths();
+        roots.retain(|path| !self.has_selected_ancestor(path));
+        roots
     }
 
     /// The paths an action (rename, delete, context menu) applies to: the selection roots when

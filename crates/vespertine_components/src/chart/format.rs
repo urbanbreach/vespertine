@@ -46,13 +46,10 @@ impl NumberFormat {
             return usize::from(decimals.min(MAX_DECIMALS));
         }
         let magnitude = value.abs();
-        if value == 0.0 || magnitude >= 100.0 || value.fract() == 0.0 {
-            0
-        } else if magnitude >= 10.0 {
-            1
-        } else {
-            2
+        if value == 0.0 || value.fract() == 0.0 || magnitude >= 100.0 {
+            return 0;
         }
+        if magnitude >= 10.0 { 1 } else { 2 }
     }
 
     /// Renders `value`: grouped integer part, sign before the prefix, the unit after one space

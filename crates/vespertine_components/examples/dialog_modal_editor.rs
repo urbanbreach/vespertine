@@ -80,14 +80,14 @@ fn build(slot: &Rc<RefCell<Option<Parts>>>) -> Build {
         let (document, dialog) = parts(&slot, window, cx);
         let opener = dialog.clone();
         div()
-            .size_full()
             .relative()
+            .size_full()
             .child(
                 div()
-                    .absolute()
-                    .left(px(20.))
-                    .top(px(20.))
                     .w(px(400.))
+                    .top(px(20.))
+                    .left(px(20.))
+                    .absolute()
                     .child(document),
             )
             .child(

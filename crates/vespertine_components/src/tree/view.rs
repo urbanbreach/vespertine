@@ -1472,17 +1472,15 @@ impl Tree {
             Some(identity) => identity(entry.kind, &entry.name, expanded, window, cx),
             None => default_identity(entry.kind, expanded, &theme),
         };
+        let disclosure = div().w(px(DISCLOSURE_SLOT)).h_full().flex_none();
         let slot = if is_dir {
-            div()
-                .w(px(DISCLOSURE_SLOT))
-                .h_full()
-                .flex_none()
-                .flex()
+            disclosure
                 .items_center()
                 .justify_center()
+                .flex()
                 .child(chevron(expanded, px(CHEVRON_SIZE), theme.text_muted))
         } else {
-            div().w(px(DISCLOSURE_SLOT)).h_full().flex_none()
+            disclosure
         };
         let name: AnyElement = if renaming {
             let field = self.rename.as_ref().expect("renaming").field.clone();
@@ -1511,8 +1509,8 @@ impl Tree {
                 .into_any_element()
         } else {
             div()
-                .flex_1()
                 .min_w_0()
+                .flex_1()
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
@@ -1563,9 +1561,9 @@ impl Tree {
             )
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
+                    .min_w_0()
+                    .flex_1()
                     .when(faded && !renaming, |name| name.opacity(IGNORED_OPACITY))
                     .child(name),
             )

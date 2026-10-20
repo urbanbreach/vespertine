@@ -118,12 +118,8 @@ impl AddressInput {
     }
 
     /// Sets the placeholder shown while the field is empty.
-    pub fn set_placeholder(
-        &mut self,
-        placeholder: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        self.placeholder = placeholder.into();
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = text.into();
         cx.notify();
     }
 
@@ -689,10 +685,10 @@ impl Element for AddressElement {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> AddressPrepaint {
@@ -807,10 +803,10 @@ impl Element for AddressElement {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         prepaint: &mut AddressPrepaint,
         window: &mut Window,
         cx: &mut App,

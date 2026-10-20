@@ -294,10 +294,10 @@ impl Element for TerminalElement {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> TerminalPrepaint {
@@ -408,10 +408,10 @@ impl Element for TerminalElement {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         prepaint: &mut TerminalPrepaint,
         window: &mut Window,
         cx: &mut App,

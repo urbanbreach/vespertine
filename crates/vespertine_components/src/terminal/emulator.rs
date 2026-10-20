@@ -76,29 +76,29 @@ pub struct CellSnapshot {
     pub ch: char,
     /// Zero-width combining marks attached to the character.
     pub marks: Vec<char>,
-    /// The foreground color.
-    pub fg: CellColor,
-    /// The background color.
-    pub bg: CellColor,
-    /// Bold.
-    pub bold: bool,
-    /// Dim.
-    pub dim: bool,
-    /// Italic.
-    pub italic: bool,
-    /// Any underline style.
-    pub underline: bool,
-    /// Inverse video.
-    pub inverse: bool,
-    /// Hidden text.
-    pub hidden: bool,
-    /// The first half of a double-width character.
-    pub wide: bool,
+    /// Inside the current selection.
+    pub selected: bool,
     /// The second half of a double-width character (including a leading spacer at a line wrap):
     /// never shaped, only background-painted.
     pub wide_spacer: bool,
-    /// Inside the current selection.
-    pub selected: bool,
+    /// The first half of a double-width character.
+    pub wide: bool,
+    /// Hidden text.
+    pub hidden: bool,
+    /// Inverse video.
+    pub inverse: bool,
+    /// Any underline style.
+    pub underline: bool,
+    /// Italic.
+    pub italic: bool,
+    /// Dim.
+    pub dim: bool,
+    /// Bold.
+    pub bold: bool,
+    /// The background color.
+    pub bg: CellColor,
+    /// The foreground color.
+    pub fg: CellColor,
 }
 
 impl CellSnapshot {
@@ -237,18 +237,19 @@ impl Emulator {
     /// Resizes the grid (clamped to at least 2 x 1). Content is preserved and the cursor
     /// reflows; the selection is dropped.
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        let size = GridSize::new(cols, rows);
         self.term.selection = None;
-        self.term.resize(GridSize::new(cols, rows));
-    }
-
-    /// Grid width in columns.
-    pub fn cols(&self) -> usize {
-        self.term.columns()
+        self.term.resize(size);
     }
 
     /// Grid height in rows.
     pub fn rows(&self) -> usize {
         self.term.screen_lines()
+    }
+
+    /// Grid width in columns.
+    pub fn cols(&self) -> usize {
+        self.term.columns()
     }
 
     /// The window title set by the program, or `None` after a reset.
@@ -455,6 +456,18 @@ impl From<Side> for AlacrittySide {
     }
 }
 
+/// The named dim colors, whose base index is their normal counterpart's.
+const DIM_NAMED_COLORS: [NamedColor; 8] = [
+    NamedColor::DimWhite,
+    NamedColor::DimCyan,
+    NamedColor::DimMagenta,
+    NamedColor::DimBlue,
+    NamedColor::DimYellow,
+    NamedColor::DimGreen,
+    NamedColor::DimRed,
+    NamedColor::DimBlack,
+];
+
 /// Maps a state-machine color to a cell color plus whether it was a "dim" named color (R2):
 /// named colors below 16 become indexed, the named background becomes the default background,
 /// other named colors become the default foreground, dim variants fold to their base index.
@@ -466,14 +479,7 @@ fn map_color(color: Color) -> (CellColor, bool) {
             let index = named as usize;
             match named {
                 NamedColor::Background => (CellColor::DefaultBackground, false),
-                NamedColor::DimBlack
-                | NamedColor::DimRed
-                | NamedColor::DimGreen
-                | NamedColor::DimYellow
-                | NamedColor::DimBlue
-                | NamedColor::DimMagenta
-                | NamedColor::DimCyan
-                | NamedColor::DimWhite => (CellColor::Indexed(dim_base(named)), true),
+                dim if DIM_NAMED_COLORS.contains(&dim) => (CellColor::Indexed(dim_base(dim)), true),
                 _ if index < 16 => (CellColor::Indexed(index as u8), false),
                 _ => (CellColor::DefaultForeground, false),
             }

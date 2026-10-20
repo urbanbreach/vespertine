@@ -26,20 +26,20 @@ pub const MAX_SCALE: f32 = 8.0;
 /// A line of a frame, in the producer's coordinate space.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Line {
-    /// Start x.
-    pub x1: f32,
-    /// Start y.
-    pub y1: f32,
-    /// End x.
-    pub x2: f32,
-    /// End y.
-    pub y2: f32,
     /// Stroke width.
     pub width: f32,
     /// Ink value in `[0, 1]`.
     pub ink: f32,
     /// Alpha in `[0, 1]`.
     pub alpha: f32,
+    /// Start x.
+    pub x1: f32,
+    /// End x.
+    pub x2: f32,
+    /// Start y.
+    pub y1: f32,
+    /// End y.
+    pub y2: f32,
 }
 
 /// A dot of a frame.

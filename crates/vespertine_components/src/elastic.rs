@@ -114,15 +114,15 @@ pub struct ElasticState {
     extent: f32,
     offset: f32,
     stretch: f32,
-    touching: bool,
-    touch_moved: bool,
-    momentum: bool,
-    fling_bounced: bool,
-    fling_velocity: f32,
-    last_event_ms: Option<f64>,
+    reported_offset: f32,
     spring: Option<ReturnSpring>,
     springs_created: u32,
-    reported_offset: f32,
+    touching: bool,
+    momentum: bool,
+    touch_moved: bool,
+    fling_velocity: f32,
+    fling_bounced: bool,
+    last_event_ms: Option<f64>,
 }
 
 impl Default for ElasticState {
@@ -200,11 +200,11 @@ impl ElasticState {
     }
 
     fn release(&mut self, now_ms: f64) {
-        self.touching = false;
-        self.touch_moved = false;
-        self.stretch = 0.0;
-        self.fling_velocity = 0.0;
         self.fling_bounced = self.offset != 0.0;
+        self.fling_velocity = 0.0;
+        self.stretch = 0.0;
+        self.touch_moved = false;
+        self.touching = false;
         if self.offset != 0.0 && self.spring.is_none() {
             self.start_spring(self.offset, 0.0, now_ms);
         }
@@ -219,10 +219,10 @@ impl ElasticState {
         let vertical = if dx.abs() > dy.abs() { 0.0 } else { dy };
         let consumed = match phase {
             TouchPhase::Started => {
-                self.touching = true;
-                self.touch_moved = false;
                 self.momentum = false;
                 self.fling_bounced = false;
+                self.touch_moved = false;
+                self.touching = true;
                 false
             }
             TouchPhase::Cancelled => {
@@ -490,28 +490,28 @@ impl Element for ElasticScroll {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) -> (LayoutId, ()) {
         // Layout passes straight through to the child: the wrapper adds no box.
-        (self.child.request_layout(window, cx), ())
+        (self.child.request_layout(window, app), ())
     }
 
     fn prepaint(
         &mut self,
-        id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> ElasticPrepaint {
         let active = self.is_active(cx);
         let now = MotionClock::now_ms(cx);
         let state = window.with_element_state(
-            id.expect("the elastic wrapper has an id"),
+            element_id.expect("the elastic wrapper has an id"),
             |state: Option<Rc<RefCell<ElasticState>>>, _| {
                 let state = state.unwrap_or_default();
                 (state.clone(), state)
@@ -540,9 +540,7 @@ impl Element for ElasticScroll {
             state.offset()
         };
         let hitbox = active.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal));
-        if offset == 0.0 {
-            self.child.prepaint(window, cx);
-        } else {
+        if offset != 0.0 {
             // The band displaces the child's prepaint and paint origin under a content mask
             // equal to the wrapper's bounds.
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -550,6 +548,8 @@ impl Element for ElasticScroll {
                     self.child.prepaint(window, cx);
                 });
             });
+        } else {
+            self.child.prepaint(window, cx);
         }
         ElasticPrepaint {
             state,
@@ -560,10 +560,10 @@ impl Element for ElasticScroll {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         prepaint: &mut ElasticPrepaint,
         window: &mut Window,
         cx: &mut App,
@@ -598,17 +598,18 @@ impl Element for ElasticScroll {
                     return;
                 };
                 window.refresh();
-                if consumed {
-                    cx.stop_propagation();
+                if !consumed {
+                    return;
                 }
+                cx.stop_propagation();
             });
         }
-        if prepaint.offset == 0.0 {
-            self.child.paint(window, cx);
-        } else {
+        if prepaint.offset != 0.0 {
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 self.child.paint(window, cx);
             });
+        } else {
+            self.child.paint(window, cx);
         }
     }
 }

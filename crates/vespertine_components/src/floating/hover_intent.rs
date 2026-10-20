@@ -84,9 +84,9 @@ pub struct HoverIntent<K> {
 impl<K> Default for HoverIntent<K> {
     fn default() -> Self {
         Self {
-            origin: None,
-            pending: None,
             remembered: None,
+            pending: None,
+            origin: None,
         }
     }
 }
@@ -220,20 +220,19 @@ impl<K: PartialEq + Clone> HoverIntent<K> {
         pointer: Point<Pixels>,
         trigger: Bounds<Pixels>,
         child: Option<Bounds<Pixels>>,
-        left: bool,
+        opens_left: bool,
     ) -> bool {
         if trigger.contains(&pointer) {
             self.record_origin(pointer);
             return true;
         }
-        let Some(child) = child else {
-            return true;
-        };
-        if child.contains(&pointer) {
-            return true;
+        match child {
+            None => true,
+            Some(child) if child.contains(&pointer) => true,
+            Some(child) => self
+                .origin
+                .is_some_and(|origin| in_corridor(origin, pointer, child, opens_left)),
         }
-        self.origin
-            .is_some_and(|origin| in_corridor(origin, pointer, child, left))
     }
 }
 

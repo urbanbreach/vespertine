@@ -20,13 +20,13 @@ struct Root {
 impl Render for Root {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .size_full()
             .relative()
+            .size_full()
             .child(
                 div()
-                    .absolute()
-                    .left(px(20.))
                     .top(px(100.))
+                    .left(px(20.))
+                    .absolute()
                     .child(self.trigger.clone()),
             )
             .child(

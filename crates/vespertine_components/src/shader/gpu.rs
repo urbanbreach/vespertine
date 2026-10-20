@@ -221,14 +221,14 @@ fn ease(d: f32, w: f32) -> f32 {
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
         },
+        visibility: wgpu::ShaderStages::FRAGMENT,
         count: None,
+        binding,
     }
 }
 
@@ -468,14 +468,14 @@ impl Target {
         extra: wgpu::TextureUsages,
     ) -> Self {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            dimension: wgpu::TextureDimension::D2,
             format,
+            dimension: wgpu::TextureDimension::D2,
+            size: wgpu::Extent3d {
+                depth_or_array_layers: 1,
+                height: size.1,
+                width: size.0,
+            },
+            label: Some(label),
             mip_level_count: 1,
             sample_count: 1,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT

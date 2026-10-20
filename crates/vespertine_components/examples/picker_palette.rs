@@ -127,8 +127,8 @@ fn build(slot: &Rc<RefCell<Option<Parts>>>) -> Build {
         let picker = parts(&slot, window, cx);
         let opener = picker.clone();
         div()
-            .size_full()
             .relative()
+            .size_full()
             .child(
                 div()
                     .id("open-palette")

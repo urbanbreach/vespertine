@@ -26,11 +26,8 @@ pub fn indexed_color(index: u8, ansi: &[Rgba; 16], dark: bool) -> Rgba {
         0..=15 => ansi[usize::from(index)],
         16..=231 => {
             let n = usize::from(index - 16);
-            rgb8(
-                CUBE_LEVELS[n / 36],
-                CUBE_LEVELS[(n / 6) % 6],
-                CUBE_LEVELS[n % 6],
-            )
+            let [red, green, blue] = [n / 36, (n / 6) % 6, n % 6].map(|level| CUBE_LEVELS[level]);
+            rgb8(red, green, blue)
         }
         232..=255 => {
             let step = index - 232;

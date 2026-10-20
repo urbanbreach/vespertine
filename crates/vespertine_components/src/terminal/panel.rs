@@ -128,14 +128,15 @@ pub fn active_after_close(active: usize, closed: usize, remaining: usize) -> usi
 /// `to >= active`; `active + 1` when `from > active` and `to <= active`; otherwise unchanged.
 pub fn active_after_move(active: usize, from: usize, to: usize) -> usize {
     if from == active {
-        to
-    } else if from < active && to >= active {
-        active - 1
-    } else if from > active && to <= active {
-        active + 1
-    } else {
-        active
+        return to;
     }
+    if from < active && to >= active {
+        return active - 1;
+    }
+    if from > active && to <= active {
+        return active + 1;
+    }
+    active
 }
 
 impl TerminalPanel {

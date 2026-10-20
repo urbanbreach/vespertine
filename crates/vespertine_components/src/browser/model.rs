@@ -163,17 +163,18 @@ mod tests {
 
     #[test]
     fn typed_addresses_are_normalized_by_the_accepted_vectors() {
-        for (input, expected) in [
-            ("localhost:3000", "http://localhost:3000/"),
-            ("127.0.0.1:5173/a?x=1", "http://127.0.0.1:5173/a?x=1"),
-            ("[::1]:8080", "http://[::1]:8080/"),
-            ("[::1]", "http://[::1]/"),
-            (" app.localhost:3000 ", "http://app.localhost:3000/"),
-            ("example.com/path", "https://example.com/path"),
-            ("https://localhost:3000", "https://localhost:3000/"),
-            ("http://example.com", "http://example.com/"),
+        let vectors = [
             ("EXAMPLE.com", "https://example.com/"),
-        ] {
+            ("example.com/path", "https://example.com/path"),
+            ("http://example.com", "http://example.com/"),
+            ("[::1]", "http://[::1]/"),
+            ("[::1]:8080", "http://[::1]:8080/"),
+            ("https://localhost:3000", "https://localhost:3000/"),
+            ("localhost:3000", "http://localhost:3000/"),
+            (" app.localhost:3000 ", "http://app.localhost:3000/"),
+            ("127.0.0.1:5173/a?x=1", "http://127.0.0.1:5173/a?x=1"),
+        ];
+        for (input, expected) in vectors {
             assert_eq!(
                 normalize_address(input).as_deref(),
                 Ok(expected),
@@ -299,13 +300,14 @@ mod tests {
         ] {
             assert!(!allowed_navigation(address), "{address}");
         }
-        for address in [
-            "https://example.com/embed",
-            "about:blank",
+        let frame_ok = [
             "about:srcdoc",
-            "data:text/html,hi",
             "blob:https://example.com/0f3e",
-        ] {
+            "https://example.com/embed",
+            "data:text/html,hi",
+            "about:blank",
+        ];
+        for address in frame_ok {
             assert!(allowed_frame_navigation(address), "{address}");
         }
         for address in [

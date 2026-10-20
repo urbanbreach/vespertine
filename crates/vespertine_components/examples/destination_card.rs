@@ -110,14 +110,14 @@ fn build(example: &Rc<Example>) -> Build {
         let copy_text = card.copied_text().to_string();
         text_root(
             div()
-                .size_full()
                 .relative()
+                .size_full()
                 .child(
                     div()
-                        .absolute()
-                        .left(px(24.))
-                        .top(px(24.))
                         .w(px(440.))
+                        .top(px(24.))
+                        .left(px(24.))
+                        .absolute()
                         .flex()
                         .flex_col()
                         .gap(px(8.))

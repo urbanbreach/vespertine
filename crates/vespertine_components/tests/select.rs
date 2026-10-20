@@ -46,8 +46,8 @@ impl Render for Root {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let clicks = self.shared.background_clicks.clone();
         div()
-            .size_full()
             .relative()
+            .size_full()
             .child(
                 div()
                     .id("background")

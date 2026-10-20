@@ -974,10 +974,10 @@ fn card_row(
                     div()
                         .h(px(22.))
                         .flex_none()
-                        .flex()
-                        .flex_row()
-                        .items_center()
                         .justify_between()
+                        .items_center()
+                        .flex_row()
+                        .flex()
                         .child(
                             div()
                                 .font_family(frame.props.theme.font_mono.clone())

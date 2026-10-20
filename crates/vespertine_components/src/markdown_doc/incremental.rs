@@ -52,14 +52,14 @@ pub struct IncrementalParser {
 }
 
 impl IncrementalParser {
-    /// An empty parser.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The stored source: exactly the appended text.
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// An empty parser.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// The canonical tree.

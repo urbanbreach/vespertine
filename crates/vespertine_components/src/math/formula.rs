@@ -10,24 +10,24 @@ pub enum DisplayItem {
     /// A glyph of a face of the face table, with its origin (baseline, left) and the size of the
     /// glyph in ems (script glyphs are smaller than 1.0).
     Glyph {
-        /// Index into [`super::FACE_TABLE`].
-        font: u8,
-        /// Glyph identifier in that face.
-        glyph: u16,
         /// Horizontal origin.
         x: f32,
         /// Baseline position, downwards from the formula baseline.
         y: f32,
+        /// Index into [`super::FACE_TABLE`].
+        font: u8,
         /// Font size of the glyph in ems.
         scale: f32,
+        /// Glyph identifier in that face.
+        glyph: u16,
     },
     /// A filled rectangle (fraction bar, radical bar, overline).
     Rule {
+        width: f32,
+        height: f32,
         x: f32,
         /// Top edge, downwards from the formula baseline.
         y: f32,
-        width: f32,
-        height: f32,
     },
 }
 

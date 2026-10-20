@@ -918,16 +918,15 @@ fn prepare_layer(
         }
         let label: SharedString = source_line.to_string().into();
         let run = TextRun {
-            len: label.len(),
-            font: font.clone(),
             color: style.muted_foreground,
-            background_color: None,
+            len: label.len(),
             underline: None,
+            font: font.clone(),
             strikethrough: None,
+            background_color: None,
         };
-        let line = window
-            .text_system()
-            .shape_line(label, typography.size, &[run], None);
+        let shaper = window.text_system();
+        let line = shaper.shape_line(label, typography.size, &[run], None);
         let right = viewport.left() + inset - px(padding_right);
         let mut marker = marker;
         if let Some(marker) = marker.as_mut() {

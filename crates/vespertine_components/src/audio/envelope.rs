@@ -138,20 +138,26 @@ impl EnvelopeBuffer {
         self.pending = self.pending.max(amplitude);
         let elapsed = now.saturating_duration_since(start);
         let due = (elapsed.as_nanos() / SLOT.as_nanos()) as usize + 1;
-        if self.filled >= due {
+        let missing = due.saturating_sub(self.filled);
+        if missing == 0 {
             return false;
         }
-        while self.filled < due {
-            let previous = self.slots.back().copied().unwrap_or(0.0);
-            self.slots.push_back(self.pending.max(previous * RELEASE));
-            if self.slots.len() > CAPACITY {
-                self.slots.pop_front();
-                self.first += 1;
-            }
-            self.filled += 1;
+        for _ in 0..missing {
+            self.push_slot();
         }
         self.pending = 0.0;
         true
+    }
+
+    /// Appends one slot: the pending peak, or the previous slot decayed by [`RELEASE`].
+    fn push_slot(&mut self) {
+        let decayed = self.slots.back().map_or(0.0, |last| last * RELEASE);
+        self.slots.push_back(self.pending.max(decayed));
+        self.filled += 1;
+        if self.slots.len() > CAPACITY {
+            self.slots.pop_front();
+            self.first += 1;
+        }
     }
 
     /// Number of slots stored (at most [`CAPACITY`]).
@@ -202,14 +208,12 @@ impl EnvelopeBuffer {
     /// The current level for a glow or meter (R4).
     pub fn level(&self, now: Instant) -> f32 {
         let bars = self.bars(now, true);
-        match bars.as_slice() {
-            [] => 0.0,
-            [only] => only.amplitude * only.age.clamp(0.0, 1.0),
-            [newest, previous, ..] => {
-                previous.amplitude
-                    + (newest.amplitude - previous.amplitude) * newest.age.clamp(0.0, 1.0)
-            }
-        }
+        let Some(newest) = bars.first() else {
+            return 0.0;
+        };
+        let blend = newest.age.clamp(0.0, 1.0);
+        let before = bars.get(1).map_or(0.0, |bar| bar.amplitude);
+        before + (newest.amplitude - before) * blend
     }
 }
 

@@ -399,14 +399,19 @@ mod tests {
 
     #[test]
     fn drop_index_quantizes_and_clamps() {
-        assert_eq!(drop_index(-10.0, 150.0, 3), 0);
-        assert_eq!(drop_index(0.0, 150.0, 3), 0);
-        assert_eq!(drop_index(149.0, 150.0, 3), 0);
-        assert_eq!(drop_index(150.0, 150.0, 3), 1);
-        assert_eq!(drop_index(700.0, 150.0, 3), 2);
-        assert_eq!(drop_index(10.0, 150.0, 0), 0);
-        assert_eq!(drop_index(f32::NAN, 150.0, 3), 0);
-        assert_eq!(drop_index(120.0, TAB_SLOT, 5), 1);
+        let cases = [
+            (f32::NAN, 150.0, 3, 0),
+            (-10.0, 150.0, 3, 0),
+            (0.0, 150.0, 3, 0),
+            (149.0, 150.0, 3, 0),
+            (150.0, 150.0, 3, 1),
+            (700.0, 150.0, 3, 2),
+            (10.0, 150.0, 0, 0),
+            (120.0, TAB_SLOT, 5, 1),
+        ];
+        for (x, slot, count, expected) in cases {
+            assert_eq!(drop_index(x, slot, count), expected, "x = {x}");
+        }
     }
 
     #[test]

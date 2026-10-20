@@ -273,10 +273,10 @@ pub fn render_overview_rail(
         column = column.child(
             div()
                 .id((id, index))
-                .h(px(TICK_SLOT))
                 .w_full()
-                .flex()
+                .h(px(TICK_SLOT))
                 .items_center()
+                .flex()
                 .cursor_pointer()
                 .child(mark)
                 .on_hover(move |entered, window, _| {

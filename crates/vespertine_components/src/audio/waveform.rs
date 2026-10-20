@@ -101,12 +101,14 @@ pub fn ease_out(t: f32) -> f32 {
 
 fn mix(a: Hsla, b: Hsla, t: f32) -> Hsla {
     let (a, b): (Rgba, Rgba) = (a.into(), b.into());
-    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    let blend = |from: f32, to: f32| from + (to - from) * t;
+    let alpha = blend(a.a, b.a);
+    let blue = blend(a.b, b.b);
     Rgba {
-        r: lerp(a.r, b.r),
-        g: lerp(a.g, b.g),
-        b: lerp(a.b, b.b),
-        a: lerp(a.a, b.a),
+        a: alpha,
+        b: blue,
+        g: blend(a.g, b.g),
+        r: blend(a.r, b.r),
     }
     .into()
 }

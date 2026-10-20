@@ -91,26 +91,26 @@ impl Element for DisabledGroup {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
-        self.child.prepaint(window, cx);
+        self.child.prepaint(window, app);
     }
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         _prepaint: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
-        self.child.paint(window, cx);
+        self.child.paint(window, app);
     }
 }

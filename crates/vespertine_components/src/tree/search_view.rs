@@ -154,17 +154,15 @@ fn search_row(
     cx: &mut Context<SearchResults>,
 ) -> AnyElement {
     let path = row.path.clone();
+    let disclosure = div().w(px(DISCLOSURE_SLOT)).h_full().flex_none();
     let slot = if row.has_children {
-        div()
-            .w(px(DISCLOSURE_SLOT))
-            .h_full()
-            .flex_none()
-            .flex()
+        disclosure
             .items_center()
             .justify_center()
+            .flex()
             .child(chevron(!row.collapsed, px(CHEVRON_SIZE), theme.text_muted))
     } else {
-        div().w(px(DISCLOSURE_SLOT)).h_full().flex_none()
+        disclosure
     };
     let is_dir = node.kind == EntryKind::Directory;
     let label: SharedString = node.name.clone().into();

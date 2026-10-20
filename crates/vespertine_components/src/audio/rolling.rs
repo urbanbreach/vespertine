@@ -386,17 +386,17 @@ pub fn place_glyphs(
 }
 
 fn shape(window: &Window, text: &SharedString, font_size: Pixels, color: Hsla) -> ShapedLine {
+    let font = window.text_style().font();
     let run = TextRun {
+        font,
         len: text.len(),
-        font: window.text_style().font(),
-        color,
-        background_color: None,
-        underline: None,
         strikethrough: None,
+        underline: None,
+        background_color: None,
+        color,
     };
-    window
-        .text_system()
-        .shape_line(text.clone(), font_size, &[run], None)
+    let system = window.text_system();
+    system.shape_line(text.clone(), font_size, &[run], None)
 }
 
 /// The element of a running roll.
@@ -576,13 +576,18 @@ mod tests {
 
     #[test]
     fn a10_shared_ends() {
-        assert_eq!(shared_ends("Opus 5.5", "Opus 5.1"), (7, 0));
-        assert_eq!(shared_ends("feature/a", "fix/a"), (1, 2));
-        assert_eq!(shared_ends("main", "main-2"), (4, 0));
-        assert_eq!(shared_ends("aa", "aaa"), (2, 0));
-        assert_eq!(shared_ends("ab", "b"), (0, 1));
-        assert_eq!(shared_ends("", "x"), (0, 0));
-        assert_eq!(shared_ends("same", "same"), (4, 0));
+        let cases = [
+            ("Opus 5.5", "Opus 5.1", (7, 0)),
+            ("feature/a", "fix/a", (1, 2)),
+            ("main", "main-2", (4, 0)),
+            ("aa", "aaa", (2, 0)),
+            ("ab", "b", (0, 1)),
+            ("", "x", (0, 0)),
+            ("same", "same", (4, 0)),
+        ];
+        for (old, new, expected) in cases {
+            assert_eq!(shared_ends(old, new), expected, "{old:?} -> {new:?}");
+        }
     }
 
     #[test]

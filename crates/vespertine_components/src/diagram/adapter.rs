@@ -103,24 +103,24 @@ pub fn check_limits(source: &str) -> Result<(), String> {
 /// The theme tokens a palette derives from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaletteTokens {
-    /// Whether the appearance is dark.
-    pub dark: bool,
-    /// Background token.
-    pub background: Color,
-    /// Border token.
-    pub border: Color,
-    /// Strong-border token.
-    pub border_strong: Color,
-    /// Text token.
-    pub text: Color,
-    /// Muted-text token.
-    pub text_muted: Color,
-    /// Faint-text token.
-    pub text_faint: Color,
-    /// Accent color.
-    pub accent: Color,
     /// The theme's sans family.
     pub font_sans: String,
+    /// Whether the appearance is dark.
+    pub dark: bool,
+    /// Accent color.
+    pub accent: Color,
+    /// Background token.
+    pub background: Color,
+    /// Faint-text token.
+    pub text_faint: Color,
+    /// Border token.
+    pub border: Color,
+    /// Text token.
+    pub text: Color,
+    /// Strong-border token.
+    pub border_strong: Color,
+    /// Muted-text token.
+    pub text_muted: Color,
 }
 
 impl PaletteTokens {
@@ -129,15 +129,15 @@ impl PaletteTokens {
     /// semantic theme distinguishes them.
     pub fn from_document_theme(theme: &DocumentTheme) -> PaletteTokens {
         PaletteTokens {
-            dark: theme.appearance == Appearance::Dark,
-            background: Color::from_rgba(theme.bg),
-            border: Color::from_rgba(theme.border),
-            border_strong: Color::from_rgba(theme.border),
-            text: Color::from_rgba(theme.text),
-            text_muted: Color::from_rgba(theme.text_muted),
-            text_faint: Color::from_rgba(theme.text_faint),
-            accent: Color::from_rgba(theme.accent),
             font_sans: theme.font_sans.to_string(),
+            dark: theme.appearance == Appearance::Dark,
+            accent: Color::from_rgba(theme.accent),
+            background: Color::from_rgba(theme.bg),
+            text_faint: Color::from_rgba(theme.text_faint),
+            border: Color::from_rgba(theme.border),
+            text: Color::from_rgba(theme.text),
+            border_strong: Color::from_rgba(theme.border),
+            text_muted: Color::from_rgba(theme.text_muted),
         }
     }
 }

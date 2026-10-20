@@ -342,10 +342,10 @@ impl Element for GraphGutter {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout: &mut (),
         _prepaint: &mut (),
         window: &mut Window,
         cx: &mut App,

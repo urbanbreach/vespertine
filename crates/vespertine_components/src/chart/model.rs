@@ -17,15 +17,15 @@ pub const MAX_CATEGORIES: usize = 2_000;
 /// What a chart draws.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ChartKind {
-    /// Grouped or stacked bars (vertical, or horizontal with [`Chart::horizontal`]).
-    #[default]
-    Bar,
+    /// Points on numeric x and y axes.
+    Scatter,
     /// Polylines.
     Line,
     /// Polylines with filled areas down to the baseline.
     Area,
-    /// Points on numeric x and y axes.
-    Scatter,
+    /// Grouped or stacked bars (vertical, or horizontal with [`Chart::horizontal`]).
+    #[default]
+    Bar,
 }
 
 /// A descriptor exceeded a validation limit.
@@ -107,28 +107,28 @@ impl Series {
 /// A chart descriptor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chart {
-    /// The kind.
-    pub kind: ChartKind,
-    /// Plot height in logical pixels, clamped to `[80, 600]`.
-    pub height: f32,
-    /// Category labels (non-scatter kinds).
-    pub x: Vec<String>,
-    /// The series.
-    pub series: Vec<Series>,
-    /// Stack bars per category.
-    pub stacked: bool,
-    /// Lay bars out horizontally.
-    pub horizontal: bool,
-    /// Replaces the computed lower bound of the value axis.
-    pub y_min: Option<f64>,
-    /// Replaces the computed upper bound of the value axis.
-    pub y_max: Option<f64>,
-    /// Format of values: value-axis ticks, readouts and the y part of scatter readouts.
-    pub format: NumberFormat,
-    /// Format of scatter x values (no prefix).
-    pub x_format: NumberFormat,
     /// Whether the legend is shown.
     pub legend: bool,
+    /// Format of values: value-axis ticks, readouts and the y part of scatter readouts.
+    pub format: NumberFormat,
+    /// The kind.
+    pub kind: ChartKind,
+    /// Format of scatter x values (no prefix).
+    pub x_format: NumberFormat,
+    /// Stack bars per category.
+    pub stacked: bool,
+    /// The series.
+    pub series: Vec<Series>,
+    /// Replaces the computed lower bound of the value axis.
+    pub y_min: Option<f64>,
+    /// Plot height in logical pixels, clamped to `[80, 600]`.
+    pub height: f32,
+    /// Lay bars out horizontally.
+    pub horizontal: bool,
+    /// Category labels (non-scatter kinds).
+    pub x: Vec<String>,
+    /// Replaces the computed upper bound of the value axis.
+    pub y_max: Option<f64>,
 }
 
 impl Default for Chart {

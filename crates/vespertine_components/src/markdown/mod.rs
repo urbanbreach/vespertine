@@ -64,14 +64,14 @@ impl Default for MarkdownOptions {
 /// italic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Face {
-    /// Strong emphasis and headings.
-    Bold,
     /// Emphasis.
     Italic,
-    /// Inline code, fenced and indented code blocks.
-    Code,
+    /// Strong emphasis and headings.
+    Bold,
     /// Strikethrough (`~` runs).
     Strikethrough,
+    /// Inline code, fenced and indented code blocks.
+    Code,
 }
 
 /// A syntax-colored byte range of a fenced code body: the neutral token kind of the TXT-007

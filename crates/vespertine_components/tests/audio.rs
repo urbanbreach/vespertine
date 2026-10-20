@@ -176,9 +176,9 @@ struct EmptyView;
 impl vespertine::Render for EmptyView {
     fn render(
         &mut self,
-        _: &mut vespertine::Window,
-        _: &mut vespertine::Context<Self>,
-    ) -> impl vespertine::IntoElement {
+        _window: &mut vespertine::Window,
+        _cx: &mut vespertine::Context<Self>,
+    ) -> impl IntoElement {
         div()
     }
 }

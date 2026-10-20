@@ -12,7 +12,9 @@ use std::net::{SocketAddr, TcpListener};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use support::*;
-use vespertine::{Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
+use vespertine::{
+    Entity, IntoElement, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px,
+};
 use vespertine_components::browser::{
     BodyKind, BrowserContext, BrowserProfile, BrowserSurface, Presentation,
 };
@@ -79,9 +81,9 @@ struct Pair {
 impl vespertine::Render for Pair {
     fn render(
         &mut self,
-        _: &mut vespertine::Window,
-        _: &mut vespertine::Context<Self>,
-    ) -> impl vespertine::IntoElement {
+        _window: &mut vespertine::Window,
+        _cx: &mut vespertine::Context<Self>,
+    ) -> impl IntoElement {
         use vespertine::{ParentElement, Styled, div};
         div().size_full().flex().children(
             self.surfaces

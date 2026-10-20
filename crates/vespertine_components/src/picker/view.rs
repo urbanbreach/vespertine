@@ -949,9 +949,9 @@ impl Picker {
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .child(
                 div()
+                    .items_baseline()
                     .flex()
                     .flex_row()
-                    .items_baseline()
                     .gap(px(6.))
                     .flex_1()
                     .min_w(px(0.))

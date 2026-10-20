@@ -39,25 +39,21 @@ impl Domain {
 /// precision so no floating-point noise remains. Bounds are swapped when reversed; non-finite
 /// bounds give no ticks; equal bounds give one tick.
 pub fn nice_ticks(lo: f64, hi: f64, count: usize) -> Vec<f64> {
-    let (lo, hi) = if hi < lo { (hi, lo) } else { (lo, hi) };
     if !lo.is_finite() || !hi.is_finite() {
         return Vec::new();
     }
-    if (hi - lo).abs() < f64::EPSILON {
+    let (lo, hi) = if hi < lo { (hi, lo) } else { (lo, hi) };
+    let span = hi - lo;
+    if span.abs() < f64::EPSILON {
         return vec![lo];
     }
-    let raw = (hi - lo) / count.max(1) as f64;
+    let raw = span / count.max(1) as f64;
     let magnitude = 10f64.powf(raw.log10().floor());
     let normalized = raw / magnitude;
-    let factor = if normalized < 1.5 {
-        1.0
-    } else if normalized < 3.0 {
-        2.0
-    } else if normalized < 7.0 {
-        5.0
-    } else {
-        10.0
-    };
+    let factor = [(1.5, 1.0), (3.0, 2.0), (7.0, 5.0)]
+        .into_iter()
+        .find(|&(limit, _)| normalized < limit)
+        .map_or(10.0, |(_, factor)| factor);
     let step = magnitude * factor;
     let digits = 10f64.powi((-step.log10().floor()).max(0.0) as i32);
     let start = (lo / step).ceil() * step;
