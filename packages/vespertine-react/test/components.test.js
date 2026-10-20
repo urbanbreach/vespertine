@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import React from "react";
 import { Button, DismissableLayer, FloatingLayer, Select, Tooltip, buttonProps, useControllableState } from "../src/index.js";
-import { h, installFakeTime, microtasks, mount, settle, textOf } from "./components-helpers.js";
+import { h, installFakeTime, microtasks, mount, settle, textOf, until } from "./components-helpers.js";
 
 test("CMP-001 R1: a button is a focusable generic container with role button", () => {
   const ui = mount(h(Button, { testId: "b" }, "Go"));
@@ -586,23 +586,26 @@ test("CMP-005 A2: the highlight starts on the selected item, also when it mounts
   ];
   const ui = mount(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(false) }));
   assert.deepEqual(highlighted(ui, ["a", "c"]), [], "no selected item is registered yet");
+  const shown = () => highlighted(ui, ["a", "c"]).join();
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(true) }));
-  await settle(40);
+  await until(() => shown() === "c");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["c"], "the selected item that mounts late takes the highlight");
   ui.key("content", "up");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["a"]);
+  await settle();
+  assert.deepEqual(highlighted(ui, ["a", "c"]), ["a"], "a later registration change keeps the moved highlight");
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: [] }));
-  await settle(40);
+  await until(() => shown() === "");
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(true) }));
-  await settle(40);
+  await until(() => shown() === "c");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["c"]);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "c" }, items: items(false) }));
-  await settle(40);
+  await until(() => shown() === "");
   assert.deepEqual(highlighted(ui, ["a", "c"]), [], "removing the selected, highlighted item leaves no highlight");
   ui.key("content", "down");
   assert.deepEqual(highlighted(ui, ["a", "c"]), ["a"]);
   ui.render(selectApp({ root: { defaultOpen: true, defaultValue: "a" }, items: [] }));
-  await settle(40);
+  await until(() => shown() === "");
   assert.deepEqual(highlighted(ui, ["a", "c"]), []);
 });
 

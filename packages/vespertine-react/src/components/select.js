@@ -58,21 +58,35 @@ export const Root = React.forwardRef(function Root(
   const closeReason = React.useRef(null);
   const [pressFlag] = React.useState(createPressFlag);
 
-  // Highlight: the enabled selected registered item when the popup opens and whenever the
-  // registrations or the value change while it is open; empty when nothing qualifies.
+  // Highlight: the enabled selected registered item when the popup opens or the value changes;
+  // when only the registrations change, a highlight on an entry that is still registered and
+  // enabled (the user may have moved it) stays, otherwise the selected item takes over, or
+  // nothing does. An item that unmounted and mounted again is a new entry.
+  const initialized = React.useRef({ open: false, value: undefined });
+  const highlightedEntry = React.useRef(null);
   React.useEffect(() => {
     if (!open) {
+      initialized.current = { open: false, value };
+      highlightedEntry.current = null;
       setHighlight(null);
       return;
     }
-    const selected = entries.current.find((entry) => entry.value === value && !entry.disabled);
-    setHighlight(selected ? selected.value : null);
+    const restart = !initialized.current.open || initialized.current.value !== value;
+    initialized.current = { open: true, value };
+    const kept = highlightedEntry.current;
+    const keep = !restart && kept && entries.current.includes(kept) && !kept.disabled;
+    const next = keep ? kept : (entries.current.find((entry) => entry.value === value && !entry.disabled) ?? null);
+    highlightedEntry.current = next;
+    setHighlight(next ? next.value : null);
   }, [open, value, version]);
 
   const api = React.useMemo(() => {
     const available = () => entries.current.map((entry) => !entry.disabled);
     const move = (index) => {
-      if (index !== null) setHighlight(entries.current[index].value);
+      if (index !== null) {
+        highlightedEntry.current = entries.current[index];
+        setHighlight(entries.current[index].value);
+      }
     };
     return {
       entries,
@@ -111,7 +125,9 @@ export const Root = React.forwardRef(function Root(
         move(edgeIndex(available(), which));
       },
       highlight: (next) => {
-        if (!disabled) setHighlight(next);
+        if (disabled) return;
+        highlightedEntry.current = entries.current.find((entry) => entry.value === next) ?? null;
+        setHighlight(next);
       },
     };
   }, [disabled, highlight, open, pressFlag, requestOpen, requestValue]);

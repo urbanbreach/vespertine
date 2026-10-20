@@ -17,6 +17,15 @@ export async function settle(times = 8) {
   for (let i = 0; i < times; i++) await new Promise((resolve) => realSetTimeout(resolve, 0));
 }
 
+/** Waits (on real timers) until `condition()` holds, failing after `timeoutMs` instead of guessing a tick count. */
+export async function until(condition, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`condition not met within ${timeoutMs} ms: ${condition}`);
+    await new Promise((resolve) => realSetTimeout(resolve, 1));
+  }
+}
+
 let keystroke = 100;
 
 export function mount(element, options = {}) {
