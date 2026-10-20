@@ -5,7 +5,7 @@ use std::{cell::Cell, cell::RefCell, rc::Rc};
 
 use vespertine::{
     AppContext as _, Context, IntoElement, ListAlignment, ListOffset, ListState, ParentElement,
-    Render, RequestFrameOptions, Styled, Window, div, list, px, rgb,
+    Render, Styled, Window, div, list, px, rgb,
 };
 use vespertine_components::streaming::{
     Commit, Direction, FollowController, History, HistoryRow, ReaderSample, SampleService,
@@ -85,26 +85,13 @@ fn fixture(rows: Vec<f32>) -> Fixture {
 }
 
 impl Fixture {
-    /// Runs `frames` frames 16 ms apart.
+    /// Runs `frames` frames 16 ms apart. The host's effect loop runs the next-frame callbacks
+    /// (the stepper) before it draws, as a live window's frame callback does.
     fn frames(&mut self, frames: usize) {
-        let handle = self.host.window();
         for _ in 0..frames {
             self.now += 1000.0 / 60.0;
             self.host.motion_set(self.now).unwrap();
-            // The platform's frame request runs the next-frame callbacks (the stepper) before
-            // it draws; the host's effect-loop draws do not.
-            self.host
-                .app()
-                .request_frame(
-                    handle,
-                    RequestFrameOptions {
-                        require_presentation: true,
-                        force_render: true,
-                        ..RequestFrameOptions::default()
-                    },
-                )
-                .unwrap();
-            self.host.flush();
+            self.host.paint_frame();
         }
     }
 
@@ -296,8 +283,10 @@ fn a5_the_jump_button_persists_until_the_end_and_a_far_jump_first_teleports() {
     let controller = g.controller.clone();
     g.with_window(move |window, cx| controller.jump_to_bottom(window, cx));
     let teleported = g.distance();
+    // The host's effect loop runs the frame the jump requested, as a live window does, so the
+    // glide has taken at most its first step by now; the teleport itself moved D - 2.5 viewports.
     assert!(
-        (teleported - 2.5 * VIEWPORT).abs() < 1.5,
+        teleported <= 2.5 * VIEWPORT + 1.5 && teleported >= 2.3 * VIEWPORT,
         "first moved D - 2.5 viewports, left {teleported}"
     );
     assert!(g.controller.is_pinned());

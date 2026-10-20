@@ -128,7 +128,7 @@ impl ReqwestClient {
 pub fn desktop_http_client(
     user_agent: &str,
 ) -> Option<std::sync::Arc<dyn vespertine_http_client::HttpClient>> {
-    match ReqwestClient::user_agent(user_agent) {
+    match ReqwestClient::proxy_and_user_agent(None, user_agent) {
         Ok(client) => Some(std::sync::Arc::new(client)),
         Err(error) => {
             log::error!("failed to create the HTTP client for image loading: {error:#}");

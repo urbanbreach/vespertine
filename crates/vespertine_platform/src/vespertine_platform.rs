@@ -14,8 +14,26 @@ pub fn background_executor() -> vespertine::BackgroundExecutor {
     current_platform(true).background_executor()
 }
 
+/// The user agent of the HTTP client every desktop application installs at startup.
+const HTTP_USER_AGENT: &str = concat!("vespertine/", env!("CARGO_PKG_VERSION"));
+
+/// Installs the desktop HTTP client (ELM-004 R7) for image fetching. The framework default
+/// client fails every request; this client lives as long as the application. When it cannot
+/// be created the error is logged, the application still starts, and network image sources
+/// show their load-failed placeholder.
+fn with_desktop_http_client(app: vespertine::Application) -> vespertine::Application {
+    match vespertine_reqwest_client::desktop_http_client(HTTP_USER_AGENT) {
+        Some(client) => app.with_http_client(client),
+        None => app,
+    }
+}
+
+/// Returns the windowed desktop application for the current OS, with the desktop HTTP client
+/// installed.
 pub fn application() -> vespertine::Application {
-    vespertine::Application::with_platform(current_platform(false))
+    with_desktop_http_client(vespertine::Application::with_platform(current_platform(
+        false,
+    )))
 }
 
 pub fn headless() -> vespertine::Application {
@@ -26,10 +44,13 @@ pub fn headless() -> vespertine::Application {
 ///
 /// It starts windowed in the process's own environment, or headless if that names no allowed
 /// display server. Set another initial mode with [`vespertine::Application::with_windowing`], and
-/// switch later with [`vespertine::App::request_windowing`].
+/// switch later with [`vespertine::App::request_windowing`]. Like [`application`], it installs
+/// the desktop HTTP client.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn linux(allowed_modes: vespertine::WindowingModes) -> vespertine::Application {
-    vespertine::Application::with_platform(vespertine_linux::linux_platform(allowed_modes))
+    with_desktop_http_client(vespertine::Application::with_platform(
+        vespertine_linux::linux_platform(allowed_modes),
+    ))
 }
 
 /// Returns the default [`Platform`] for the current OS.
@@ -200,5 +221,40 @@ mod tests {
 
         // Now the task should have run
         assert!(*task_ran.borrow());
+    }
+}
+
+#[cfg(test)]
+mod http_client_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// ELM-004 R7: an application built through this crate carries a working desktop client
+    /// (identified by its user agent) instead of the framework default that fails every request.
+    #[test]
+    fn desktop_applications_install_the_http_client_at_startup() {
+        let seen = Rc::new(RefCell::new(None));
+        let sink = seen.clone();
+        with_desktop_http_client(vespertine::Application::with_platform(current_platform(
+            true,
+        )))
+        .run(move |cx| {
+            cx.spawn(async move |cx| {
+                cx.update(|cx| {
+                    *sink.borrow_mut() = Some(
+                        cx.http_client()
+                            .user_agent()
+                            .map(|agent| agent.to_str().unwrap().to_owned()),
+                    );
+                    cx.quit();
+                });
+            })
+            .detach();
+        });
+        assert_eq!(
+            seen.borrow().clone(),
+            Some(Some(HTTP_USER_AGENT.to_owned())),
+            "the startup callback ran with the desktop client installed"
+        );
     }
 }

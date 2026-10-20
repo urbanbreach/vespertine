@@ -42,6 +42,7 @@ required-features = ["bench-support"]
 [dependencies]
 anyhow.workspace = true
 vespertine.workspace = true
+vespertine_reqwest_client.workspace = true
 
 [dev-dependencies]
 vespertine_bench_metrics.workspace = true

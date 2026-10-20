@@ -8137,6 +8137,7 @@ dependencies = [
  "vespertine_bench_metrics",
  "vespertine_linux",
  "vespertine_macos",
+ "vespertine_reqwest_client",
  "vespertine_wgpu",
  "vespertine_windows",
 ]

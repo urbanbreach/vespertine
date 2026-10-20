@@ -801,6 +801,11 @@ pub(crate) enum GpuiMode {
     #[cfg(any(test, feature = "test-support"))]
     Test {
         skip_drawing: bool,
+        /// Whether the effect loop also runs each window's pending next-frame callbacks before
+        /// drawing it, as the platform frame callback does in production. Only headless
+        /// contexts (the test host) enable this; other test contexts step frames explicitly
+        /// with `Window::simulate_next_frame`.
+        run_next_frame_callbacks: bool,
     },
     Production,
 }
@@ -810,6 +815,16 @@ impl GpuiMode {
     pub fn test() -> Self {
         GpuiMode::Test {
             skip_drawing: false,
+            run_next_frame_callbacks: false,
+        }
+    }
+
+    /// The headless mode: effect flushing runs the frame path of a production window.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn headless() -> Self {
+        GpuiMode::Test {
+            skip_drawing: false,
+            run_next_frame_callbacks: true,
         }
     }
 
@@ -817,9 +832,20 @@ impl GpuiMode {
     pub(crate) fn skip_drawing(&self) -> bool {
         match self {
             #[cfg(any(test, feature = "test-support"))]
-            GpuiMode::Test { skip_drawing } => *skip_drawing,
+            GpuiMode::Test { skip_drawing, .. } => *skip_drawing,
             GpuiMode::Production => false,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn runs_next_frame_callbacks(&self) -> bool {
+        matches!(
+            self,
+            GpuiMode::Test {
+                run_next_frame_callbacks: true,
+                ..
+            }
+        )
     }
 }
 
@@ -2141,6 +2167,8 @@ impl App {
     /// such as notifying observers, emitting events, etc. Effects can themselves
     /// cause effects, so we continue looping until all effects are processed.
     fn flush_effects(&mut self) {
+        #[cfg(any(test, feature = "test-support"))]
+        let mut callback_windows = FxHashSet::<WindowId>::default();
         loop {
             self.release_dropped_entities();
             self.release_dropped_focus_handles();
@@ -2178,17 +2206,40 @@ impl App {
             } else {
                 #[cfg(any(test, feature = "test-support"))]
                 if matches!(self.mode, GpuiMode::Test { .. }) {
-                    for window in self
+                    let run_callbacks = self.mode.runs_next_frame_callbacks();
+                    for (window, has_callbacks) in self
                         .windows
                         .values()
                         .filter_map(|window| {
                             let window = window.as_deref()?;
-                            window.invalidator.is_dirty().then_some(window.handle)
+                            let has_callbacks = run_callbacks
+                                && !callback_windows.contains(&window.handle.window_id())
+                                && !window.next_frame_callbacks.borrow().is_empty();
+                            (window.invalidator.is_dirty() || has_callbacks)
+                                .then_some((window.handle, has_callbacks))
                         })
                         .collect::<Vec<_>>()
                     {
-                        self.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
-                            .unwrap();
+                        if has_callbacks {
+                            callback_windows.insert(window.window_id());
+                        }
+                        self.update_window(window, |_, window, cx| {
+                            // The frame path of a production window: pending next-frame
+                            // callbacks run first, then the window draws if it is dirty. A
+                            // window runs its callbacks once per flush, so callbacks that
+                            // re-arm themselves (animations) advance one frame per flush
+                            // instead of looping forever.
+                            if has_callbacks {
+                                let callbacks = window.next_frame_callbacks.take();
+                                for callback in callbacks {
+                                    callback(window, cx);
+                                }
+                            }
+                            if window.invalidator.is_dirty() {
+                                window.draw(cx).clear(cx);
+                            }
+                        })
+                        .unwrap();
                     }
                 }
 

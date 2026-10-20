@@ -1121,3 +1121,50 @@ fn dev_006_frame_overlay_mode_and_statistics_are_readable_and_resettable() {
         "a reset keeps the total frame count"
     );
 }
+
+/// The effect loop of the host runs a window's pending next-frame callbacks as a live window's
+/// frame callback does, without an explicit frame request; a callback that re-arms itself
+/// advances one frame per effect flush instead of looping.
+#[test]
+fn dev_006_effect_loop_runs_next_frame_callbacks_like_a_live_window() {
+    require_backend!();
+    let mut host = TestHost::with_element(HostOptions::with_size(100.0, 60.0), |_, _| {
+        div().size_full().into_any_element()
+    })
+    .expect("host");
+    let window = host.window();
+
+    let ran = Rc::new(std::cell::Cell::new(0_usize));
+    let counter = ran.clone();
+    host.app()
+        .update_window(window, move |_, window, _| {
+            window.on_next_frame(move |_, _| counter.set(counter.get() + 1));
+        })
+        .expect("window");
+    assert_eq!(
+        ran.get(),
+        1,
+        "the callback ran when the update's effects flushed"
+    );
+
+    fn rearm(window: &mut Window, ran: Rc<std::cell::Cell<usize>>) {
+        window.on_next_frame(move |window, _| {
+            ran.set(ran.get() + 1);
+            rearm(window, ran.clone());
+        });
+    }
+    ran.set(0);
+    let counter = ran.clone();
+    host.app()
+        .update_window(window, move |_, window, _| rearm(window, counter))
+        .expect("window");
+    assert_eq!(
+        ran.get(),
+        1,
+        "a re-arming callback advances one frame per flush"
+    );
+    host.app()
+        .update_window(window, |_, _, _| {})
+        .expect("window");
+    assert_eq!(ran.get(), 2, "the next flush advances the next frame");
+}
