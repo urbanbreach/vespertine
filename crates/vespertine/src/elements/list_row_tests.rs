@@ -74,8 +74,8 @@ impl Element for Probe {
 
     fn request_layout(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
@@ -110,13 +110,13 @@ impl Element for Probe {
 
     fn paint(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut (),
-        _: &mut (),
-        _: &mut Window,
-        _: &mut App,
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _layout: &mut (),
+        _prepaint: &mut (),
+        _window: &mut Window,
+        _cx: &mut App,
     ) {
     }
     fn id(&self) -> Option<ElementId> {

@@ -153,10 +153,10 @@ impl Render for CustomChrome {
                     .pl(inset.left)
                     .child(
                         div()
-                            .size_full()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
-                            .overflow_hidden()
+                            .size_full()
                             .cursor(CursorStyle::Arrow)
                             .bg(background)
                             .rounded_tl(radii.top_left)

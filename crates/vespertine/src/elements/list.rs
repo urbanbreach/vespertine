@@ -2880,9 +2880,9 @@ impl Element for List {
     fn prepaint(
         &mut self,
         id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut Self::RequestLayoutState,
+        _layout_state: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> ListPrepaintState {

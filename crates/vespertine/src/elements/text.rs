@@ -1069,13 +1069,11 @@ impl TextLayout {
         window: &mut Window,
         cx: &mut App,
     ) -> LayoutId {
+        let rem_size = window.rem_size();
         let style = window.text_style_shared();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line_height = window.pixel_snap(
-            style
-                .line_height
-                .to_pixels(font_size.into(), window.rem_size()),
-        );
+        let font_size = style.font_size.to_pixels(rem_size);
+        let snapped = style.line_height.to_pixels(font_size.into(), rem_size);
+        let line_height = window.pixel_snap(snapped);
         let measure = TextMeasure {
             layout: self.clone(),
             text: content,

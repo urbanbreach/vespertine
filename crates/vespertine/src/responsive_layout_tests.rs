@@ -104,38 +104,38 @@ impl Element for Displaced {
 
     fn request_layout(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) -> (LayoutId, ()) {
-        (self.child.request_layout(window, cx), ())
+        (self.child.request_layout(window, app), ())
     }
 
     fn prepaint(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut (),
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _layout: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
         let offset = self.offset;
-        window.with_element_offset(offset, |window| self.child.prepaint(window, cx));
+        window.with_element_offset(offset, |window| self.child.prepaint(window, app));
     }
 
     fn paint(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut (),
-        _: &mut (),
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _layout: &mut (),
+        _prepaint: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
-        self.child.paint(window, cx);
+        self.child.paint(window, app);
     }
 }
 
@@ -168,8 +168,8 @@ impl Element for Probe {
 
     fn request_layout(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, LayoutId) {
@@ -179,9 +179,9 @@ impl Element for Probe {
 
     fn prepaint(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
         layout_id: &mut LayoutId,
         window: &mut Window,
         cx: &mut App,
@@ -193,11 +193,11 @@ impl Element for Probe {
 
     fn paint(
         &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut LayoutId,
-        _: &mut (),
+        _id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _layout: &mut LayoutId,
+        _prepaint: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {

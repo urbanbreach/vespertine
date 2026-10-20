@@ -63,10 +63,10 @@ impl std::error::Error for MotionError {}
 pub struct CubicBezier {
     /// X of the first control point.
     pub x1: f32,
-    /// Y of the first control point.
-    pub y1: f32,
     /// X of the second control point.
     pub x2: f32,
+    /// Y of the first control point.
+    pub y1: f32,
     /// Y of the second control point.
     pub y2: f32,
 }
@@ -74,7 +74,7 @@ pub struct CubicBezier {
 impl CubicBezier {
     /// Creates a curve from its control points. Use [`CubicBezier::validate`] to check them.
     pub const fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
-        Self { x1, y1, x2, y2 }
+        Self { x2, y2, x1, y1 }
     }
 
     /// Checks that every coordinate is finite and that both x controls lie within 0 to 1.

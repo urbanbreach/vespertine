@@ -91,12 +91,12 @@ pub fn canvas_plate(left: f32, top: f32) -> AnyElement {
             window.paint_inset_shadows(bounds, radii, &shadows);
             let style = window.text_style();
             let run = TextRun {
-                len: "Plate".len(),
-                font: style.font(),
-                color: rgb(0xF0F1F3).into(),
-                background_color: None,
-                underline: None,
                 strikethrough: None,
+                underline: None,
+                background_color: None,
+                color: rgb(0xF0F1F3).into(),
+                font: style.font(),
+                len: "Plate".len(),
             };
             let line = window
                 .text_system()

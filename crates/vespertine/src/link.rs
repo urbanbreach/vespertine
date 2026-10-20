@@ -376,20 +376,20 @@ impl LinkTarget {
 pub enum LinkAction {
     /// The surface's preferred route: internal or external.
     Primary,
+    /// Copy the original destination to the clipboard.
+    Copy,
+    /// Copy the resolved path of a local file.
+    CopyPath,
     /// The embedded browser surface, when the surface has one.
     Internal,
     /// The system default handler.
     External,
-    /// Copy the original destination to the clipboard.
-    Copy,
     /// Open a `mailto:` destination with the mail handler.
     Mail,
-    /// Open a local file with its default application.
-    OpenFile,
     /// Reveal a local file in the file manager.
     RevealFile,
-    /// Copy the resolved path of a local file.
-    CopyPath,
+    /// Open a local file with its default application.
+    OpenFile,
 }
 
 /// The outcome of routing a target.
@@ -835,16 +835,16 @@ mod tests {
     #[test]
     fn default_policy_rejects_every_unsafe_destination_for_all_navigation_actions() {
         let rejected = [
-            "javascript:alert(1)",
-            "data:text/plain,hi",
-            "mailto:a@b.com",
-            "https://user:pass@example.com",
-            "https://exam\nple.com",
-            "\nhttps://example.com",
             "https://",
+            "javascript:alert(1)",
             "example.com",
+            "data:text/plain,hi",
             "https:///path",
+            "mailto:a@b.com",
+            "\nhttps://example.com",
+            "https://user:pass@example.com",
             "https://example.com/%GG",
+            "https://exam\nple.com",
         ];
         let surface = LinkSurface {
             embedded: true,

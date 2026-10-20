@@ -364,50 +364,41 @@ struct GroupDropView {
 
 impl Render for GroupDropView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(
-                div()
-                    .id("source")
-                    .absolute()
-                    .left(px(0.))
-                    .top(px(0.))
-                    .size(px(50.))
-                    .on_drag(self.payload.clone(), |_, _, _, cx| cx.new(|_| Empty)),
-            )
-            .child(
-                div()
-                    .id("target")
-                    .absolute()
-                    .left(px(100.))
-                    .top(px(100.))
-                    .w(px(200.))
-                    .h(px(120.))
-                    .on_drop(
-                        cx.listener(|this, payload: &ReorderPayload<u32>, window, cx| {
-                            let over = uniform_slot(
-                                content_coordinate(
-                                    window.mouse_position().y,
-                                    px(100.),
-                                    px(0.),
-                                    px(0.),
-                                ),
-                                px(40.),
-                                this.ids.len(),
-                            )
-                            .unwrap();
-                            match payload.resolve_drop(&this.group, &this.ids, over) {
-                                Ok(Some(reorder)) => {
-                                    reorder.apply(&mut this.ids);
-                                    this.commits += 1;
-                                }
-                                Ok(None) => {}
-                                Err(rejection) => this.rejection = Some(rejection),
+        let source = div()
+            .id("source")
+            .absolute()
+            .left(px(0.))
+            .top(px(0.))
+            .size(px(50.))
+            .on_drag(self.payload.clone(), |_, _, _, cx| cx.new(|_| Empty));
+        div().size_full().child(source).child(
+            div()
+                .id("target")
+                .absolute()
+                .left(px(100.))
+                .top(px(100.))
+                .w(px(200.))
+                .h(px(120.))
+                .on_drop(
+                    cx.listener(|this, payload: &ReorderPayload<u32>, window, cx| {
+                        let over = uniform_slot(
+                            content_coordinate(window.mouse_position().y, px(100.), px(0.), px(0.)),
+                            px(40.),
+                            this.ids.len(),
+                        )
+                        .unwrap();
+                        match payload.resolve_drop(&this.group, &this.ids, over) {
+                            Ok(Some(reorder)) => {
+                                reorder.apply(&mut this.ids);
+                                this.commits += 1;
                             }
-                            cx.notify();
-                        }),
-                    ),
-            )
+                            Ok(None) => {}
+                            Err(rejection) => this.rejection = Some(rejection),
+                        }
+                        cx.notify();
+                    }),
+                ),
+        )
     }
 }
 

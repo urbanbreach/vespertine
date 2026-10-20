@@ -369,26 +369,25 @@ fn outline_is_layout_neutral(cx: &mut TestAppContext) {
 fn outline_is_clipped_by_ancestor_but_not_by_own_overflow(cx: &mut TestAppContext) {
     let ancestor = rect(20., 20., 60., 60.);
     let painted = paint(cx, &[], move || {
-        div()
-            .size_full()
-            .relative()
+        let clipper = div()
+            .absolute()
+            .left(px(20.))
+            .top(px(20.))
+            .w(px(60.))
+            .h(px(60.))
+            .overflow_hidden()
             .child(
                 div()
                     .absolute()
                     .left(px(20.))
                     .top(px(20.))
-                    .w(px(60.))
-                    .h(px(60.))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(20.))
-                            .top(px(20.))
-                            .size(px(20.))
-                            .outline(Outline::new(px(12.), blue(), px(13.))),
-                    ),
-            )
+                    .size(px(20.))
+                    .outline(Outline::new(px(12.), blue(), px(13.))),
+            );
+        div()
+            .relative()
+            .size_full()
+            .child(clipper)
             .child(
                 div()
                     .absolute()

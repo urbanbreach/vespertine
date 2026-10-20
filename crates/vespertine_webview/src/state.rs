@@ -37,12 +37,12 @@ impl Presentation {
 /// The state of a page as last reported by the helper (CMP-022 R6).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PageState {
-    pub url: Option<String>,
     pub title: String,
-    pub loading: bool,
-    pub can_back: bool,
-    pub can_forward: bool,
+    pub url: Option<String>,
     pub error: Option<String>,
+    pub loading: bool,
+    pub can_forward: bool,
+    pub can_back: bool,
 }
 
 impl PageState {

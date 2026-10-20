@@ -83,17 +83,17 @@ fn texture_with_usage(
 ) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("surface_test_texture"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
         usage,
         view_formats: &[],
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        dimension: wgpu::TextureDimension::D2,
+        sample_count: 1,
+        mip_level_count: 1,
+        size: wgpu::Extent3d {
+            depth_or_array_layers: 1,
+            width,
+            height,
+        },
     })
 }
 

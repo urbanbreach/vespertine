@@ -378,12 +378,12 @@ pub fn resolve_file_icon(
 
 /// The seven palette pairs the dark variant remaps (light color, dark color).
 pub const DARK_PALETTE_REMAP: [(&str, &str); 7] = [
-    ("#64748B", "#CBD5E1"),
-    ("#71717A", "#D4D4D8"),
-    ("#2563EB", "#60A5FA"),
-    ("#EA580C", "#FB923C"),
     ("#16A34A", "#4ADE80"),
+    ("#2563EB", "#60A5FA"),
+    ("#64748B", "#CBD5E1"),
     ("#8B5CF6", "#A78BFA"),
+    ("#71717A", "#D4D4D8"),
+    ("#EA580C", "#FB923C"),
     ("#A855F7", "#C084FC"),
 ];
 

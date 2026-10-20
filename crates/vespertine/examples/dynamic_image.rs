@@ -145,11 +145,11 @@ impl Element for ImageSurface {
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
+        _layout_state: &mut (),
+        _prepaint_state: &mut (),
         window: &mut Window,
         _cx: &mut App,
     ) {

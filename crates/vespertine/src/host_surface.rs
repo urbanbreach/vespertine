@@ -185,38 +185,38 @@ impl Element for TrackBounds {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) -> (LayoutId, ()) {
-        (self.child.request_layout(window, cx), ())
+        (self.child.request_layout(window, app), ())
     }
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
-        self.child.prepaint(window, cx);
+        self.child.prepaint(window, app);
     }
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
+        _layout_state: &mut (),
+        _prepaint_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
-        self.tracker.set(bounds, cx);
-        self.child.paint(window, cx);
+        self.tracker.set(bounds, app);
+        self.child.paint(window, app);
     }
 }
 

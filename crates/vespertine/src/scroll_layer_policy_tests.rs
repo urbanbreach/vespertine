@@ -419,8 +419,8 @@ impl EntityInputHandler for Editor {
     fn selected_text_range(
         &mut self,
         _ignore_disabled: bool,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        _win: &mut Window,
+        _ctx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         None
     }

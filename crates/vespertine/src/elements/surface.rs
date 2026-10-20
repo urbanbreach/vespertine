@@ -310,25 +310,24 @@ mod tests {
             window.simulate_scale_factor_change(scale);
             // An ancestor with hidden overflow clips a surface that is larger than it.
             draw(window, || {
-                div()
-                    .size_full()
-                    .relative()
+                let clipper = div()
+                    .absolute()
+                    .left(px(20.))
+                    .top(px(30.))
+                    .size(px(40.))
+                    .overflow_hidden()
                     .child(
-                        div()
+                        surface(source(8, 8))
+                            .object_fit(ObjectFit::Fill)
                             .absolute()
-                            .left(px(20.))
-                            .top(px(30.))
-                            .size(px(40.))
-                            .overflow_hidden()
-                            .child(
-                                surface(source(8, 8))
-                                    .object_fit(ObjectFit::Fill)
-                                    .absolute()
-                                    .left(px(-10.))
-                                    .top(px(-10.))
-                                    .size(px(80.)),
-                            ),
-                    )
+                            .left(px(-10.))
+                            .top(px(-10.))
+                            .size(px(80.)),
+                    );
+                div()
+                    .relative()
+                    .size_full()
+                    .child(clipper)
                     .into_any_element()
             });
             let surfaces = painted(window);

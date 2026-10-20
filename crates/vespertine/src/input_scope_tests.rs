@@ -584,19 +584,18 @@ impl Render for CursorView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let accepted = self.drops.clone();
         let rejected = self.drops.clone();
+        let source = div()
+            .id("source")
+            .w(px(100.))
+            .h(px(100.))
+            .cursor_grab()
+            .on_drag(Payload, |_, _, _, cx| cx.new(|_| crate::Empty));
         div()
-            .size_full()
             .flex()
             .flex_row()
+            .size_full()
             // Source (0..100): open hand.
-            .child(
-                div()
-                    .id("source")
-                    .w(px(100.))
-                    .h(px(100.))
-                    .cursor_grab()
-                    .on_drag(Payload, |_, _, _, cx| cx.new(|_| crate::Empty)),
-            )
+            .child(source)
             // Accepting target (100..200): pointing hand.
             .child(
                 div()

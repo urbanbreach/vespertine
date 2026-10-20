@@ -37,12 +37,12 @@ fn headless() -> (HeadlessAppContext, AnyWindowHandle) {
 fn width(cx: &mut HeadlessAppContext, window: AnyWindowHandle) -> f32 {
     cx.update_window(window, |_, window, _| {
         let run = TextRun {
-            len: TEXT.len(),
-            font: font(FAMILY),
-            color: black(),
-            background_color: None,
-            underline: None,
             strikethrough: None,
+            underline: None,
+            background_color: None,
+            color: black(),
+            font: font(FAMILY),
+            len: TEXT.len(),
         };
         let line = window
             .text_system()

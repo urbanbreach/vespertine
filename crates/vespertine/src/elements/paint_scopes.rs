@@ -170,45 +170,45 @@ impl Element for EdgeFaded {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) -> (LayoutId, ()) {
-        (self.child.request_layout(window, cx), ())
+        (self.child.request_layout(window, app), ())
     }
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
         // The fade only modulates alpha at paint time, but views nested in the wrapper are
         // recorded with it: declaring it here (as resolved before the child's prepaint) lets
         // their retained output follow it, and the paint pass still resolves it again.
-        let fade = self.resolve(_bounds, window, cx);
+        let fade = self.resolve(_bounds, window, app);
         let child = &mut self.child;
-        window.with_edge_fade(Some(fade), |window| child.prepaint(window, cx));
+        window.with_edge_fade(Some(fade), |window| child.prepaint(window, app));
     }
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
+        _layout_state: &mut (),
+        _prepaint_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
         // Gating is evaluated here, after the child's prepaint clamped scroll offsets.
-        let fade = self.resolve(bounds, window, cx);
+        let fade = self.resolve(bounds, window, app);
         let child = &mut self.child;
-        window.with_edge_fade(Some(fade), |window| child.paint(window, cx));
+        window.with_edge_fade(Some(fade), |window| child.paint(window, app));
     }
 }
 
@@ -255,41 +255,41 @@ impl Element for RoundedClip {
 
     fn request_layout(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) -> (LayoutId, ()) {
-        (self.child.request_layout(window, cx), ())
+        (self.child.request_layout(window, app), ())
     }
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
         let child = &mut self.child;
         window.with_rounded_clip(bounds, self.radius, |window| {
-            child.prepaint(window, cx);
+            child.prepaint(window, app);
         });
     }
 
     fn paint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
-        _prepaint: &mut (),
+        _layout_state: &mut (),
+        _prepaint_state: &mut (),
         window: &mut Window,
-        cx: &mut App,
+        app: &mut App,
     ) {
         let child = &mut self.child;
-        window.with_rounded_clip(bounds, self.radius, |window| child.paint(window, cx));
+        window.with_rounded_clip(bounds, self.radius, |window| child.paint(window, app));
     }
 }
 

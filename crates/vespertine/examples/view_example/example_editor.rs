@@ -492,15 +492,9 @@ impl Element for EditorText {
         let line_height = window.line_height();
         for (i, line) in prepaint.lines.iter().enumerate() {
             let origin = point(bounds.left(), bounds.top() + line_height * i as f32);
-            line.paint(
-                origin,
-                line_height,
-                vespertine::TextAlign::Left,
-                None,
-                window,
-                cx,
-            )
-            .unwrap();
+            let align = vespertine::TextAlign::Left;
+            line.paint(origin, line_height, align, None, window, cx)
+                .unwrap();
         }
 
         if let Some(cursor) = prepaint.cursor.take() {

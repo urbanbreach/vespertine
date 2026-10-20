@@ -214,12 +214,16 @@ static gboolean on_return_true(WebKitWebView *view, gpointer arg, Page *page)
  * Menus (PLT-015 R5 "M", CMP-022 R14)
  * ------------------------------------------------------------------------------------------ */
 
+static void json_double_member(JsonBuilder *b, const char *name, double value)
+{
+    json_builder_set_member_name(b, name);
+    json_builder_add_double_value(b, value);
+}
+
 static void menu_begin(JsonBuilder *b, double x, double y)
 {
-    json_builder_set_member_name(b, "x");
-    json_builder_add_double_value(b, x);
-    json_builder_set_member_name(b, "y");
-    json_builder_add_double_value(b, y);
+    json_double_member(b, "x", x);
+    json_double_member(b, "y", y);
     json_builder_set_member_name(b, "items");
     json_builder_begin_array(b);
 }

@@ -487,12 +487,12 @@ mod production {
         size: f32,
     ) -> Vec<(FontId, GlyphId, Point<Pixels>)> {
         let run = TextRun {
-            len: text.len(),
-            font,
-            color: hsla(0.0, 0.0, 1.0, 1.0),
-            background_color: None,
-            underline: None,
             strikethrough: None,
+            underline: None,
+            background_color: None,
+            color: hsla(0.0, 0.0, 1.0, 1.0),
+            font,
+            len: text.len(),
         };
         let line = window
             .text_system()

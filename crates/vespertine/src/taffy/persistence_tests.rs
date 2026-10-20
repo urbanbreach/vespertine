@@ -241,10 +241,10 @@ impl Element for Node {
 
     fn prepaint(
         &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        _element_id: Option<&GlobalElementId>,
+        _inspector: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _request_layout: &mut (),
+        _layout_state: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {

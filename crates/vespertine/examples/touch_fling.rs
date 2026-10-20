@@ -31,20 +31,21 @@ struct TouchFling {
 
 impl Render for TouchFling {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = (0..400).map(|row| {
+            div()
+                .h(px(32.))
+                .px_4()
+                .border_b_1()
+                .border_color(vespertine::black().opacity(0.1))
+                .child(format!("Row {row}"))
+        });
         div()
             .id("list")
+            .bg(vespertine::white())
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .bg(vespertine::white())
-            .children((0..400).map(|row| {
-                div()
-                    .h(px(32.))
-                    .px_4()
-                    .border_b_1()
-                    .border_color(vespertine::black().opacity(0.1))
-                    .child(format!("Row {row}"))
-            }))
+            .children(rows)
     }
 }
 

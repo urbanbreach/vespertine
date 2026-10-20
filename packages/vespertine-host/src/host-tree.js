@@ -17,21 +17,18 @@ const FOCUS_DIM_KEY = Symbol.for("vespertine.host.focusDim");
 /** Property names no adapter forwards as custom properties (APP-009 R4). */
 export const RESERVED_PROPS = new Set(["style", "className", "children", "key", "ref"]);
 
+const ARIA_SUFFIXES = ["level", "expanded", "selected", "id", "label", "description", "valuetext"];
+const ARIA_PROPS = ARIA_SUFFIXES.map((suffix) => `aria-${suffix}`);
+
 /** The properties the built-in `div` and `text` host types forward (APP-009 R4). */
 export const UNIVERSAL_PROPS = new Set([
+  "testId",
   "autoFocus",
   "tabIndex",
   "motion",
-  "testId",
   "highlight",
   "role",
-  "aria-label",
-  "aria-description",
-  "aria-id",
-  "aria-expanded",
-  "aria-selected",
-  "aria-valuetext",
-  "aria-level",
+  ...ARIA_PROPS,
 ]);
 
 /** The built-in host types that only forward universal properties. */

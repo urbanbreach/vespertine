@@ -61,12 +61,12 @@ impl Render for Scene {
                     |_, _, _| {},
                     move |_, _, window, _| {
                         let run = TextRun {
-                            len: 1,
-                            font: font("Noto Sans"),
-                            color,
-                            background_color: None,
-                            underline: None,
                             strikethrough: None,
+                            underline: None,
+                            background_color: None,
+                            color,
+                            font: font("Noto Sans"),
+                            len: 1,
                         };
                         let line = window.text_system().shape_line(
                             "A".into(),

@@ -143,12 +143,12 @@ fn runs(lens: &[usize], mut decorate: impl FnMut(usize) -> TextRun) -> Vec<TextR
 
 fn run(color: Hsla) -> TextRun {
     TextRun {
-        len: 0,
-        font: font("Test"),
-        color,
-        background_color: None,
-        underline: None,
         strikethrough: None,
+        underline: None,
+        background_color: None,
+        color,
+        font: font("Test"),
+        len: 0,
     }
 }
 

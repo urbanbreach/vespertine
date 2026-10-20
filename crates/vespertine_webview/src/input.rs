@@ -82,11 +82,30 @@ pub fn wheel_deltas(delta: &ScrollDelta) -> (f64, f64) {
     )
 }
 
+/// Framework key names and the helper key names they map to (PLT-016 R11).
+const KEY_NAMES: [(&str, &str); 15] = [
+    ("enter", "Return"),
+    ("backspace", "BackSpace"),
+    ("delete", "Delete"),
+    ("escape", "Escape"),
+    ("tab", "Tab"),
+    ("space", "space"),
+    ("insert", "Insert"),
+    ("left", "Left"),
+    ("right", "Right"),
+    ("up", "Up"),
+    ("down", "Down"),
+    ("home", "Home"),
+    ("end", "End"),
+    ("pageup", "Page_Up"),
+    ("pagedown", "Page_Down"),
+];
+
 /// The key name sent to the helper (PLT-016 R11).
 ///
 /// A keystroke with character text of exactly one character, which is not a control character,
 /// while neither control nor platform is held, is named by that character. Otherwise the
-/// framework key name goes through the table below; any other name passes through unchanged.
+/// framework key name goes through the table above; any other name passes through unchanged.
 pub fn key_name(key: &str, text: Option<&str>, modifiers: &Modifiers) -> String {
     if let Some(text) = text {
         let mut chars = text.chars();
@@ -98,34 +117,17 @@ pub fn key_name(key: &str, text: Option<&str>, modifiers: &Modifiers) -> String 
             return text.to_owned();
         }
     }
-    let mapped = match key {
-        "enter" => "Return",
-        "backspace" => "BackSpace",
-        "delete" => "Delete",
-        "escape" => "Escape",
-        "tab" => "Tab",
-        "left" => "Left",
-        "right" => "Right",
-        "up" => "Up",
-        "down" => "Down",
-        "home" => "Home",
-        "end" => "End",
-        "pageup" => "Page_Up",
-        "pagedown" => "Page_Down",
-        "space" => "space",
-        "insert" => "Insert",
-        other => {
-            if let Some(number) = other.strip_prefix('f')
-                && let Ok(number) = number.parse::<u32>()
-                && (1..=24).contains(&number)
-                && other == format!("f{number}")
-            {
-                return format!("F{number}");
-            }
-            return other.to_owned();
-        }
-    };
-    mapped.to_owned()
+    if let Some((_, name)) = KEY_NAMES.iter().find(|(framework, _)| *framework == key) {
+        return (*name).to_owned();
+    }
+    if let Some(number) = key.strip_prefix('f')
+        && let Ok(number) = number.parse::<u32>()
+        && (1..=24).contains(&number)
+        && key == format!("f{number}")
+    {
+        return format!("F{number}");
+    }
+    key.to_owned()
 }
 
 /// What a key-down event becomes for a focused, live page (PLT-016 R10 steps 3 to 5; step 1 is

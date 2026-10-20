@@ -46,18 +46,18 @@ mod linux {
             let (device, queue) = context.downcast::<wgpu::Device, wgpu::Queue>()?;
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("gpu_surface_example"),
-                size: wgpu::Extent3d {
-                    width: TEXTURE_SIZE,
-                    height: TEXTURE_SIZE,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                dimension: wgpu::TextureDimension::D2,
+                sample_count: 1,
+                mip_level_count: 1,
+                size: wgpu::Extent3d {
+                    depth_or_array_layers: 1,
+                    width: TEXTURE_SIZE,
+                    height: TEXTURE_SIZE,
+                },
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             Some(Self {
