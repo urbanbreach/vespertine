@@ -1150,7 +1150,7 @@ fn dev_006_effect_loop_runs_next_frame_callbacks_like_a_live_window() {
     fn rearm(window: &mut Window, ran: Rc<std::cell::Cell<usize>>) {
         window.on_next_frame(move |window, _| {
             ran.set(ran.get() + 1);
-            rearm(window, ran.clone());
+            rearm(window, ran);
         });
     }
     ran.set(0);
