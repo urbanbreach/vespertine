@@ -83,12 +83,26 @@ fn app_007_r8_a_piped_javascript_process_serves_live_automation_over_stdio() {
     assert_eq!((save.width, save.height), (80.0, 30.0));
     assert!(save.y >= 28.0, "{save:?}");
     assert_eq!(app.get_by_test_id("list").bounds().unwrap().height, 90.0);
-    let window = app.get_by_test_id("window").element().unwrap();
-    assert_eq!(
-        window.text.as_deref(),
-        Some(format!("window: {}x{}", info.width, info.height).as_str()),
-        "the viewport matches what the renderer reports to JavaScript"
-    );
+    // The window label follows the window, and `initialize` reads the viewport at request time,
+    // so the two agree once the compositor stops laying the window out (a tiling compositor
+    // resizes it after it opened); the test does not depend on the size it requested or got.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(15_000);
+    loop {
+        let fresh = app
+            .request("initialize", json!({ "protocolVersion": 1 }))
+            .unwrap();
+        let (width, height) = (fresh["width"].as_f64(), fresh["height"].as_f64());
+        let expected = format!("window: {}x{}", width.unwrap(), height.unwrap());
+        let label = app.get_by_test_id("window").element().unwrap().text;
+        if label.as_deref() == Some(expected.as_str()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the viewport never matched what the renderer reports to JavaScript: {label:?} against {expected}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let serve = app.get_by_test_id("serve").element().unwrap();
     assert!(
         serve

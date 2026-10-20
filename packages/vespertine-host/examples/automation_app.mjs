@@ -91,8 +91,12 @@ for (let item = 0; item < 10; item++) {
 text(CLICKS, "clicks: 0", "clicks");
 text(KEYS, "keys:", "keys");
 text(FOCUS, "focus: none", "focus");
-const size = renderer.getWindowSize();
-text(WINDOW, `window: ${size.width}x${size.height}`, "window");
+const windowLabel = () => {
+  const size = renderer.getWindowSize();
+  return `window: ${size.width}x${size.height}`;
+};
+let shownWindow = windowLabel();
+text(WINDOW, shownWindow, "window");
 text(SERVE, `second serve: ${secondServe}`, "serve");
 
 for (const child of [TITLE, NAME, SAVE, LIST, CLICKS, KEYS, FOCUS, WINDOW, SERVE]) {
@@ -120,5 +124,15 @@ console.error("automation app ready");
 
 let terminated = false;
 const loop = startFrameLoop(renderer, { onTerminated: () => (terminated = true) });
-while (!terminated) await new Promise((resolve) => setTimeout(resolve, 20));
+// The window size is retained text too: a compositor may lay the window out again after it
+// opened (a tiling compositor does), so the label follows the window.
+while (!terminated) {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  if (terminated) break;
+  const label = windowLabel();
+  if (label !== shownWindow) {
+    shownWindow = label;
+    update(WINDOW, label);
+  }
+}
 loop.stop();
