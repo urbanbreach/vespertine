@@ -1865,13 +1865,21 @@ pub struct WgpuHeadlessRenderer {
     clear_color: wgpu::Color,
     /// Renders into a target composited as premultiplied alpha (a transparent window).
     transparent: bool,
+    /// The claim on the shared device (none on a private one). It is the last field: the
+    /// device is destroyed once every clone of it above has been dropped.
+    _lease: Option<crate::HeadlessLease>,
 }
 
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 impl WgpuHeadlessRenderer {
     pub fn new() -> anyhow::Result<Self> {
-        let (context, target_format) = WgpuContext::new_headless()?;
-        Ok(Self::from_context(context, target_format, false))
+        let (context, target_format, lease) = WgpuContext::new_headless()?;
+        Ok(Self::from_context(
+            context,
+            target_format,
+            false,
+            Some(lease),
+        ))
     }
 
     /// A headless renderer for a transparent window: the target is cleared to transparent
@@ -1879,8 +1887,8 @@ impl WgpuHeadlessRenderer {
     /// `PreMultiplied` alpha. The read-back image holds premultiplied RGBA, so a pixel that
     /// nothing painted is `[0, 0, 0, 0]` (RND-002 A7).
     pub fn new_transparent() -> anyhow::Result<Self> {
-        let (context, target_format) = WgpuContext::new_headless()?;
-        let mut renderer = Self::from_context(context, target_format, true);
+        let (context, target_format, lease) = WgpuContext::new_headless()?;
+        let mut renderer = Self::from_context(context, target_format, true, Some(lease));
         renderer.clear_color = wgpu::Color::TRANSPARENT;
         Ok(renderer)
     }
@@ -1889,13 +1897,14 @@ impl WgpuHeadlessRenderer {
     /// test may lose that device without disturbing other headless renderers.
     pub fn new_isolated() -> anyhow::Result<Self> {
         let (context, target_format) = WgpuContext::create_headless()?;
-        Ok(Self::from_context(context, target_format, false))
+        Ok(Self::from_context(context, target_format, false, None))
     }
 
     fn from_context(
         context: WgpuContext,
         target_format: wgpu::TextureFormat,
         transparent: bool,
+        lease: Option<crate::HeadlessLease>,
     ) -> Self {
         // The device may be shared with earlier renderers; observe only errors raised from
         // here on, including any while this renderer builds its pipelines.
@@ -1920,6 +1929,7 @@ impl WgpuHeadlessRenderer {
             readback_bytes: 0,
             clear_color: wgpu::Color::BLACK,
             transparent,
+            _lease: lease,
         }
     }
 
@@ -1973,7 +1983,7 @@ impl WgpuHeadlessRenderer {
     pub fn recover(&mut self) -> anyhow::Result<()> {
         let (context, target_format) = WgpuContext::create_headless()?;
         let clear_color = self.clear_color;
-        *self = Self::from_context(context, target_format, self.transparent);
+        *self = Self::from_context(context, target_format, self.transparent, None);
         self.clear_color = clear_color;
         Ok(())
     }

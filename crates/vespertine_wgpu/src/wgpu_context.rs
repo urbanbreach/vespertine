@@ -83,6 +83,52 @@ impl DeviceErrorState {
     }
 }
 
+/// The device headless renderers share, and the cache that hands it out.
+#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+static HEADLESS: Mutex<Option<Arc<SharedHeadless>>> = Mutex::new(None);
+
+#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+struct SharedHeadless {
+    context: WgpuContext,
+    format: wgpu::TextureFormat,
+}
+
+/// A renderer's claim on the shared headless device. The device must not outlive its users:
+/// a GPU driver that still has a live device when the process exits tears itself down from
+/// an exit handler while its own worker threads are running, which crashed test processes
+/// (SIGSEGV after the last test passed). So the last lease to be released waits for the GPU
+/// to go idle and destroys the device on the releasing thread, an ordinary thread of the
+/// process: wgpu's queue reads thread-locals on drop and must not be dropped while the
+/// thread-locals of a thread are being destroyed, which rules out a process-wide static.
+///
+/// A renderer drops its own clones of the context before its lease (declare the lease last).
+#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+pub(crate) struct HeadlessLease(Arc<SharedHeadless>);
+
+#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+impl Drop for HeadlessLease {
+    fn drop(&mut self) {
+        let cache_entry = {
+            let mut headless = HEADLESS.lock();
+            // The cache and this lease are then the only owners; leases are only cloned from
+            // the cache with its lock held, so nobody can join while this decides.
+            match headless.as_ref() {
+                Some(cached) if Arc::ptr_eq(cached, &self.0) && Arc::strong_count(cached) == 2 => {
+                    headless.take()
+                }
+                _ => None,
+            }
+        };
+        if cache_entry.is_some() {
+            // A lost device reports an error at once; there is nothing left to wait for then.
+            let _ = self.0.context.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(30)),
+            });
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WgpuBackend {
     Native(wgpu::Backend),
@@ -141,22 +187,21 @@ impl WgpuContext {
     }
 
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
-    pub(crate) fn new_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
-        // Creating a device takes tens of milliseconds, and benchmarks create a headless
-        // renderer for every window they open, so the process shares one device until it
-        // is lost. A static rather than a thread-local: the cached device is never dropped,
-        // because wgpu's queue reads its own thread-locals on drop and would panic if
-        // dropped while a thread's thread-locals are being destroyed.
-        static HEADLESS: Mutex<Option<(WgpuContext, wgpu::TextureFormat)>> = Mutex::new(None);
+    pub(crate) fn new_headless() -> anyhow::Result<(Self, wgpu::TextureFormat, HeadlessLease)> {
+        // Creating a device takes tens of milliseconds, so renderers alive at the same time
+        // share one device until it is lost. The cache itself does not keep the device
+        // alive: the last renderer to release its lease destroys it (see `HeadlessLease`).
         let mut headless = HEADLESS.lock();
-        if let Some((context, format)) = headless.as_ref()
-            && !context.device_lost()
+        if let Some(shared) = headless.as_ref()
+            && !shared.context.device_lost()
         {
-            return Ok((context.clone(), *format));
+            let shared = Arc::clone(shared);
+            return Ok((shared.context.clone(), shared.format, HeadlessLease(shared)));
         }
-        let created = Self::create_headless()?;
-        *headless = Some(created.clone());
-        Ok(created)
+        let (context, format) = Self::create_headless()?;
+        let shared = Arc::new(SharedHeadless { context, format });
+        *headless = Some(Arc::clone(&shared));
+        Ok((shared.context.clone(), shared.format, HeadlessLease(shared)))
     }
 
     #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
