@@ -5,16 +5,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use vespertine::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, canvas, div, px, rgb,
+    AnyElement, AppContext as _, Bounds, Context, Entity, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
+    Window, canvas, div, px, rgb,
 };
 use vespertine_components::badges::{
-    BADGE_HEIGHT, BadgeDescriptor, BadgeTokens, CardCallbacks, ChecklistPanel, CommentContent,
-    DRAFT_HEIGHT, DetailRow, ICON_COMMENT, IconAssets, NoticeAction, NoticeVariant, Severity,
-    card_height, checklist::Item, checklist::ItemStatus, notice_chip, render_adder, render_badge,
-    render_card, render_draft,
+    BADGE_HEIGHT, BadgeCards, BadgeDescriptor, BadgeTokens, CardCallbacks, ChecklistPanel,
+    CommentContent, DRAFT_HEIGHT, DRAFT_INPUT_HEIGHT, DetailRow, ICON_COMMENT, IconAssets,
+    NoticeAction, NoticeVariant, Severity, card_height, checklist::Item, checklist::ItemStatus,
+    draft_input, notice_chip, render_adder, render_badge, render_card, render_draft,
 };
+use vespertine_components::text::{TextArea, area::CHROME_PADDING_Y};
 use vespertine_richtext::text_root;
 use vespertine_test_host::{DEFAULT_SCALE_FACTOR, HostOptions, TestHost};
 
@@ -203,6 +204,99 @@ fn hover_details_show_one_card_after_280_ms_and_never_before() {
     );
 }
 
+struct SharedCards {
+    cards: BadgeCards,
+    tokens: BadgeTokens,
+    sinks: [Sink; 2],
+}
+
+impl Render for SharedCards {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let badge = |id: &'static str, label: &str, body: &str, sink: &Sink| {
+            probed(
+                sink,
+                render_badge(
+                    id,
+                    BadgeDescriptor::new(ICON_COMMENT, label.to_string())
+                        .details(vec![DetailRow::new("src/a.rs:1", body.to_string())]),
+                    &self.tokens,
+                )
+                .cards(&self.cards),
+            )
+        };
+        div()
+            .size_full()
+            .p(px(10.))
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(px(40.))
+            .child(badge("first", "first", "FIRST-DETAIL-BODY", &self.sinks[0]))
+            .child(badge(
+                "second",
+                "second",
+                "SECOND-DETAIL-BODY",
+                &self.sinks[1],
+            ))
+            .child(self.cards.layer())
+    }
+}
+
+#[test]
+fn badges_sharing_a_card_host_use_the_hover_card_rules() {
+    if !vespertine_test_host::is_available() {
+        return;
+    }
+    let sinks = [sink(), sink()];
+    let mut host = TestHost::with_view(options(600.0, 300.0), {
+        let sinks = sinks.clone();
+        move |_, cx| {
+            let tokens = BadgeTokens::neutral();
+            let cards = BadgeCards::new(&tokens, cx);
+            cx.new(|_| SharedCards {
+                cards,
+                tokens,
+                sinks,
+            })
+        }
+    })
+    .expect("host");
+    host.flush();
+    let center = |b: Bounds<Pixels>| {
+        (
+            f64::from(f32::from(b.origin.x + b.size.width / 2.0)),
+            f64::from(f32::from(b.origin.y + b.size.height / 2.0)),
+        )
+    };
+    let (first_x, first_y) = center(bounds(&sinks[0]));
+    let (second_x, second_y) = center(bounds(&sinks[1]));
+
+    host.mouse_move(first_x, first_y, None, "").expect("move");
+    host.advance_executor_time(1.0).expect("clock");
+    host.mouse_move(first_x + 1.0, first_y, None, "")
+        .expect("move");
+    host.advance_executor_time(270.0).expect("clock");
+    assert_eq!(
+        contains_text(&host, "FIRST-DETAIL-BODY"),
+        0,
+        "not before 280 ms"
+    );
+    host.advance_executor_time(20.0).expect("clock");
+    assert_eq!(contains_text(&host, "FIRST-DETAIL-BODY"), 1);
+
+    // A neighbor opens at once while a card is shown (the warm window of CMP-004 R12) and the
+    // first card gives way: exactly one card is on screen.
+    host.mouse_move(second_x, second_y, None, "").expect("move");
+    host.advance_executor_time(1.0).expect("clock");
+    assert_eq!(contains_text(&host, "SECOND-DETAIL-BODY"), 1);
+    assert_eq!(contains_text(&host, "FIRST-DETAIL-BODY"), 0);
+
+    // A press dismisses cold: hovering again waits for the dwell.
+    host.click(second_x, second_y, 0, "").expect("click");
+    host.advance_executor_time(1.0).expect("clock");
+    assert_eq!(contains_text(&host, "SECOND-DETAIL-BODY"), 0);
+}
+
 // --- A5 ---------------------------------------------------------------------------------------
 
 #[test]
@@ -328,37 +422,10 @@ fn a_notice_action_runs_its_callback() {
 
 // --- A6, A7, A9: review cards ------------------------------------------------------------------
 
-struct ToyInput {
-    text: String,
-    focus: FocusHandle,
-}
-
-impl Focusable for ToyInput {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus.clone()
-    }
-}
-
-impl Render for ToyInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("toy")
-            .track_focus(&self.focus)
-            .size_full()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key.chars().count() == 1 {
-                    this.text.push_str(&event.keystroke.key);
-                    cx.notify();
-                }
-            }))
-            .child(format!("draft:{}", self.text))
-    }
-}
-
 struct Review {
     body: SharedString,
     editing: bool,
-    input: Entity<ToyInput>,
+    input: Entity<TextArea>,
     tokens: BadgeTokens,
     card_sink: Sink,
     draft_sink: Sink,
@@ -386,7 +453,7 @@ impl Render for Review {
                     },
                     move |_, cx| {
                         commit.update(cx, |review, cx| {
-                            review.body = review.input.read(cx).text.clone().into();
+                            review.body = review.input.read(cx).source().to_string().into();
                             review.editing = false;
                             cx.notify();
                         })
@@ -409,6 +476,10 @@ impl Render for Review {
                         move |_, window, cx| {
                             edit.update(cx, |review, cx| {
                                 review.editing = true;
+                                let body = review.body.clone();
+                                review
+                                    .input
+                                    .update(cx, |input, cx| input.set_value(&body, window, cx));
                                 let handle = review.input.focus_handle(cx);
                                 window.focus(&handle, cx);
                                 cx.notify();
@@ -480,16 +551,14 @@ fn review_harness(body: &str) -> Option<ReviewHarness> {
     let host = TestHost::with_view(options, {
         let (card_sink, draft_sink) = (card_sink.clone(), draft_sink.clone());
         let slot = slot.clone();
-        move |_, cx| {
-            let input = cx.new(|cx| ToyInput {
-                text: String::new(),
-                focus: cx.focus_handle(),
-            });
+        move |window, cx| {
+            let tokens = BadgeTokens::neutral();
+            let input = cx.new(|cx| draft_input("", &tokens, window, cx));
             let review = cx.new(|_| Review {
                 body: body.into(),
                 editing: false,
                 input,
-                tokens: BadgeTokens::neutral(),
+                tokens,
                 card_sink,
                 draft_sink,
                 cancels: 0,
@@ -521,7 +590,7 @@ impl ReviewHarness {
         let review = self.review.clone();
         self.host
             .app()
-            .update(|cx| review.read(cx).input.read(cx).text.clone())
+            .update(|cx| review.read(cx).input.read(cx).source().to_string())
     }
 
     /// Presents the last drawn frame so the scene observer sees it.
@@ -604,8 +673,13 @@ fn edit_then_cancel_restores_the_card_and_the_draft_is_116_px() {
         1,
         "the primary action reads Save when editing"
     );
+    assert_eq!(
+        h.input_text(),
+        "original body",
+        "the editor starts with the card's body"
+    );
     h.host.simulate_keystrokes("x y", None).expect("keys");
-    assert_eq!(h.input_text(), "xy");
+    assert_eq!(h.input_text(), "original bodyxy");
     h.host.simulate_keystrokes("escape", None).expect("keys");
     h.host.flush();
     assert!(!h.read(|review| review.editing), "Escape cancels the draft");
@@ -639,6 +713,47 @@ fn the_cancel_button_discards_the_edits_and_a_new_draft_reads_comment() {
     h.host.flush();
     assert!(!h.read(|review| review.editing));
     assert_eq!(h.read(|review| review.body.to_string()), "kept");
+}
+
+#[test]
+fn a_long_draft_scrolls_inside_the_editor_and_keeps_the_116_px_height() {
+    let Some(mut h) = review_harness("short") else {
+        return;
+    };
+    let card = bounds(&h.card_sink);
+    let edit_x = f64::from(f32::from(card.right())) - 16.0 - 16.0 - 6.0 - 8.0;
+    h.host
+        .mouse_move(edit_x, header_y(card), None, "")
+        .expect("move");
+    h.host.flush();
+    h.host.click(edit_x, header_y(card), 0, "").expect("click");
+    h.host.flush();
+    let long = (0..30)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let review = h.review.clone();
+    let window = h.host.window();
+    h.host
+        .app()
+        .update_window(window, |_, window, cx| {
+            let input = review.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_value(&long, window, cx));
+        })
+        .expect("window");
+    h.host.flush();
+    h.host.flush();
+    assert_eq!(f32::from(bounds(&h.draft_sink).size.height), DRAFT_HEIGHT);
+    let review = h.review.clone();
+    let viewport = h
+        .host
+        .app()
+        .update(|cx| review.read(cx).input.read(cx).viewport_bounds())
+        .expect("the editor painted");
+    assert!(
+        f32::from(viewport.size.height) + CHROME_PADDING_Y <= DRAFT_INPUT_HEIGHT + 0.01,
+        "the editor stays inside the 46 px input region: {viewport:?}"
+    );
 }
 
 #[test]

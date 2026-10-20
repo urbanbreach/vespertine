@@ -1,15 +1,18 @@
 //! Inline badges with optional hover details (CMP-028 R1-R3).
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use vespertine::{
-    AnyView, App, AppContext as _, ClickEvent, Context, ElementId, FontWeight, InteractiveElement,
+    App, AppContext as _, ClickEvent, ElementId, Entity, FontWeight, InteractiveElement,
     IntoElement, MouseButton, MouseDownEvent, ParentElement, RenderOnce, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px, svg,
 };
 
 use super::tokens::BadgeTokens;
+use crate::tooltip::card::HoverCardHost;
 
 /// Fixed badge height: the surrounding strip sizes itself arithmetically, so the height never
 /// depends on measurement (R1).
@@ -28,7 +31,7 @@ pub const TEXT_SIZE: f32 = 12.0;
 pub const WASH_OPACITY: f32 = 0.06;
 /// Icon opacity.
 pub const ICON_OPACITY: f32 = 0.7;
-/// Delay before the detail card is shown (R3).
+/// Pointer rest time before the detail card is shown (R3): the hover-card dwell of the badges.
 pub const HOVER_DELAY: Duration = Duration::from_millis(280);
 /// Width of the detail card.
 pub const CARD_WIDTH: f32 = 320.0;
@@ -116,6 +119,44 @@ impl BadgeDescriptor {
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ContextMenuHandler = Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 
+/// The hover-card facility of the badges of one container (CMP-004 through CMP-028 R3): one
+/// [`HoverCardHost`] whose cards are the detail rows of the badge being hovered, so the dwell
+/// (280 ms), the warm window between neighboring badges and the cold dismissal are the hover
+/// card rules. The container creates it once, passes it to every badge with
+/// [`InlineBadge::cards`] and renders [`BadgeCards::layer`] once.
+#[derive(Clone)]
+pub struct BadgeCards {
+    host: Entity<HoverCardHost<ElementId>>,
+    rows: Rc<RefCell<HashMap<ElementId, Vec<DetailRow>>>>,
+}
+
+impl BadgeCards {
+    /// The card facility for badges drawn with `tokens`.
+    pub fn new(tokens: &BadgeTokens, cx: &mut App) -> Self {
+        let rows: Rc<RefCell<HashMap<ElementId, Vec<DetailRow>>>> = Rc::default();
+        let host = cx.new(|cx| {
+            let rows = rows.clone();
+            let tokens = tokens.clone();
+            HoverCardHost::new(
+                move |key: &ElementId, _, _| {
+                    let rows = rows.borrow().get(key).cloned().unwrap_or_default();
+                    detail_card(rows, tokens.clone()).into_any_element()
+                },
+                cx,
+            )
+            .dwell(HOVER_DELAY)
+            .bare(true)
+        });
+        Self { host, rows }
+    }
+
+    /// The host entity to render once in the container: it paints the shown card on its own
+    /// layer.
+    pub fn layer(&self) -> Entity<HoverCardHost<ElementId>> {
+        self.host.clone()
+    }
+}
+
 /// A badge pill (R1). `id` is the stable identity supplied by the owner; it scopes the hover
 /// card.
 #[derive(IntoElement)]
@@ -123,6 +164,7 @@ pub struct InlineBadge {
     id: ElementId,
     descriptor: BadgeDescriptor,
     tokens: BadgeTokens,
+    cards: Option<BadgeCards>,
     on_click: Option<ClickHandler>,
     on_context_menu: Option<ContextMenuHandler>,
 }
@@ -137,6 +179,7 @@ pub fn render_badge(
         id: id.into(),
         descriptor,
         tokens: tokens.clone(),
+        cards: None,
         on_click: None,
         on_context_menu: None,
     }
@@ -160,18 +203,28 @@ impl InlineBadge {
         self.on_context_menu = Some(Rc::new(handler));
         self
     }
+
+    /// Shows this badge's detail rows through the container's shared hover-card facility, so
+    /// neighboring badges share the warm window. Without it a badge with details brings its own
+    /// facility (one card per badge, the same 280 ms dwell).
+    pub fn cards(mut self, cards: &BadgeCards) -> Self {
+        self.cards = Some(cards.clone());
+        self
+    }
 }
 
 impl RenderOnce for InlineBadge {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = self.tokens;
         let descriptor = self.descriptor;
+        let id = self.id;
         let trailing = descriptor.trailing.as_ref().map(|trailing| match trailing {
             Trailing::Count(count) => SharedString::from(super::count::count_label(*count)),
             Trailing::Status(status) => status.clone(),
         });
         let mut badge = div()
-            .id(self.id)
+            .id(id.clone())
+            .relative()
             .flex()
             .flex_row()
             .items_center()
@@ -210,31 +263,48 @@ impl RenderOnce for InlineBadge {
                 handler(event, window, cx)
             });
         }
-        if !descriptor.details.is_empty() {
-            let rows = descriptor.details;
-            let card_tokens = tokens;
-            badge = badge
-                .tooltip_show_delay(HOVER_DELAY)
-                .hoverable_tooltip(move |_, cx| {
-                    let rows = rows.clone();
-                    let tokens = card_tokens.clone();
-                    cx.new(|_| DetailCard { rows, tokens }).into()
+        let (cards, own_layer) = match self.cards {
+            Some(cards) => (cards, false),
+            None if descriptor.details.is_empty() => return badge.into_any_element(),
+            None => {
+                let state = window.use_keyed_state((id.clone(), "badge-cards"), cx, |_, cx| {
+                    BadgeCards::new(&tokens, cx)
                 });
+                (state.read(cx).clone(), true)
+            }
+        };
+        if descriptor.details.is_empty() {
+            cards.rows.borrow_mut().remove(&id);
+            return badge.into_any_element();
         }
-        badge
+        cards
+            .rows
+            .borrow_mut()
+            .insert(id.clone(), descriptor.details);
+        let badge = HoverCardHost::trigger(&cards.host, id, badge, cx);
+        if own_layer {
+            // The badge's own host paints its card from inside the badge; the zero-size
+            // absolute wrapper keeps it out of the badge's flow and gap.
+            badge
+                .child(div().absolute().size_0().child(cards.layer()))
+                .into_any_element()
+        } else {
+            badge.into_any_element()
+        }
     }
 }
 
-/// The hover card: width 320, padding 6, rows separated by 4, popover surface style. It is
-/// shown through the framework's tooltip layer, which paints above all ordinary content, so
-/// equal draw orders never let the underlying text show through (R3).
-struct DetailCard {
+/// The hover card: width 320, padding 6, rows separated by 4, popover surface style. The hover
+/// card host paints it on its own layer above all ordinary content, so equal draw orders never
+/// let the underlying text show through (R3).
+#[derive(IntoElement)]
+pub struct DetailCard {
     rows: Vec<DetailRow>,
     tokens: BadgeTokens,
 }
 
-impl vespertine::Render for DetailCard {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+impl RenderOnce for DetailCard {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let tokens = &self.tokens;
         let rows = self.rows.iter().map(|row| {
             let location = div()
@@ -303,8 +373,8 @@ impl vespertine::Render for DetailCard {
     }
 }
 
-/// A hover-card view for `rows`, for hosts that attach the card to their own element through
-/// the framework's tooltip facility.
-pub fn detail_card(rows: Vec<DetailRow>, tokens: BadgeTokens, cx: &mut App) -> AnyView {
-    cx.new(|_| DetailCard { rows, tokens }).into()
+/// The hover-card content for `rows`, for hosts that show it through their own
+/// [`HoverCardHost`].
+pub fn detail_card(rows: Vec<DetailRow>, tokens: BadgeTokens) -> DetailCard {
+    DetailCard { rows, tokens }
 }

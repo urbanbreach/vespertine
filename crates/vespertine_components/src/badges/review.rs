@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use vespertine::{
-    AnyView, App, ElementId, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    App, Context, ElementId, Entity, FocusHandle, FontWeight, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
     Styled, Window, div, px, svg,
 };
@@ -13,6 +13,7 @@ use vespertine::{
 use super::common::{Handler, action_button, text_tooltip};
 use super::icons::{ICON_COMMENT, ICON_EDIT, ICON_PLUS, ICON_REMOVE};
 use super::tokens::BadgeTokens;
+use crate::text::{FieldTheme, TextArea, actions::Cancel};
 
 /// Vertical padding of a card (10 above and below).
 pub const CARD_PADDING_V: f32 = 20.0;
@@ -28,6 +29,10 @@ pub const WRAP_COLUMNS: usize = 64;
 pub const MAX_LINES: usize = 8;
 /// The fixed height of an open draft.
 pub const DRAFT_HEIGHT: f32 = 116.0;
+/// The height of the draft's input region: two 18 px rows of the editor plus its chrome.
+pub const DRAFT_INPUT_HEIGHT: f32 = 46.0;
+/// Text size of the draft's input.
+pub const DRAFT_TEXT_SIZE: f32 = 12.0;
 /// The accent bar width.
 pub const BAR_WIDTH: f32 = 3.0;
 /// The add control side.
@@ -298,13 +303,13 @@ impl RenderOnce for ReviewCard {
 }
 
 /// The bounded editable draft (R14): a fixed 116 px tall, with a header showing the location, a
-/// 46 px overflow-hidden input region holding the owner's embedded multiline editor and an
-/// action row with Cancel and the commit action.
+/// 46 px overflow-hidden input region holding the embedded multiline editor (a CMP-008
+/// [`TextArea`]) and an action row with Cancel and the commit action.
 #[derive(IntoElement)]
 pub struct ReviewDraft {
     id: SharedString,
     location: SharedString,
-    input: AnyView,
+    input: Entity<TextArea>,
     editing: bool,
     commit_label: SharedString,
     cancel: Rc<dyn Fn(&mut Window, &mut App)>,
@@ -313,14 +318,44 @@ pub struct ReviewDraft {
     tokens: BadgeTokens,
 }
 
+/// The multiline editor of a draft (R14): 12 px text on 18 px rows, two rows high so that the
+/// editor with its chrome fills the 46 px input region exactly; longer text scrolls inside the
+/// editor and never grows the draft. `initial` is the text of the card being edited (empty for a
+/// new comment). Create it with `cx.new(|cx| draft_input(..))` and pass the entity to
+/// [`render_draft`]; the owner keeps the entity across frames, reads its text on commit and
+/// focuses it when the draft opens.
+pub fn draft_input(
+    initial: &str,
+    tokens: &BadgeTokens,
+    window: &mut Window,
+    cx: &mut Context<TextArea>,
+) -> TextArea {
+    let theme = FieldTheme {
+        text: tokens.text,
+        faint: tokens.faint,
+        muted: tokens.muted,
+        selection: tokens.accent.opacity(0.35),
+        caret: tokens.text,
+        surface: tokens.wash(0.05),
+        border: tokens.popover_border,
+        accent: tokens.accent,
+        disabled_surface: tokens.wash(0.05),
+    };
+    TextArea::new(window, cx)
+        .value(initial)
+        .text_metrics(px(DRAFT_TEXT_SIZE), px(LINE_HEIGHT))
+        .rows(2, 2)
+        .theme(theme)
+}
+
 /// Renders a draft: `render_draft(location, input entity, editing flag, cancel, commit,
-/// optional column)`. `input` is the owner's multiline editor view (CMP-008); `id` scopes the
+/// optional column)`. `input` is the draft's editor (see [`draft_input`]); `id` scopes the
 /// draft's element identities.
 #[allow(clippy::too_many_arguments)]
 pub fn render_draft(
     id: impl Into<SharedString>,
     location: impl Into<SharedString>,
-    input: impl Into<AnyView>,
+    input: Entity<TextArea>,
     editing: bool,
     cancel: impl Fn(&mut Window, &mut App) + 'static,
     commit: impl Fn(&mut Window, &mut App) + 'static,
@@ -330,7 +365,7 @@ pub fn render_draft(
     ReviewDraft {
         id: id.into(),
         location: location.into(),
-        input: input.into(),
+        input,
         editing,
         commit_label: "Comment".into(),
         cancel: Rc::new(cancel),
@@ -365,6 +400,9 @@ impl RenderOnce for ReviewDraft {
         let id = self.id.clone();
         let cancel = self.cancel.clone();
         let escape = self.cancel.clone();
+        let escape_input = self.input.clone();
+        let cancel_input = self.input.clone();
+        let cancel_action = self.cancel.clone();
         let commit = self.commit.clone();
         let inner = div()
             .size_full()
@@ -386,10 +424,8 @@ impl RenderOnce for ReviewDraft {
             .child(
                 div()
                     .flex_none()
-                    .h(px(46.))
+                    .h(px(DRAFT_INPUT_HEIGHT))
                     .overflow_hidden()
-                    .text_size(px(12.))
-                    .text_color(tokens.text)
                     .child(self.input),
             )
             .child(
@@ -425,9 +461,19 @@ impl RenderOnce for ReviewDraft {
             .child(column_content(inner, self.column, &tokens))
             // Mouse-down inside the draft never starts a selection or a row click.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // Escape cancels the draft and stops propagating, even before the editor sees it.
+            // Escape cancels the draft and stops propagating, even before the editor sees it. The
+            // editor binds Escape to its own cancel action, so that action is taken in the
+            // capture phase too; an Escape that ends an input-method composition stays with the
+            // editor.
+            .capture_action(move |_: &Cancel, window, cx| {
+                if cancel_input.read(cx).marked_range().is_none() {
+                    cancel_action(window, cx);
+                    cx.stop_propagation();
+                }
+            })
             .capture_key_down(move |event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
+                if event.keystroke.key == "escape" && escape_input.read(cx).marked_range().is_none()
+                {
                     escape(window, cx);
                     cx.stop_propagation();
                 }
@@ -519,6 +565,10 @@ mod tests {
 
     #[test]
     fn the_draft_height_adds_up() {
-        assert_eq!(DRAFT_HEIGHT, 22.0 + 46.0 + 28.0 + 2.0 * 10.0);
+        assert_eq!(DRAFT_HEIGHT, 22.0 + DRAFT_INPUT_HEIGHT + 28.0 + 2.0 * 10.0);
+        assert_eq!(
+            DRAFT_INPUT_HEIGHT,
+            2.0 * LINE_HEIGHT + crate::text::area::CHROME_PADDING_Y
+        );
     }
 }

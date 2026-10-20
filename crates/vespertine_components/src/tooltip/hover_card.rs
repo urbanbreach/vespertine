@@ -34,12 +34,14 @@ pub enum Reaction<K> {
 }
 
 /// The controller shared by every hover-card trigger of a container: shown target, pending
-/// target with its dwell, and the hidden-at time.
+/// target with its dwell, and the hidden-at time. The dwell is [`DWELL`] unless a container asks
+/// for another (the badge details of CMP-028 open after 280 ms).
 #[derive(Clone, Debug)]
 pub struct HoverCards<K> {
     shown: Option<K>,
     pending: Option<(K, Duration)>,
     hidden_at: Option<Duration>,
+    dwell: Duration,
 }
 
 impl<K> Default for HoverCards<K> {
@@ -48,6 +50,7 @@ impl<K> Default for HoverCards<K> {
             shown: None,
             pending: None,
             hidden_at: None,
+            dwell: DWELL,
         }
     }
 }
@@ -56,6 +59,15 @@ impl<K: Clone + PartialEq> HoverCards<K> {
     /// A controller with nothing shown.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A controller whose cold dwell is `dwell` instead of [`DWELL`]; the warm window and the
+    /// cold dismissal rules are unchanged.
+    pub fn with_dwell(dwell: Duration) -> Self {
+        Self {
+            dwell,
+            ..Self::default()
+        }
     }
 
     /// The trigger whose card is shown.
@@ -95,7 +107,7 @@ impl<K: Clone + PartialEq> HoverCards<K> {
         if self.pending.as_ref().map(|(pending, _)| pending) == Some(key) {
             return Reaction::None;
         }
-        let due = now + DWELL;
+        let due = now + self.dwell;
         self.pending = Some((key.clone(), due));
         Reaction::StartDwell {
             target: key.clone(),
@@ -324,6 +336,20 @@ mod tests {
         assert_eq!(cards.settle(ms(549), &1), Reaction::None);
         assert_eq!(cards.settle(ms(550), &1), Reaction::Show(1));
         assert_eq!(cards.shown(), Some(&1));
+    }
+
+    #[test]
+    fn a_container_may_choose_its_own_cold_dwell() {
+        let mut cards = HoverCards::<u32>::with_dwell(ms(280));
+        assert_eq!(
+            cards.enter(ms(0), &1, false),
+            Reaction::StartDwell {
+                target: 1,
+                due: ms(280)
+            }
+        );
+        assert_eq!(cards.settle(ms(279), &1), Reaction::None);
+        assert_eq!(cards.settle(ms(280), &1), Reaction::Show(1));
     }
 
     #[test]

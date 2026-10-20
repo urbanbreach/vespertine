@@ -77,6 +77,12 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
         }
     }
 
+    /// The pointer rest time before a cold card opens (default [`super::hover_card::DWELL`]).
+    pub fn dwell(mut self, dwell: Duration) -> Self {
+        self.cards = HoverCards::with_dwell(dwell);
+        self
+    }
+
     /// A card with interactive content is hoverable: leaving the trigger starts the 80 ms hide
     /// grace unless the pointer travels the corridor toward the card (R14).
     pub fn interactive(mut self, interactive: bool) -> Self {

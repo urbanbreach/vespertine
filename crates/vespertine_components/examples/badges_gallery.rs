@@ -1,65 +1,33 @@
 //! CMP-028 A1: inline badges, notices and review cards.
 //!
-//! Shows a long badge that truncates without moving its neighbors, a badge with hover details
-//! (the card appears after 280 ms), a notice whose message can be selected and copied with its
+//! Shows a long badge that truncates without moving its neighbors, two badges with hover details
+//! sharing one hover-card host (the first card appears after 280 ms, the neighbor's at once), a
+//! notice whose message can be selected and copied with its
 //! copy button, an activity pill and a corner count badge, and a review card: hover it, edit the
-//! comment (a bounded draft opens), type, then cancel with Escape or the Cancel button, which
-//! restores the card unchanged.
+//! comment (a bounded draft in a text area opens), type, then cancel with Escape or the Cancel
+//! button, which restores the card unchanged.
 
 use vespertine::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, div, px,
+    rgb, size,
 };
 use vespertine_components::badges::{
-    BadgeDescriptor, BadgeTokens, CardCallbacks, CommentContent, DetailRow, ICON_COMMENT,
-    ICON_WARNING, IconAssets, NoticeAction, NoticeVariant, Severity, activity_pill,
-    corner_count_badge, notice_chip, render_adder, render_badge, render_card, render_draft,
+    BadgeCards, BadgeDescriptor, BadgeTokens, CardCallbacks, CommentContent, DetailRow,
+    ICON_COMMENT, ICON_WARNING, IconAssets, NoticeAction, NoticeVariant, Severity, activity_pill,
+    corner_count_badge, draft_input, notice_chip, render_adder, render_badge, render_card,
+    render_draft,
 };
+use vespertine_components::text::TextArea;
 use vespertine_platform::application;
 use vespertine_richtext::text_root;
-
-/// A minimal single-purpose text field standing in for the multiline editor slot (CMP-008).
-struct ToyInput {
-    text: String,
-    focus: FocusHandle,
-}
-
-impl Focusable for ToyInput {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus.clone()
-    }
-}
-
-impl Render for ToyInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("toy-input")
-            .track_focus(&self.focus)
-            .size_full()
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                match event.keystroke.key.as_str() {
-                    "backspace" => {
-                        this.text.pop();
-                    }
-                    "enter" => this.text.push('\n'),
-                    key if key.chars().count() == 1 => this
-                        .text
-                        .push_str(event.keystroke.key_char.as_deref().unwrap_or(key)),
-                    "space" => this.text.push(' '),
-                    _ => return,
-                }
-                cx.notify();
-            }))
-            .child(format!("{}|", self.text))
-    }
-}
 
 struct Gallery {
     tokens: BadgeTokens,
     body: SharedString,
     editing: bool,
-    input: Entity<ToyInput>,
+    input: Entity<TextArea>,
+    cards: BadgeCards,
     notice_clicks: usize,
     long_label: bool,
 }
@@ -67,7 +35,8 @@ struct Gallery {
 impl Gallery {
     fn open_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let body = self.body.to_string();
-        self.input.update(cx, |input, _| input.text = body);
+        self.input
+            .update(cx, |input, cx| input.set_value(&body, window, cx));
         self.editing = true;
         window.focus(&self.input.focus_handle(cx), cx);
         cx.notify();
@@ -75,7 +44,7 @@ impl Gallery {
 
     fn close_editor(&mut self, commit: bool, cx: &mut Context<Self>) {
         if commit {
-            self.body = self.input.read(cx).text.clone().into();
+            self.body = self.input.read(cx).source().to_string().into();
         }
         self.editing = false;
         cx.notify();
@@ -119,17 +88,35 @@ impl Render for Gallery {
                     .text_color(tokens.muted)
                     .child("<- neighbors stay put"),
             )
-            .child(render_badge(
-                "details-badge",
-                BadgeDescriptor::new(ICON_WARNING, "hover me")
-                    .status("2 findings")
-                    .details(vec![
-                        DetailRow::new("src/lib.rs:42", "The detail card appears after 280 ms.")
+            .child(
+                render_badge(
+                    "details-badge",
+                    BadgeDescriptor::new(ICON_WARNING, "hover me")
+                        .status("2 findings")
+                        .details(vec![
+                            DetailRow::new(
+                                "src/lib.rs:42",
+                                "The detail card appears after 280 ms.",
+                            )
                             .tag("note"),
-                        DetailRow::new("src/main.rs:7", "Rows are separated by four pixels."),
-                    ]),
-                &tokens,
-            ))
+                            DetailRow::new("src/main.rs:7", "Rows are separated by four pixels."),
+                        ]),
+                    &tokens,
+                )
+                .cards(&self.cards),
+            )
+            .child(
+                render_badge(
+                    "neighbor-badge",
+                    BadgeDescriptor::new(ICON_COMMENT, "then me").details(vec![DetailRow::new(
+                        "src/lib.rs:50",
+                        "A neighbor opens at once while a card is shown.",
+                    )]),
+                    &tokens,
+                )
+                .cards(&self.cards),
+            )
+            .child(self.cards.layer())
             .children(activity_pill("pill", 3, 0.8, &tokens))
             .child(
                 div()
@@ -236,15 +223,16 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_window, cx| {
-                cx.new(|cx| Gallery {
-                    tokens: BadgeTokens::neutral(),
+            |window, cx| {
+                let tokens = BadgeTokens::neutral();
+                let input = cx.new(|cx| draft_input("", &tokens, window, cx));
+                let cards = BadgeCards::new(&tokens, cx);
+                cx.new(|_| Gallery {
+                    tokens,
                     body: "Consider extracting this block into a helper.\nIt is used twice.".into(),
                     editing: false,
-                    input: cx.new(|cx| ToyInput {
-                        text: String::new(),
-                        focus: cx.focus_handle(),
-                    }),
+                    input,
+                    cards,
                     notice_clicks: 0,
                     long_label: true,
                 })

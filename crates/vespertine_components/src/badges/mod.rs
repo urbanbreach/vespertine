@@ -1,10 +1,11 @@
 //! Inline badges, notices and review cards (CMP-028).
 //!
 //! Generic content-slot components for compact status and review information inside text-heavy
-//! surfaces: [`InlineBadge`] (icon, label, optional count or status, optional hover details),
+//! surfaces: [`InlineBadge`] (icon, label, optional count or status, optional hover details shown
+//! as a CMP-004 hover card, see [`BadgeCards`]),
 //! [`ActivityPill`] and [`CornerCountBadge`] with the count formatting policy, [`notice_chip`]
 //! (severity-tinted, selectable and copyable message), [`ReviewCard`] / [`ReviewDraft`] /
-//! [`CommentAdder`] (located header, clipped body, bounded editable draft) and the
+//! [`CommentAdder`] (located header, clipped body, bounded draft in a CMP-008 text area) and the
 //! [`ChecklistPanel`]. They expose owner-provided callbacks and slots and know nothing about
 //! the application's domain data. Colors come from [`BadgeTokens`] (theme roles).
 //!
@@ -21,8 +22,8 @@ mod review;
 mod tokens;
 
 pub use badge::{
-    BADGE_HEIGHT, BadgeDescriptor, CARD_WIDTH, DetailRow, HOVER_DELAY, InlineBadge, Trailing,
-    detail_card, render_badge,
+    BADGE_HEIGHT, BadgeCards, BadgeDescriptor, CARD_WIDTH, DetailCard, DetailRow, HOVER_DELAY,
+    InlineBadge, Trailing, detail_card, render_badge,
 };
 pub use checklist::{ChecklistPanel, ListCache};
 pub use count::{
@@ -35,7 +36,8 @@ pub use icons::{
 };
 pub use notice::{NoticeAction, NoticeVariant, Severity, notice_chip};
 pub use review::{
-    CardCallbacks, Column, CommentAdder, CommentContent, DRAFT_HEIGHT, ReviewCard, ReviewDraft,
-    card_body_lines, card_height, render_adder, render_card, render_draft,
+    CardCallbacks, Column, CommentAdder, CommentContent, DRAFT_HEIGHT, DRAFT_INPUT_HEIGHT,
+    DRAFT_TEXT_SIZE, ReviewCard, ReviewDraft, card_body_lines, card_height, draft_input,
+    render_adder, render_card, render_draft,
 };
 pub use tokens::BadgeTokens;
