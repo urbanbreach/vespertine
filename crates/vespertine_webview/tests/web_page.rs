@@ -675,7 +675,16 @@ fn a_frame_keeps_its_physical_size_across_a_scale_change(cx: &mut TestAppContext
     // 640 x 360 logical pixels; one resize with 1280 x 720 at scale 2 was sent.
     cx.simulate_scale_factor_change(2.0);
     redraw(cx);
-    let resizes = fixture.peer.wait_named("resize", 1);
+    // The helper receives the page's commands in the order they were sent: once the focus
+    // command sent after the scale change has arrived, every resize the change caused has too.
+    // Waiting for a count of resizes would return at the earlier 1.5-scale resize.
+    let page_handle = fixture
+        .page
+        .read_with(cx, |page, _| page.focus_handle().clone());
+    cx.update(|window, app| window.focus(&page_handle, app));
+    redraw(cx);
+    fixture.peer.wait_named("focus", 1);
+    let resizes = fixture.peer.named("resize");
     assert!(
         resizes
             .iter()

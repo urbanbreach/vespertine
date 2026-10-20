@@ -146,3 +146,23 @@ fn fs_composite(input: CompositeVarying) -> @location(0) vec4<f32> {
     let uv = (p - params.snapshot_origin) / params.snapshot_size;
     return sample_source(uv);
 }
+
+// Backdrop assembly for an overlay plane (PLT-001 R9): the snapshot starts as a copy of the base
+// plane, `fs_backdrop_opaque` makes it fully opaque (the compositor ignores the alpha of an
+// opaque base plane), and `fs_backdrop_over` blends the overlay's own content so far over it.
+// The snapshot texel under a pass pixel is the overlay texel at `snapshot_origin + pixel`.
+// `pad.x` is 1 when the overlay stores straight (not premultiplied) color.
+@fragment
+fn fs_backdrop_over(input: FilterVarying) -> @location(0) vec4<f32> {
+    let texel = vec2<i32>(input.position.xy + params.snapshot_origin);
+    let content = textureLoad(source, texel, 0);
+    if (params.pad.x > 0.5) {
+        return vec4<f32>(content.rgb * content.a, content.a);
+    }
+    return content;
+}
+
+@fragment
+fn fs_backdrop_opaque(input: FilterVarying) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}

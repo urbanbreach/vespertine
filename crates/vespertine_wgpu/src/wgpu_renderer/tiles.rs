@@ -106,6 +106,8 @@ impl WgpuRendererCore {
                     &texture.view,
                     wgpu::Color::TRANSPARENT,
                     None,
+                    None,
+                    premultiplied_alpha,
                 )?;
                 self.tiles.stats.rasterized += 1;
                 self.tiles.cache.store(frame, coord, texture);

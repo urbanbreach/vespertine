@@ -38,7 +38,7 @@ use vespertine::{
     NativeDevice, NativeLayer, Pixels, Point, Scene, Size, SurfaceId, SurfaceKind, px,
 };
 use vespertine_wgpu::{
-    CompositorGpuHint, GpuContext, WgpuAtlas, WgpuRenderer, WgpuSurfaceConfig, wgpu,
+    BackdropPlane, CompositorGpuHint, GpuContext, WgpuAtlas, WgpuRenderer, WgpuSurfaceConfig, wgpu,
 };
 
 use crate::linux::{
@@ -571,11 +571,16 @@ impl WaylandComposition {
 
     /// Draws the overlay planes first and leaves their commits cached for the window surface
     /// commit that presents the base frame (PLT-001 R17, R19). `planes` pairs a surface with
-    /// its scene; `None` is the window's overlay surface.
+    /// its scene; `None` is the window's overlay surface. `backdrop` is the finished base
+    /// plane when the base surface is opaque; the backdrop-blur effects of every overlay plane
+    /// then blur it (with the plane's own earlier content blended over it), and without it they
+    /// blur the plane's own earlier content alone (PLT-001 R9). Other overlay planes are never
+    /// part of a plane's backdrop.
     pub(crate) fn draw_planes(
         &mut self,
         base_atlas: &Arc<WgpuAtlas>,
         planes: &[(Option<SurfaceId>, &Scene)],
+        backdrop: Option<&BackdropPlane>,
     ) {
         if self.env.restack.get() || self.stacked != self.layout {
             self.apply_stacking();
@@ -591,13 +596,19 @@ impl WaylandComposition {
                 .map(|(_, scene)| *scene);
             let drawable = scene.filter(|scene| !scene.is_empty());
             match drawable {
-                Some(scene) => self.draw_overlay(index, scene, base_atlas),
+                Some(scene) => self.draw_overlay(index, scene, base_atlas, backdrop),
                 None => self.unmap_overlay(index),
             }
         }
     }
 
-    fn draw_overlay(&mut self, index: usize, scene: &Scene, base_atlas: &Arc<WgpuAtlas>) {
+    fn draw_overlay(
+        &mut self,
+        index: usize,
+        scene: &Scene,
+        base_atlas: &Arc<WgpuAtlas>,
+        backdrop: Option<&BackdropPlane>,
+    ) {
         let reusable = self.overlays[index]
             .renderer
             .as_ref()
@@ -638,7 +649,7 @@ impl WaylandComposition {
         }
         let overlay = &mut self.overlays[index];
         if let Some(renderer) = &mut overlay.renderer {
-            if renderer.draw(scene) {
+            if renderer.draw_over(scene, backdrop) {
                 overlay.mapped = true;
                 overlay.needs_commit = false;
             } else {

@@ -49,7 +49,11 @@
 //!   shadows show the region without the native content.
 //! * X11 has no cross-window atomic presentation; independent windows may be composed one
 //!   display refresh apart.
-//! * Framework backdrop blur cannot sample native pixels on either backend.
+//! * Framework backdrop blur cannot sample native pixels on either backend. Inside the overlay
+//!   plane it blurs the earlier overlay content and the base plane where the backend can share
+//!   the finished base plane (Wayland, opaque window); on X11 and for translucent windows it
+//!   blurs only the overlay plane's own earlier content, so the effect region shows the base
+//!   plane unblurred (PLT-001 R9, RND-003 R16).
 //! * An attachment hosted above the overlay can cover later framework content painted on the
 //!   same overlay.
 

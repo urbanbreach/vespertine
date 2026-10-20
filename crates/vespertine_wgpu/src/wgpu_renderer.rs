@@ -1,4 +1,4 @@
-use crate::wgpu_blur::BlurRenderer;
+use crate::wgpu_blur::{BackdropSource, BlurRenderer};
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext, wgpu_surfaces};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -32,6 +32,8 @@ pub struct ClipStats {
     /// Curved clip buffer allocations: a scene without opted-in elements allocates none.
     pub buffer_allocations: u64,
 }
+#[cfg(test)]
+mod backdrop_plane_tests;
 #[cfg(test)]
 mod blur_tests;
 #[cfg(test)]
@@ -253,6 +255,23 @@ enum RendererState {
     Unconfigured { core: WgpuRendererCore },
     /// Released by `destroy`, or dropped for a device recovery that has not succeeded yet.
     Released,
+}
+
+/// The finished base plane of a layered window, lent to the renderer of an overlay plane so
+/// the overlay's backdrop-blur effects can blur the base plane (PLT-001 R9). It is a handle to
+/// a texture of the window's device and is valid for the frame it was handed out in.
+#[derive(Clone)]
+pub struct BackdropPlane {
+    texture: wgpu::Texture,
+}
+
+/// What a frame does with the other planes of a layered window.
+#[derive(Clone, Copy, Default)]
+struct PlaneRoles<'a> {
+    /// The finished base plane an overlay's effects snapshot.
+    backdrop: Option<&'a BackdropPlane>,
+    /// The frame is a base plane that will be shared: a copy-capable texture must hold it.
+    expose: bool,
 }
 
 pub struct WgpuRenderer {
@@ -1123,12 +1142,56 @@ impl WgpuRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
+        self.draw_plane(scene, PlaneRoles::default(), |_| {})
+    }
+
+    /// Draws an overlay plane of a layered window (PLT-001). Its backdrop-blur effects start
+    /// from `backdrop`, the finished base plane, with this plane's own content blended over it
+    /// (PLT-001 R9); without one they see only this plane's content drawn so far. The plane
+    /// is drawn through the presentation intermediate whenever it has effects and a usable
+    /// `backdrop`.
+    pub fn draw_over(&mut self, scene: &Scene, backdrop: Option<&BackdropPlane>) -> bool {
+        self.draw_plane(
+            scene,
+            PlaneRoles {
+                backdrop,
+                expose: false,
+            },
+            |_| {},
+        )
+    }
+
+    /// Draws the base plane of a layered window. After its frame is rendered and before it is
+    /// presented, `overlays` runs exactly once; it draws and presents the overlay planes, which
+    /// therefore commit before the base plane does. It receives the finished base plane when
+    /// `share` is set and the plane can be sampled: the surface is opaque, so that the
+    /// compositor shows its colors regardless of alpha. Otherwise (and when the frame could not
+    /// be rendered) it receives `None` and overlay effects fall back to their own content.
+    pub fn draw_sharing_plane(
+        &mut self,
+        scene: &Scene,
+        share: bool,
+        overlays: impl FnOnce(Option<&BackdropPlane>),
+    ) -> bool {
+        self.draw_plane(
+            scene,
+            PlaneRoles {
+                backdrop: None,
+                expose: share,
+            },
+            overlays,
+        )
+    }
+
+    /// Acquires the surface texture of the next frame, recovering from the surface states that
+    /// call for reconfiguration. `None` means no frame can be drawn now.
+    fn acquire_frame(&mut self) -> Option<wgpu::SurfaceTexture> {
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
         // a texture from an unconfigured surface can block indefinitely on
         // some drivers (Adreno).
         let RendererState::Ready { surface, core } = &mut self.state else {
-            return false;
+            return None;
         };
 
         if let Some(error) = self.last_surface_error.take().or_else(|| {
@@ -1149,31 +1212,45 @@ impl WgpuRenderer {
                 self.atlas.clear();
                 self.needs_redraw = true;
                 self.failed_frame_count = 0;
-                return false;
+                return None;
             }
         } else {
             self.failed_frame_count = 0;
         }
 
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+        match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => Some(frame),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 // Textures must be destroyed before the surface can be reconfigured.
                 drop(frame);
                 surface.configure(&core.resources.device, &self.surface_config);
-                return false;
+                None
             }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 surface.configure(&core.resources.device, &self.surface_config);
-                return false;
+                None
             }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return false;
-            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => None,
             wgpu::CurrentSurfaceTexture::Validation => {
                 self.last_surface_error = Some("Surface texture validation error".to_string());
-                return false;
+                None
             }
+        }
+    }
+
+    fn draw_plane(
+        &mut self,
+        scene: &Scene,
+        roles: PlaneRoles<'_>,
+        after_render: impl FnOnce(Option<&BackdropPlane>),
+    ) -> bool {
+        let Some(frame) = self.acquire_frame() else {
+            after_render(None);
+            return false;
+        };
+        let RendererState::Ready { core, .. } = &mut self.state else {
+            after_render(None);
+            return false;
         };
 
         // The acquired texture is the authority on frame dimensions; the surface
@@ -1184,16 +1261,26 @@ impl WgpuRenderer {
         };
         let premultiplied_alpha =
             self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied;
-        if let Err(error) = core.render_frame(
+        let rendered = core.render_frame_with_planes(
             scene,
             &frame.texture,
             size,
             premultiplied_alpha,
             wgpu::Color::TRANSPARENT,
             self.surface_copy_src,
-        ) {
-            log::error!("{error:#}");
-            return false;
+            roles,
+        );
+        match rendered {
+            Ok((_, finished)) => {
+                let opaque = self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::Opaque;
+                let plane = (roles.expose && opaque).then_some(BackdropPlane { texture: finished });
+                after_render(plane.as_ref());
+            }
+            Err(error) => {
+                log::error!("{error:#}");
+                after_render(None);
+                return false;
+            }
         }
 
         core.resources.queue.present(frame);
@@ -1455,7 +1542,14 @@ impl WgpuRendererCore {
     /// target; when it cannot be copied from (or `force_presentation_intermediate` is set), the
     /// whole frame is rendered into a copy-capable intermediate that is then presented to
     /// `target`. Effect-free frames always render directly.
-    fn render_frame(
+    ///
+    /// For a plane of a layered window (PLT-001), with `roles.backdrop` the frame's
+    /// backdrop-blur effects snapshot that finished base plane with the frame's own content
+    /// blended over it. With `roles.expose` the frame is rendered through a copy-capable
+    /// intermediate even if it has no effect, so a copy-capable texture holds the finished
+    /// frame. Returns the texture that holds the finished frame.
+    #[allow(clippy::too_many_arguments)]
+    fn render_frame_with_planes(
         &mut self,
         scene: &Scene,
         target: &wgpu::Texture,
@@ -1463,7 +1557,8 @@ impl WgpuRendererCore {
         premultiplied_alpha: bool,
         clear_color: wgpu::Color,
         target_copyable: bool,
-    ) -> Result<wgpu::SubmissionIndex> {
+        roles: PlaneRoles<'_>,
+    ) -> Result<(wgpu::SubmissionIndex, wgpu::Texture)> {
         anyhow::ensure!(
             size.width.0 > 0 && size.height.0 > 0,
             "invalid render target size: {size:?}"
@@ -1481,14 +1576,43 @@ impl WgpuRendererCore {
         self.resources.blur.drawable_changed(drawable);
         self.upload_globals(size, premultiplied_alpha);
 
+        // A base plane is only sampled when it has this frame's size and format; otherwise the
+        // frame falls back to its own content (see `Window::paint_backdrop_blur`).
+        let backdrop = roles.backdrop.filter(|plane| {
+            (plane.texture.width(), plane.texture.height()) == drawable
+                && plane.texture.format() == target.format()
+        });
+        let has_effects = !scene.backdrop_blurs.is_empty();
         let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let through_intermediate = !scene.backdrop_blurs.is_empty()
-            && (!target_copyable || self.force_presentation_intermediate);
+        let through_intermediate = (has_effects
+            && (!target_copyable || self.force_presentation_intermediate || backdrop.is_some()))
+            || (roles.expose && !target_copyable);
+        let backdrop_source = backdrop.map(|plane| BackdropSource {
+            texture: &plane.texture,
+        });
         let result = if through_intermediate {
             let (texture, view) = self.resources.blur.presentation_intermediate(drawable);
-            self.record_frame(scene, &texture, &view, clear_color, Some(&target_view))
+            self.record_frame(
+                scene,
+                &texture,
+                &view,
+                clear_color,
+                Some(&target_view),
+                backdrop_source,
+                premultiplied_alpha,
+            )
+            .map(|submission| (submission, texture))
         } else {
-            self.record_frame(scene, target, &target_view, clear_color, None)
+            self.record_frame(
+                scene,
+                target,
+                &target_view,
+                clear_color,
+                None,
+                None,
+                premultiplied_alpha,
+            )
+            .map(|submission| (submission, target.clone()))
         };
         self.finish_tiles(scene);
         result.inspect_err(|_| {
@@ -2038,6 +2162,15 @@ impl WgpuHeadlessRenderer {
     }
 
     fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
+        self.render_over(scene, size, None)
+    }
+
+    fn render_over(
+        &mut self,
+        scene: &Scene,
+        size: Size<DevicePixels>,
+        backdrop: Option<&BackdropPlane>,
+    ) -> anyhow::Result<()> {
         self.check_gpu_errors()?;
         self.ensure_render_target(size)?;
         let clear_color = self.clear_color;
@@ -2047,9 +2180,46 @@ impl WgpuHeadlessRenderer {
             .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?
             .texture
             .clone();
-        self.core
-            .render_frame(scene, &texture, size, self.transparent, clear_color, true)?;
+        self.core.render_frame_with_planes(
+            scene,
+            &texture,
+            size,
+            self.transparent,
+            clear_color,
+            true,
+            PlaneRoles {
+                backdrop,
+                expose: false,
+            },
+        )?;
         Ok(())
+    }
+
+    /// The last frame this renderer drew, as the base plane an overlay renderer on the same
+    /// device can blur through [`Self::render_scene_to_image_over`] (PLT-001 R9). `None` before
+    /// the first frame and for a transparent renderer, whose plane is never sampled.
+    pub fn backdrop_plane(&self) -> Option<BackdropPlane> {
+        if self.transparent {
+            return None;
+        }
+        let target = self.render_target.as_ref()?;
+        Some(BackdropPlane {
+            texture: target.texture.clone(),
+        })
+    }
+
+    /// Renders `scene` as an overlay plane over `backdrop` and reads the plane back: its
+    /// backdrop-blur effects snapshot the base plane with the plane's own content blended over
+    /// it. The read-back image is the overlay plane alone (premultiplied for a transparent
+    /// renderer).
+    pub fn render_scene_to_image_over(
+        &mut self,
+        scene: &Scene,
+        size: Size<DevicePixels>,
+        backdrop: &BackdropPlane,
+    ) -> anyhow::Result<image::RgbaImage> {
+        self.render_over(scene, size, Some(backdrop))?;
+        self.read_image()
     }
 
     /// Copies the current render target back to the CPU. Dimensions come from the

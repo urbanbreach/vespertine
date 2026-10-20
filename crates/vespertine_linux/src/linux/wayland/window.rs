@@ -1058,10 +1058,22 @@ impl WaylandWindow {
             let callback = state.surface.frame(&state.globals.qh, state.surface.id());
             state.pending_frame_callback = Some(callback);
         }
-        if let (Some(planes), Some(composition)) = (planes, &mut state.composition) {
-            composition.draw_planes(renderer.sprite_atlas(), planes);
-        }
-        if renderer.draw(scene) {
+        // The overlay planes draw and present between the base frame's rendering and its
+        // presentation, so their backdrop-blur effects can sample the finished base plane
+        // (PLT-001 R9) and their cached commits still precede the base commit.
+        let drawn = match (planes, &mut state.composition) {
+            (Some(planes), Some(composition)) => {
+                let atlas = renderer.sprite_atlas().clone();
+                let share = planes
+                    .iter()
+                    .any(|(_, scene)| !scene.backdrop_blurs.is_empty());
+                renderer.draw_sharing_plane(scene, share, |backdrop| {
+                    composition.draw_planes(&atlas, planes, backdrop)
+                })
+            }
+            _ => renderer.draw(scene),
+        };
+        if drawn {
             state.presentation = PresentationState::Presented;
             self.0.frame_loop.set(FrameLoop::AwaitingCallback);
         } else {

@@ -4,7 +4,7 @@
 //! counters of PRF-010.
 
 use super::*;
-use crate::wgpu_blur::CompositePlan;
+use crate::wgpu_blur::{BackdropSource, CompositePlan};
 
 /// Section indices of the packed instance buffer.
 const SECTION_QUADS: usize = 0;
@@ -1303,6 +1303,7 @@ impl WgpuRendererCore {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn record_frame(
         &mut self,
         scene: &Scene,
@@ -1310,6 +1311,8 @@ impl WgpuRendererCore {
         target_view: &wgpu::TextureView,
         clear_color: wgpu::Color,
         present_to: Option<&wgpu::TextureView>,
+        backdrop: Option<BackdropSource<'_>>,
+        overlay_premultiplied: bool,
     ) -> Result<wgpu::SubmissionIndex> {
         let mut scratch = std::mem::take(&mut self.scratch);
         let result = self.record_frame_with(
@@ -1319,11 +1322,14 @@ impl WgpuRendererCore {
             target_view,
             clear_color,
             present_to,
+            backdrop,
+            overlay_premultiplied,
         );
         self.scratch = scratch;
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_frame_with(
         &mut self,
         scene: &Scene,
@@ -1332,6 +1338,8 @@ impl WgpuRendererCore {
         target_view: &wgpu::TextureView,
         clear_color: wgpu::Color,
         present_to: Option<&wgpu::TextureView>,
+        backdrop: Option<BackdropSource<'_>>,
+        overlay_premultiplied: bool,
     ) -> Result<wgpu::SubmissionIndex> {
         self.prepare_clip_buffers(scene);
         Self::plan_batches(scene, scratch, self.path_group_limit);
@@ -1396,11 +1404,15 @@ impl WgpuRendererCore {
             let first_order = scene.batch_first_order(batch);
             while let Some(effect) = pending_blurs.next_if(|effect| effect.order <= first_order) {
                 fe.end_pass();
-                let plan =
-                    self.resources
-                        .blur
-                        .render_effect(&mut fe.encoder, target_texture, effect);
-                fe.render_passes += 2 * u64::from(plan.is_some());
+                let plan = self.resources.blur.render_effect(
+                    &mut fe.encoder,
+                    target_texture,
+                    effect,
+                    backdrop,
+                    overlay_premultiplied,
+                );
+                fe.render_passes += 2 * u64::from(plan.is_some())
+                    + plan.as_ref().map_or(0, |plan| plan.backdrop_passes);
                 fe.begin_main_pass(target_view, wgpu::LoadOp::Load);
                 if let Some(plan) = plan {
                     self.composite_effect(&mut fe, &plan);
@@ -1545,9 +1557,11 @@ impl WgpuRendererCore {
                 self.release_path_intermediates();
             }
         }
+        // A frame that went through the presentation intermediate keeps the blur resources even
+        // without an effect: it exists to expose a copy-capable plane (PLT-001 R9).
         self.resources
             .blur
-            .end_frame(!scene.backdrop_blurs.is_empty());
+            .end_frame(!scene.backdrop_blurs.is_empty() || present_to.is_some());
         self.report_memory();
         Ok(submission)
     }

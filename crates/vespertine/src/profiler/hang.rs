@@ -1691,13 +1691,27 @@ mod tests {
                 _ => None,
             })
             .collect();
+        // The window may draw more than once (the opening draw constructs the views; later
+        // clean draws replay retained output, PRF-001, and a later draw that renders only the
+        // parent leaves the cached child without a timing), so every timing is taken from the
+        // one draw that built the views: the draw with the longest request-layout phase.
+        let draw = events
+            .iter()
+            .filter_map(|event| match event {
+                ForegroundEvent::Draw(timing) => Some(*timing),
+                _ => None,
+            })
+            .max_by_key(|timing| timing.phases.request_layout)
+            .expect("a draw");
         let view_timing = |suffix: &str, phase: ViewPhase| {
             events
                 .iter()
-                .rev()
                 .find_map(|event| match event {
                     ForegroundEvent::View(timing)
-                        if timing.name.ends_with(suffix) && timing.phase == phase =>
+                        if timing.name.ends_with(suffix)
+                            && timing.phase == phase
+                            && timing.start >= draw.draw_start
+                            && timing.end <= draw.draw_end =>
                     {
                         Some(*timing)
                     }
@@ -1717,16 +1731,6 @@ mod tests {
             ForegroundEvent::View(timing) if timing.phase == ViewPhase::Paint
         )));
 
-        // The window draws more than once (the opening draw constructs the views; later clean
-        // draws replay retained output, PRF-001), so inspect the draw that built the views.
-        let draw = events
-            .iter()
-            .filter_map(|event| match event {
-                ForegroundEvent::Draw(timing) => Some(*timing),
-                _ => None,
-            })
-            .max_by_key(|timing| timing.phases.request_layout)
-            .expect("a draw");
         assert!(draw.phases.request_layout >= SLOW_PARENT_RENDER + SLOW_CHILD_RENDER);
         assert!(
             draw.phases.request_layout + draw.phases.prepaint + draw.phases.paint
@@ -1737,13 +1741,21 @@ mod tests {
     const SLOW_PARENT_RENDER: Duration = Duration::from_millis(3);
     const SLOW_CHILD_RENDER: Duration = Duration::from_millis(2);
 
+    /// Occupies the thread until `duration` has elapsed on the clock the profiler reads.
+    fn spend(duration: Duration) {
+        let start = vespertine_scheduler::Instant::now();
+        while start.elapsed() < duration {
+            std::hint::spin_loop();
+        }
+    }
+
     struct SlowParent {
         child: AnyView,
     }
 
     impl Render for SlowParent {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            thread::sleep(SLOW_PARENT_RENDER);
+            spend(SLOW_PARENT_RENDER);
             div().size_full().child(self.child.clone())
         }
     }
@@ -1752,7 +1764,7 @@ mod tests {
 
     impl Render for SlowChild {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            thread::sleep(SLOW_CHILD_RENDER);
+            spend(SLOW_CHILD_RENDER);
             div().size_full()
         }
     }

@@ -5680,11 +5680,19 @@ impl Window {
     /// at an equal or higher order is painted is not guaranteed to render on every renderer.
     ///
     /// The effect never samples the desktop or compositor content behind the window, so it
-    /// works regardless of window translucency. Where native child surfaces are composited
-    /// beneath the scene plane, the blur includes only earlier scene content (those pixels are
-    /// not part of the scene framebuffer). Renderers without backdrop-blur support leave the
-    /// frame valid and unblurred; callers who need a fallback may paint a translucent or
-    /// opaque fill after the effect, or instead of it for an opaque look.
+    /// works regardless of window translucency. It never includes native child pixels either:
+    /// on Linux those are composed by the display server and are not readable by the framework
+    /// (RND-003 R16, PLT-001 R9). For an effect in the deferred overlay plane of a window with
+    /// native surfaces (PLT-001), the blur includes the earlier content of that plane and, when
+    /// the platform can share the finished base plane with the overlay, the base plane as well:
+    /// on Wayland, when the window is opaque, the overlay's effects blur the base plane with the
+    /// overlay's own earlier content blended over it. Wherever the base plane cannot be shared
+    /// (X11 overlay windows, translucent windows, a base frame of another size) the blur
+    /// includes only the earlier content of the overlay plane, and the region then shows the
+    /// base plane unblurred. Other overlay planes are not part of a plane's backdrop. Renderers
+    /// without backdrop-blur support leave the frame valid and unblurred; callers who need a
+    /// fallback may paint a translucent or opaque fill after the effect, or instead of it for an
+    /// opaque look.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_backdrop_blur(

@@ -18,6 +18,9 @@ const BLUR_SHADER: &str = include_str!("blur.wgsl");
 /// Bound on cached kernel tables; the cache is cleared when exceeded.
 const MAX_CACHED_KERNELS: usize = 32;
 
+/// Parameter blocks one effect writes per frame (see `BlurRenderer::new`).
+const BLOCKS_PER_EFFECT: u64 = 4;
+
 const BLIT_SHADER: &str = r#"
 @group(0) @binding(0) var source: texture_2d<f32>;
 
@@ -100,6 +103,7 @@ pub struct BlurResourceState {
 struct BlurSet {
     shape: SetShape,
     snapshot: wgpu::Texture,
+    snapshot_view: wgpu::TextureView,
     target_a: wgpu::Texture,
     target_b: wgpu::Texture,
     target_a_view: wgpu::TextureView,
@@ -113,11 +117,21 @@ struct PresentationIntermediate {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     group: wgpu::BindGroup,
+    /// The intermediate bound through the blur layout, for blending it over a backdrop copy.
+    params_group: wgpu::BindGroup,
 }
 
 /// What the main pass must draw after an effect's filters have run.
 pub(crate) struct CompositePlan {
     offset: u32,
+    /// Render passes spent assembling a snapshot from a base plane (zero without one).
+    pub(crate) backdrop_passes: u64,
+}
+
+/// The finished base plane an overlay plane's snapshots start from.
+#[derive(Clone, Copy)]
+pub(crate) struct BackdropSource<'a> {
+    pub(crate) texture: &'a wgpu::Texture,
 }
 
 pub(crate) struct BlurRenderer {
@@ -130,6 +144,8 @@ pub(crate) struct BlurRenderer {
     filter_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
+    backdrop_over_pipeline: wgpu::RenderPipeline,
+    backdrop_opaque_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     params_buffer: wgpu::Buffer,
     block_stride: u64,
@@ -187,7 +203,9 @@ impl BlurRenderer {
                       module: &wgpu::ShaderModule,
                       vs: &str,
                       fs: &str,
-                      topology: wgpu::PrimitiveTopology| {
+                      topology: wgpu::PrimitiveTopology,
+                      blend: Option<wgpu::BlendState>,
+                      write_mask: wgpu::ColorWrites| {
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{name}_layout")),
                 bind_group_layouts: &[Some(layout)],
@@ -205,11 +223,11 @@ impl BlurRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module,
                     entry_point: Some(fs),
-                    // Replacement: no blending, all four components written.
+                    // Replacement unless a blend is given: all four components written.
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
+                        blend,
+                        write_mask,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 }),
@@ -230,6 +248,8 @@ impl BlurRenderer {
             "vs_filter",
             "fs_filter",
             wgpu::PrimitiveTopology::TriangleList,
+            None,
+            wgpu::ColorWrites::ALL,
         );
         let composite_pipeline = create(
             "blur_composite",
@@ -238,6 +258,8 @@ impl BlurRenderer {
             "vs_composite",
             "fs_composite",
             wgpu::PrimitiveTopology::TriangleStrip,
+            None,
+            wgpu::ColorWrites::ALL,
         );
         let blit_pipeline = create(
             "blur_blit",
@@ -246,6 +268,42 @@ impl BlurRenderer {
             "vs_blit",
             "fs_blit",
             wgpu::PrimitiveTopology::TriangleList,
+            None,
+            wgpu::ColorWrites::ALL,
+        );
+        // The overlay's content blended over the base plane copy of a backdrop snapshot, with
+        // the premultiplied "over" operator on every channel.
+        let backdrop_over_pipeline = create(
+            "backdrop_over",
+            &layout,
+            &module,
+            "vs_filter",
+            "fs_backdrop_over",
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+            wgpu::ColorWrites::ALL,
+        );
+        // Makes a copied base plane opaque: only the alpha channel is written.
+        let backdrop_opaque_pipeline = create(
+            "backdrop_opaque",
+            &layout,
+            &module,
+            "vs_filter",
+            "fs_backdrop_opaque",
+            wgpu::PrimitiveTopology::TriangleList,
+            None,
+            wgpu::ColorWrites::ALPHA,
         );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -261,10 +319,11 @@ impl BlurRenderer {
 
         let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(1);
         let block_stride = PARAM_BLOCK_SIZE.next_multiple_of(alignment);
-        // Three blocks per supported effect: horizontal filter, vertical filter, composite.
+        // Four blocks per supported effect: horizontal filter, vertical filter, composite and
+        // the overlay blend of a backdrop snapshot.
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("blur_params"),
-            size: block_stride * 3 * MAX_EFFECTS_PER_FRAME as u64,
+            size: block_stride * BLOCKS_PER_EFFECT * MAX_EFFECTS_PER_FRAME as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -279,6 +338,8 @@ impl BlurRenderer {
             filter_pipeline,
             composite_pipeline,
             blit_pipeline,
+            backdrop_over_pipeline,
+            backdrop_opaque_pipeline,
             sampler,
             params_buffer,
             block_stride,
@@ -463,7 +524,9 @@ impl BlurRenderer {
             "blur_snapshot",
             shape.width,
             shape.height,
-            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
         );
         let filter_usage =
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -481,6 +544,7 @@ impl BlurRenderer {
         self.set = Some(BlurSet {
             shape,
             snapshot,
+            snapshot_view,
             target_a,
             target_b,
             target_a_view,
@@ -503,11 +567,17 @@ impl BlurRenderer {
     /// Snapshots the framebuffer and runs both filter passes for one effect. The caller has
     /// already ended the main render pass. Returns the composite to draw in the restarted main
     /// pass, or `None` when the effect is skipped (over budget, empty envelope or region).
+    ///
+    /// With `backdrop_plane` the snapshot is that base plane with `source` (the presentation
+    /// intermediate this renderer is drawing the overlay plane into) blended over it, instead of
+    /// `source` alone (PLT-001 R9). The plane must have the size and format of `source`.
     pub(crate) fn render_effect(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::Texture,
         effect: &BackdropBlur,
+        backdrop_plane: Option<BackdropSource<'_>>,
+        overlay_premultiplied: bool,
     ) -> Option<CompositePlan> {
         let index = self.frame_effects;
         self.frame_effects += 1;
@@ -631,31 +701,107 @@ impl BlurRenderer {
             ..base
         });
         let composite = self.push_block(&base);
+        let backdrop_over = self.push_block(&BlurParams {
+            pad: [f32::from(u8::from(!overlay_premultiplied)), 0.0],
+            ..base
+        });
 
         let set = self.set.as_ref()?;
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: source,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin.0,
-                    y: origin.1,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &set.snapshot,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: snapshot_size.0,
-                height: snapshot_size.1,
-                depth_or_array_layers: 1,
-            },
-        );
+        let mut backdrop_passes = 0;
+        match backdrop_plane.zip(self.intermediate.as_ref()) {
+            None => {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: source,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: origin.0,
+                            y: origin.1,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &set.snapshot,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: snapshot_size.0,
+                        height: snapshot_size.1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            Some((plane, intermediate)) => {
+                // The snapshot is the base plane with this plane's own content blended over it.
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: plane.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: origin.0,
+                            y: origin.1,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &set.snapshot,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: snapshot_size.0,
+                        height: snapshot_size.1,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                for (label, pipeline, group, offset) in [
+                    (
+                        "backdrop_opaque",
+                        &self.backdrop_opaque_pipeline,
+                        &intermediate.params_group,
+                        horizontal,
+                    ),
+                    (
+                        "backdrop_over",
+                        &self.backdrop_over_pipeline,
+                        &intermediate.params_group,
+                        backdrop_over,
+                    ),
+                ] {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some(label),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &set.snapshot_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, group, &[offset]);
+                    pass.set_viewport(
+                        0.0,
+                        0.0,
+                        snapshot_size.0 as f32,
+                        snapshot_size.1 as f32,
+                        0.0,
+                        1.0,
+                    );
+                    pass.draw(0..3, 0..1);
+                    backdrop_passes += 1;
+                }
+            }
+        }
 
         for (label, target, group, offset, scissor) in [
             (
@@ -699,7 +845,10 @@ impl BlurRenderer {
         }
         self.stats.full_target_texels += 2 * u64::from(target_size.0) * u64::from(target_size.1);
         self.stats.effects_rendered += 1;
-        Some(CompositePlan { offset: composite })
+        Some(CompositePlan {
+            offset: composite,
+            backdrop_passes,
+        })
     }
 
     /// Draws the replacement composite of an effect into the main pass.
@@ -738,11 +887,13 @@ impl BlurRenderer {
                     resource: wgpu::BindingResource::TextureView(&view),
                 }],
             });
+            let params_group = self.param_group(&view);
             self.stats.intermediate_allocations += 1;
             self.intermediate = Some(PresentationIntermediate {
                 texture,
                 view,
                 group,
+                params_group,
             });
         }
         let intermediate = self

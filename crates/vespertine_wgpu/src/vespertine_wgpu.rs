@@ -19,8 +19,8 @@ pub use wgpu_context::*;
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
 pub use wgpu_renderer::WgpuHeadlessRenderer;
 pub use wgpu_renderer::{
-    ClipStats, FillClass, FillRecord, GpuContext, RecordStats, TileStats, WgpuRenderer,
-    WgpuSurfaceConfig,
+    BackdropPlane, ClipStats, FillClass, FillRecord, GpuContext, RecordStats, TileStats,
+    WgpuRenderer, WgpuSurfaceConfig,
 };
 
 #[cfg(test)]
