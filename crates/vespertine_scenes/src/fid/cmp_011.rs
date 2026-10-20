@@ -33,10 +33,15 @@ impl Scene for Cmp011 {
     fn frame(&mut self, _f: u64, _window: &mut Window, _cx: &mut App) -> AnyElement {
         text_root(
             div().size_full().relative().bg(hex(0x181818)).child(
-                div().absolute().left(px(20.)).top(px(20.)).w(px(600.)).child(
-                    Markdown::new("doc", "# Document\n\nA short paragraph.\n\n> Quoted text\n")
-                        .theme(theme()),
-                ),
+                div()
+                    .absolute()
+                    .left(px(20.))
+                    .top(px(20.))
+                    .w(px(600.))
+                    .child(
+                        Markdown::new("doc", "# Document\n\nA short paragraph.\n\n> Quoted text\n")
+                            .theme(theme()),
+                    ),
             ),
         )
         .into_any_element()
