@@ -349,8 +349,12 @@ impl Window {
         }
         let hover_sensitive = self.hover_reads.get() != hover_before;
         // Content that switches the surface it is drawn into (PLT-001) is drawn in place.
-        let deferred = end.deferred_draws_index != start.deferred_draws_index
-            || end.hitbox_switches_index != start.hitbox_switches_index;
+        let immovable = end.deferred_draws_index != start.deferred_draws_index
+            || end.hitbox_switches_index != start.hitbox_switches_index
+            // Accessibility nodes whose bounds do not follow their owner cannot be moved.
+            || self
+                .a11y
+                .logs_independent_child(start.a11y_index..end.a11y_index);
         let mark = self
             .retention
             .views
@@ -378,7 +382,7 @@ impl Window {
             record.row = Some(Box::new(RowData {
                 scene: Scene::default(),
                 anchor,
-                replayable: !deferred,
+                replayable: !immovable,
                 suspect: false,
                 hover_sensitive,
                 hitboxes,
@@ -386,6 +390,7 @@ impl Window {
                 has_states,
                 states_dropped: false,
                 tab_ops: Vec::new(),
+                a11y_shift: (0., 0.),
             }));
         }
         result
@@ -577,7 +582,26 @@ impl Window {
         }
         let mut copied = old.clone();
         copied.end.hitboxes_index = copied.start.hitboxes_index;
-        self.reuse_prepaint_mapped(copied, None, Some(placement), cx);
+        // The accessibility log being replayed is the previous frame's: its nodes already sit
+        // where this record was placed then, so they move by the difference only (A11Y-002 R3).
+        let wanted = placement.device_translation();
+        let applied = self
+            .retention
+            .views
+            .get(key)
+            .and_then(|record| record.row.as_deref())
+            .map_or((0., 0.), |row| row.a11y_shift);
+        let relative = (wanted.0 - applied.0, wanted.1 - applied.1);
+        self.reuse_prepaint_mapped(copied, None, Some(placement), Some(relative), cx);
+        if self.a11y.is_active()
+            && let Some(row) = self
+                .retention
+                .views
+                .get_mut(key)
+                .and_then(|record| record.row.as_deref_mut())
+        {
+            row.a11y_shift = wanted;
+        }
         let end = self.prepaint_index();
         self.rebase_prepaint_subtree(key, old, start..end);
         if let Some(record) = self.retention.views.get(key) {

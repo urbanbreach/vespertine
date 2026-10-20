@@ -1144,7 +1144,7 @@ fn prepaint_stretches(
             .map_or_else(|| old.end.clone(), |gap| gap.start.clone());
         let stretch = cursor.clone()..stretch_end;
         let new_start = window.prepaint_index();
-        window.reuse_prepaint_mapped(stretch.clone(), Some(&map), None, cx);
+        window.reuse_prepaint_mapped(stretch.clone(), Some(&map), None, None, cx);
         map.push(
             stretch.start.dispatch_tree_index()..stretch.end.dispatch_tree_index(),
             new_start.dispatch_tree_index(),

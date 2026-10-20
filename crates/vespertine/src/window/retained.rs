@@ -167,6 +167,10 @@ pub(crate) struct RowData {
     /// The tab stops the row registered while it was painted; they enter the frame only
     /// while the row is shown.
     pub tab_ops: Vec<crate::tab_stop::TabStopOperation>,
+    /// How far (device pixels) the accessibility nodes the record logged in the last frame
+    /// are from where they were recorded: replaying them moves them by the difference to the
+    /// placement the replay wants.
+    pub a11y_shift: (f64, f64),
 }
 
 /// Where a replayed stretch of output lands (rows and scroll layers, PRF-004/PRF-005).

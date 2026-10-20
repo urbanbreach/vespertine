@@ -319,6 +319,24 @@ impl A11y {
         self.nodes.ops.len()
     }
 
+    /// Whether the operations `range` of the frame being built add a synthetic child whose
+    /// bounds do not follow its owner: output that holds one cannot be replayed moved (A11Y-002
+    /// R4) and is drawn again instead.
+    pub(crate) fn logs_independent_child(&self, range: std::ops::Range<usize>) -> bool {
+        self.is_active()
+            && self.nodes.ops.get(range).is_some_and(|ops| {
+                ops.iter().any(|op| {
+                    matches!(
+                        op,
+                        A11yOp::Synthetic {
+                            independent_bounds: true,
+                            ..
+                        }
+                    )
+                })
+            })
+    }
+
     /// Replays the operations `range` of the previous frame's log through the builder (which
     /// logs them into this frame's log again). `translation` moves every replayed node's
     /// bounds (scroll-layer replay, PRF-004); `focus` is the window's current focus.
@@ -418,7 +436,6 @@ pub(crate) enum A11yOp {
         id: NodeId,
         node: accesskit::Node,
         /// The leaf carries bounds that cannot be assumed to move with the current node.
-        #[allow(dead_code, reason = "read by scroll-layer eligibility (PRF-004)")]
         independent_bounds: bool,
         #[cfg(debug_assertions)]
         info: Option<debug::NodeDebugInfo>,

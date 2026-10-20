@@ -73,6 +73,8 @@ pub(crate) mod a11y;
 #[cfg(test)]
 mod a11y_retained_tests;
 #[cfg(test)]
+mod a11y_scroll_tests;
+#[cfg(test)]
 mod a11y_virtual_list_tests;
 #[cfg(test)]
 mod deferred_retained_tests;
@@ -4790,7 +4792,7 @@ impl Window {
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>, cx: &mut App) {
-        self.reuse_prepaint_mapped(range, None, None, cx);
+        self.reuse_prepaint_mapped(range, None, None, None, cx);
     }
 
     /// Copies the prepaint output in `range` from the previous frame. With a
@@ -4802,6 +4804,7 @@ impl Window {
         range: Range<PrepaintStateIndex>,
         map: Option<&retained::SpliceMap>,
         placement: Option<&retained::Placement>,
+        a11y_translation: Option<(f64, f64)>,
         cx: &mut App,
     ) {
         let hitbox_start = self.next_frame.hitboxes.len();
@@ -4835,11 +4838,10 @@ impl Window {
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
         if self.a11y.is_active() {
             let focus = self.focus;
-            let translation = placement.map(retained::Placement::device_translation);
             self.a11y.replay(
                 range.start.a11y_index..range.end.a11y_index,
                 focus,
-                translation,
+                a11y_translation,
             );
         }
 

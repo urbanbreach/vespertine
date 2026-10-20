@@ -80,6 +80,10 @@
 //! of the frame being built. The first frame after accessibility is activated reconstructs every
 //! view to seed the log, and the full tree is delivered to the platform on every accessible
 //! frame.
+//! A scroll block recorded as a layer replays its nodes moved by the scroll since the preceding
+//! frame (the log being replayed is that frame's), and content that adds a synthetic child whose
+//! bounds do not follow its owner is drawn again instead of being replayed or cached; virtual
+//! lists never replay rows while the window is accessible.
 //!
 //! ## Testing and benchmarking
 //!
