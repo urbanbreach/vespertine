@@ -45,11 +45,16 @@ pub(crate) fn notify_frame_started(window: &mut Window, cx: &mut App) {
 }
 
 pub(crate) fn notify_text_painted(
+    window: &Window,
     cx: &App,
     text: &SharedString,
     origin: Point<Pixels>,
     line_height: Pixels,
 ) {
+    // Rows retained outside the viewport are painted without being shown.
+    if window.retention.unshown_row_paints > 0 {
+        return;
+    }
     if let Some(observer) = cx.try_global::<PaintObserver>() {
         let observer = observer.on_text.clone();
         observer(&PaintedText {

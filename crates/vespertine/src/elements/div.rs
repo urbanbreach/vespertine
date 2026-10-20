@@ -3054,7 +3054,10 @@ impl Interactivity {
         // Report only after the visibility check passed in the paint above, so hidden
         // elements and anything that was merely prepainted never reach the observer.
         if painted && let Some(observer) = self.on_painted.take() {
-            observer(bounds, window, cx);
+            // A row retained outside the viewport is painted but not shown.
+            if window.retention.unshown_row_paints == 0 {
+                observer(bounds, window, cx);
+            }
         }
     }
 

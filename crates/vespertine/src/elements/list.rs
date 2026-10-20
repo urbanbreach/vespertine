@@ -33,6 +33,7 @@ use std::{
     hash::Hash,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use vespertine_collections::VecDeque;
 use vespertine_refineable::Refineable as _;
@@ -107,6 +108,9 @@ struct TrailingReservation {
 }
 
 struct StateInner {
+    /// Distinguishes this state from every other list state of the process: the element
+    /// identity of a list that has no id of its own (rows are retained under it).
+    identity: usize,
     last_layout_bounds: Option<Bounds<Pixels>>,
     last_padding: Option<Edges<Pixels>>,
     /// The content width (list width minus horizontal padding) of the last layout.
@@ -454,7 +458,9 @@ impl ListState {
     /// that the list doesn't flicker or pop in when scrolling. Negative overdraw
     /// is clamped to zero.
     pub fn new(item_count: usize, alignment: ListAlignment, overdraw: Pixels) -> Self {
+        static NEXT_IDENTITY: AtomicUsize = AtomicUsize::new(1);
         let this = Self(Rc::new(RefCell::new(StateInner {
+            identity: NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed),
             last_layout_bounds: None,
             last_padding: None,
             last_content_width: None,
@@ -2776,10 +2782,16 @@ impl Element for List {
     type PrepaintState = ListPrepaintState;
 
     fn id(&self) -> Option<crate::ElementId> {
-        self.a11y.element_id.clone()
+        // A list without an id of its own is identified by its state, so that its rows can be
+        // retained (PRF-005 R1).
+        Some(self.a11y.element_id.clone().unwrap_or_else(|| {
+            crate::ElementId::named_usize("list-state", self.state.0.borrow().identity)
+        }))
     }
 
     fn a11y_role(&self) -> Option<accesskit::Role> {
+        // An accessibility node requires an id the application gave the list.
+        self.a11y.element_id.as_ref()?;
         self.a11y.a11y_role()
     }
 

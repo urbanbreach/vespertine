@@ -593,7 +593,7 @@ fn request_layout_view(
             }
             _ => {
                 let key = tracked_record(window, entity_id, path, ViewKind::Retained);
-                if window.retention_reuse_allowed()
+                if window.view_reuse_allowed()
                     && let Some(layout_id) = window
                         .retention
                         .views
@@ -895,7 +895,7 @@ fn prepaint_view(
                     .get(key)
                     .map_or(ViewKind::Retained, |record| record.kind);
                 let cache_key = window.ambient_cache_key(bounds);
-                let ambient_matches = window.retention_reuse_allowed()
+                let ambient_matches = window.view_reuse_allowed()
                     && window
                         .retention
                         .views

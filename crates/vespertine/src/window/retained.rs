@@ -902,6 +902,14 @@ pub(crate) struct RetentionState {
     pub layout_state_sink: Vec<Vec<(GlobalElementId, TypeId)>>,
     /// Everything must be reconstructed in the frame being drawn.
     pub blocked: bool,
+    /// Phases of retained list rows being built (render and layout, prepaint) right now. The
+    /// scene operations of a row are recorded apart from the frame's, so a view nested in a
+    /// row that is built again is built again with it instead of replaying paint output that
+    /// lives in the row's previous scene.
+    pub row_builds: u32,
+    /// Rows that are painted without being shown (retained outside the viewport) are being
+    /// painted: nothing painted there is observed, as nothing of it reaches the screen.
+    pub unshown_row_paints: u32,
     /// The retention context in force while a view is built or replayed (see
     /// [`Window::with_retention_context`]).
     pub context: u64,
@@ -934,6 +942,8 @@ impl RetentionState {
             adopted: FxHashMap::default(),
             layout_state_sink: Vec::new(),
             blocked: false,
+            row_builds: 0,
+            unshown_row_paints: 0,
             context: 0,
             window_disabled: false,
             a11y_was_active: false,
@@ -1012,6 +1022,12 @@ impl Window {
     /// Whether a recorded view may be replayed in this frame.
     pub(crate) fn retention_reuse_allowed(&self) -> bool {
         self.retention_tracking() && !self.retention.blocked
+    }
+
+    /// Whether a recorded view may be replayed here: reuse is allowed and the view is not nested
+    /// in a list row that is being built.
+    pub(crate) fn view_reuse_allowed(&self) -> bool {
+        self.retention_reuse_allowed() && self.retention.row_builds == 0
     }
 
     /// The ambient inputs a replay of the view being drawn depends on.

@@ -271,10 +271,12 @@ impl Window {
         self.begin_view_phase(key);
         self.begin_layout_owner();
         self.retention.layout_state_sink.push(Vec::new());
+        self.retention.row_builds += 1;
     }
 
     /// Ends the render and layout part of a row build.
     pub(crate) fn row_layout_done(&mut self, key: ViewKey) {
+        self.retention.row_builds = self.retention.row_builds.saturating_sub(1);
         let states = self.retention.layout_state_sink.pop().unwrap_or_default();
         let owned = self.end_layout_owner();
         if let Some(record) = self.retention.views.get_mut(key) {
@@ -341,7 +343,9 @@ impl Window {
         self.frame_stats_mut().rows_built += 1;
         let hover_before = self.hover_reads.get();
         let mut start = self.prepaint_index();
+        self.retention.row_builds += 1;
         let result = self.with_content_mask_override(extent, f);
+        self.retention.row_builds -= 1;
         let mut end = self.prepaint_index();
         let hitboxes = self.next_frame.hitboxes[start.hitboxes_index..].to_vec();
         for hitbox in &mut self.next_frame.hitboxes[start.hitboxes_index..] {
@@ -441,7 +445,9 @@ impl Window {
         let scene_position = self.next_frame.scene.len();
         let main = std::mem::take(&mut self.next_frame.scene);
         let mut start = self.paint_index();
+        self.retention.unshown_row_paints += u32::from(!shown);
         let result = self.with_content_mask_override(extent, f);
+        self.retention.unshown_row_paints -= u32::from(!shown);
         let mut end = self.paint_index();
         let scene = std::mem::replace(&mut self.next_frame.scene, main);
         // The row's scene operations are kept apart: as far as the frame's ranges are

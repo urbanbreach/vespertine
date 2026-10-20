@@ -1273,3 +1273,200 @@ fn a9_remeasuring_rebuilds_only_the_remeasured_rows(cx: &mut TestAppContext) {
         );
     }
 }
+
+/// A list whose rows are entity views (the row element is the view itself, rows of different
+/// heights, a list that follows its tail) paints exactly the primitives ordinary virtualization
+/// paints, on the first frames and while it scrolls and reverses.
+#[crate::test]
+fn rows_that_are_entity_views_paint_what_ordinary_virtualization_paints(cx: &mut TestAppContext) {
+    use crate::FollowMode;
+
+    struct Message {
+        index: usize,
+    }
+    impl Render for Message {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let lines = 1 + self.index % 4;
+            div()
+                .w_full()
+                .p(px(4.))
+                .flex()
+                .flex_col()
+                .border_b_1()
+                .border_color(crate::rgb(0xd0d7de))
+                .child(format!("message {}", self.index))
+                .children((0..lines).map(|line| format!("line {line} of {}", self.index)))
+        }
+    }
+    struct Transcript {
+        messages: Vec<Entity<Message>>,
+        state: ListState,
+    }
+    impl Render for Transcript {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let messages = self.messages.clone();
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(crate::white())
+                .child(
+                    list(self.state.clone(), move |ix, _, _| {
+                        messages[ix].clone().into_any_element()
+                    })
+                    .id("transcript")
+                    .flex_1(),
+                )
+                .child(div().h(px(20.)).child("footer"))
+        }
+    }
+
+    let count = 60;
+    let open = |cx: &mut TestAppContext, retained: bool| {
+        let state = ListState::new(count, ListAlignment::Top, px(100.));
+        state.set_follow_mode(FollowMode::Tail);
+        let messages: Vec<Entity<Message>> = (0..count)
+            .map(|index| cx.new(|_| Message { index }))
+            .collect();
+        let handle = cx.add_window({
+            let state = state.clone();
+            move |_, _| Transcript { messages, state }
+        });
+        let root = handle.root(cx).unwrap();
+        let window: AnyWindowHandle = handle.into();
+        cx.update_window(window, |_, window, _| {
+            window.set_retention_enabled(retained)
+        })
+        .unwrap();
+        (window, root, state)
+    };
+    let compare = |cx: &mut TestAppContext, retained: &Win, full: &Win, what: &str| {
+        let content = |cx: &mut TestAppContext, win: &Win| {
+            cx.update_window(win.handle, |_, window, _| window.painted_content())
+                .unwrap()
+        };
+        let (shown, expected) = (content(cx, retained), content(cx, full));
+        if let Err(detail) = crate::painted_content_agrees(&expected, &shown) {
+            panic!("{what}: {detail}");
+        }
+    };
+    let as_win = |handle: AnyWindowHandle| Win {
+        handle,
+        root: None,
+        env: Env::default(),
+    };
+
+    let (retained, retained_root, retained_state) = open(cx, true);
+    let (full, full_root, full_state) = open(cx, false);
+    let (retained, full) = (as_win(retained), as_win(full));
+    for win in [&retained, &full] {
+        cx.update_window(win.handle, |_, window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    modifiers: Modifiers::default(),
+                    position: point(px(40.), px(60.)),
+                    pressed_button: None,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .unwrap();
+    }
+    for frame in 0..3 {
+        draw(cx, &retained);
+        draw(cx, &full);
+        compare(cx, &retained, &full, &format!("frame {frame}"));
+    }
+    for step in 0..40 {
+        let delta = if step < 20 { -23. } else { 31. };
+        both_scroll(cx, &retained, &full, delta);
+        compare(cx, &retained, &full, &format!("scroll step {step}"));
+    }
+    // The owner is notified without any tracked change: the visible rows render again.
+    for round in 0..2 {
+        for root in [&retained_root, &full_root] {
+            root.update(cx, |_, cx| cx.notify());
+        }
+        draw(cx, &retained);
+        draw(cx, &full);
+        compare(cx, &retained, &full, &format!("owner notified {round}"));
+    }
+    for (ix, target) in [30, 5, 59, 0].into_iter().enumerate() {
+        for (root, state) in [(&retained_root, &retained_state), (&full_root, &full_state)] {
+            state.scroll_to(crate::ListOffset {
+                item_ix: target,
+                offset_in_item: px(0.),
+            });
+            root.update(cx, |_, cx| cx.notify());
+        }
+        draw(cx, &retained);
+        draw(cx, &full);
+        compare(cx, &retained, &full, &format!("jump {ix} to {target}"));
+        both_scroll(cx, &retained, &full, -17.);
+        compare(cx, &retained, &full, &format!("scroll after jump {ix}"));
+    }
+    for (root, state) in [(&retained_root, &retained_state), (&full_root, &full_state)] {
+        state.scroll_to_end();
+        root.update(cx, |_, cx| cx.notify());
+    }
+    draw(cx, &retained);
+    draw(cx, &full);
+    compare(cx, &retained, &full, "after scrolling to the end");
+}
+
+/// PRF-005 R1: a list needs no id to retain its rows. Without one it is identified by its
+/// state, and replays and rebuilds exactly as the list with an id does.
+#[crate::test]
+fn lists_without_an_id_retain_their_rows(cx: &mut TestAppContext) {
+    struct Plain {
+        state: ListState,
+        renders: Log,
+    }
+    impl Render for Plain {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let renders = self.renders.clone();
+            div().size_full().child(
+                list(self.state.clone(), move |ix, _, _| {
+                    renders.borrow_mut().push(ix);
+                    div()
+                        .h(px(ROW_HEIGHT))
+                        .child(format!("row {ix}"))
+                        .into_any_element()
+                })
+                .w_full()
+                .h(px(VIEWPORT)),
+            )
+        }
+    }
+
+    let renders = Log::default();
+    let state = ListState::new(100, ListAlignment::Top, px(0.)).measure_all();
+    let handle: AnyWindowHandle = cx
+        .add_window({
+            let (renders, state) = (renders.clone(), state.clone());
+            move |_, _| Plain { state, renders }
+        })
+        .into();
+    let win = Win {
+        handle,
+        root: None,
+        env: Env::default(),
+    };
+    draw(cx, &win);
+    draw(cx, &win);
+    renders.borrow_mut().clear();
+    reset_stats(cx, &win);
+    for _ in 0..3 {
+        draw(cx, &win);
+    }
+    assert_eq!(stats(cx, &win).rows_built, 0, "unchanged frames replay");
+    assert!(renders.borrow().is_empty());
+
+    wheel(cx, &win, -(ROW_HEIGHT * 2.));
+    let built = std::mem::take(&mut *renders.borrow_mut());
+    assert!(
+        built.len() <= 4,
+        "scrolling two rows builds only the rows that enter: {built:?}"
+    );
+}

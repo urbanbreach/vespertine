@@ -153,6 +153,7 @@ impl Harness {
         self.rendered.borrow_mut().clear();
         self.bounds.borrow_mut().clear();
         cx.update(|window, cx| {
+            window.set_retention_enabled(false);
             window.refresh();
             window.draw(cx).clear(cx);
         });
@@ -190,6 +191,9 @@ impl Harness {
     pub fn draw(&self, cx: &mut VisualTestContext, width: f32, height: f32) {
         self.rendered.borrow_mut().clear();
         self.bounds.borrow_mut().clear();
+        // These tests describe ordinary virtualization: only the rows that are shown are built
+        // (retained rows are tested in `list_row_tests`).
+        cx.update(|window, _| window.set_retention_enabled(false));
         let view = self.view.clone();
         cx.draw(
             point(px(0.), px(0.)),
