@@ -778,25 +778,6 @@ impl TextArea {
         cx.notify();
     }
 
-    /// Sets the text size and line height.
-    pub fn set_text_metrics(&mut self, size: Pixels, line_height: Pixels, cx: &mut Context<Self>) {
-        self.metrics = TextMetrics { size, line_height };
-        cx.notify();
-    }
-
-    /// Sets the height bounds in rows (see [`TextArea::rows`]).
-    pub fn set_rows(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {
-        self.min_rows = min_rows.max(1);
-        self.max_rows = max_rows.max(self.min_rows);
-        cx.notify();
-    }
-
-    /// Overrides the theme roles (`None` follows the application theme).
-    pub fn set_theme(&mut self, theme: Option<FieldTheme>, cx: &mut Context<Self>) {
-        self.theme = theme;
-        cx.notify();
-    }
-
     /// Sets whether the enabled editor is a tab stop.
     pub fn set_tab_stop(&mut self, tab_stop: bool, cx: &mut Context<Self>) {
         self.tab_stop = tab_stop;

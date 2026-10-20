@@ -2,6 +2,7 @@
 //! (ELM-007 R12): the scene registers them in its [`CustomElementRegistry`].
 
 mod canvas;
+mod documents;
 mod editors;
 
 use std::hash::{Hash, Hasher};
@@ -24,6 +25,8 @@ pub fn register_builtin_hosts(registry: &mut CustomElementRegistry) {
     registry.register(editors::InputFactory);
     registry.register(editors::TextareaFactory);
     registry.register(canvas::CanvasFactory);
+    registry.register(documents::CodeFactory);
+    registry.register(documents::MarkdownFactory);
 }
 
 fn custom(name: &'static str, payload: Value) -> HostEvent {

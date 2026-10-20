@@ -256,3 +256,121 @@ native("a canvas reports the standard click event and has no hit area beyond its
   host.renderer.nativeSimulateClick(150, 90);
   assert.deepEqual(clicks, [[60, 40]]);
 });
+
+// ---- code (CMP-014) ------------------------------------------------------------------------
+
+function codeTree(code, props = {}) {
+  return h(
+    "div",
+    { style: { width: 600, height: 400, flexDirection: "column", gap: 10 } },
+    h("code", { testId: "code", code, style: { width: 300, fontSize: 14, lineHeight: 22 }, ...props }),
+    h("div", { testId: "below", style: { width: 100, height: 20 } }),
+  );
+}
+
+native("a code host paints one fixed-height row per line with its line numbers and takes the host style", () => {
+  const host = createTestHost({ width: 600, height: 400 });
+  host.render(codeTree("alpha\nbeta\ngamma", { showLineNumbers: true }));
+  assert.deepEqual(painted(host), ["1", "2", "3", "alpha", "beta", "gamma"]);
+  assert.deepEqual(byTestId(host, "code").bounds, { x: 0, y: 0, width: 300, height: 66 }, "three 22 px rows in the styled width");
+  host.render(codeTree("alpha\nbeta\ngamma\ndelta"));
+  assert.deepEqual(painted(host), ["alpha", "beta", "gamma", "delta"], "no numbers unless asked for, and a new code replaces the old");
+  assert.equal(byTestId(host, "code").bounds.height, 88);
+  assert.equal(byTestId(host, "below").bounds.y, 88, "the next sibling follows the last row");
+  assert.deepEqual(host.errors, []);
+});
+
+native("a code host never wraps a long line and reports click, enter and leave", () => {
+  const log = [];
+  const host = createTestHost({ width: 600, height: 400 });
+  host.render(
+    codeTree(`short\n${"x".repeat(300)}`, {
+      language: "js",
+      onClick: () => log.push("click"),
+      onEnter: () => log.push("enter"),
+      onLeave: () => log.push("leave"),
+    }),
+  );
+  assert.deepEqual(byTestId(host, "code").bounds, { x: 0, y: 0, width: 300, height: 44 }, "two rows however long the second line is");
+  host.renderer.nativeSimulateMouseMove(500, 300);
+  log.length = 0; // the pointer starts at the window's corner, over the host
+  host.renderer.nativeSimulateClick(10, 10);
+  assert.deepEqual(log, ["enter", "click"]);
+  host.renderer.nativeSimulateMouseMove(500, 300);
+  assert.deepEqual(log, ["enter", "click", "leave"]);
+  assert.deepEqual(host.errors, []);
+});
+
+native("a code host takes its language from the tag or the path, and the theme property", () => {
+  const colors = (props) => {
+    const host = createTestHost({ width: 600, height: 400, scaleFactor: 1 });
+    host.render(codeTree("let value = 1;", props));
+    return screenshotPixels(host.renderer);
+  };
+  const differs = (left, right) => {
+    for (let x = 0; x < 300; x++) {
+      for (let y = 0; y < 22; y++) {
+        if (left.at(x, y).join() !== right.at(x, y).join()) return true;
+      }
+    }
+    return false;
+  };
+  const plain = colors({});
+  assert.ok(differs(plain, colors({ language: "javascript" })), "a recognized language colors the syntax");
+  assert.ok(!differs(colors({ language: "javascript" }), colors({ path: "main.js" })), "a path stands in for the tag");
+  assert.ok(differs(plain, colors({ theme: "light" })), "the theme property selects the light document theme");
+});
+
+// ---- markdown (CMP-011) --------------------------------------------------------------------
+
+function markdownTree(markdown, props = {}) {
+  return h(
+    "div",
+    { style: { width: 600, height: 400, flexDirection: "column", gap: 10 } },
+    h("markdown", { testId: "doc", markdown, style: { width: 400 }, ...props }),
+  );
+}
+
+native("a markdown host renders the document as styled blocks inside the host's box", () => {
+  const host = createTestHost({ width: 600, height: 400 });
+  host.render(markdownTree("# Title\n\nSome **bold** text.\n\n- one\n- two\n\n```js\nlet x = 1;\n```"));
+  assert.deepEqual(painted(host), ["Title", "Some bold text.", "one", "two", "js", "let x = 1;"]);
+  const { bounds } = byTestId(host, "doc");
+  assert.equal(bounds.width, 400, "the host style sets the width");
+  assert.ok(bounds.height > 100, "the blocks stack inside the host");
+  assert.deepEqual(host.errors, []);
+});
+
+native("a markdown source that extends the previous one keeps the earlier blocks and a replacement starts over", () => {
+  const host = createTestHost({ width: 600, height: 400 });
+  host.render(markdownTree("first paragraph\n\nsecond"));
+  const before = byTestId(host, "doc").bounds.height;
+  host.render(markdownTree("first paragraph\n\nsecond and more\n\nthird"));
+  assert.deepEqual(painted(host), ["first paragraph", "second and more", "third"]);
+  assert.ok(byTestId(host, "doc").bounds.height > before);
+  host.render(markdownTree("# Fresh"));
+  assert.deepEqual(painted(host), ["Fresh"]);
+  host.render(markdownTree(undefined));
+  assert.deepEqual(painted(host), [], "an absent source is an empty document");
+  assert.deepEqual(host.errors, []);
+});
+
+native("a markdown host reports a link activation with its destination, and click and enter", () => {
+  const log = [];
+  const host = createTestHost({ width: 600, height: 400 });
+  host.render(
+    markdownTree("[docs](https://example.com/docs)", {
+      onLinkClick: (event) => log.push(["link", event.value]),
+      onClick: () => log.push("click"),
+      onEnter: () => log.push("enter"),
+    }),
+  );
+  const { bounds } = byTestId(host, "doc");
+  host.renderer.nativeSimulateClick(bounds.x + 10, bounds.y + 8);
+  assert.deepEqual(log.filter((entry) => entry[0] === "link"), [["link", "https://example.com/docs"]]);
+  assert.ok(log.includes("enter"));
+  log.length = 0;
+  host.renderer.nativeSimulateClick(bounds.x + 300, bounds.y + 8);
+  assert.deepEqual(log.filter((entry) => entry[0] === "link"), [], "a press beside the link is no activation");
+  assert.deepEqual(host.errors, []);
+});

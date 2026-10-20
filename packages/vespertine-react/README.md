@@ -22,6 +22,12 @@ render(React.createElement(App), { window: { title: "Hello", width: 640, height:
   `motion`, `testId`, `highlight`, `role`, `aria-*`); `img`, `svg`, `canvas`, `input`, `textarea`,
   `anchored`, `code`, `diff`, `markdown`, `virtual-list` and custom hosts accept any serializable
   property. `onX` props subscribe to the native event `x` (`onClick` is `click`).
+* Native adapters behind those types: `input` and `textarea` are the CMP-007/CMP-008 editors
+  (`value`, `defaultValue`, `placeholder`, `readOnly`, `disabled`; `onChange`, `onSubmit`, `onCancel`;
+  Escape reaches an open layer after the editor's `onCancel`); `canvas` draws a `commands` list;
+  `code` is the CMP-014 block (`code`, `language`, `path`, `showLineNumbers`, `theme`); `markdown`
+  is the CMP-011 document (`markdown` source, `theme`, `onLinkClick` with the destination in
+  `event.value`); `diff` is the CMP-015 viewer.
 * Host refs expose `id`, `focus()`, `blur()`, `focusNext()`, `focusPrevious()`, `focusNextWithin()`,
   `focusPreviousWithin()`, `scrollIntoView()`, `scrollTo()`, `scrollToItem()`, `getScrollOffset()`,
   `getListScrollTop()`, and for images `setImage(bytes)` and `setImagePixels(width, height, bytes, "bgra")`.
