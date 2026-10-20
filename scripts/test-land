@@ -11,7 +11,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 LAND="$ROOT/scripts/land"
 T="$ROOT/target/land-test-$$"
 S="$T/main"
-trap 'rm -rf "$T"' EXIT
+[ -n "${KEEP:-}" ] || trap 'rm -rf "$T"' EXIT
 mkdir -p "$T"
 
 export VSP_LAND_MAIN="$S" VSP_LAND_WORKTREE="$T/_land" VSP_LAND_POLL=1
@@ -156,4 +156,32 @@ check "ec was deferred behind work/eb" grep -q "work/ec conflicts with work/eb a
 check "train 2 applied ec first, then en, em" test "$(subjects 4)" = "add ea add ec add en add em "
 check "train 2 lists ec first" bash -c "grep -h 'train of' '$T'/e[cnm].log | grep -q 'work/ec work/en work/em'"
 unset VSP_LAND_CAP
+echo "== 6. the integration target is pruned and the free-space guard aborts"
+rm -rf "$S/.git/land-logs"
+fake_target() { # fills the integration target with ~400 KB of fake build output
+    mkdir -p "$T/_land/target/debug/incremental" "$T/_land/target/debug/examples" "$T/_land/target/debug/deps"
+    head -c 100000 /dev/zero >"$T/_land/target/debug/incremental/x"
+    head -c 100000 /dev/zero >"$T/_land/target/debug/examples/hello-0123abcd"
+    head -c 200000 /dev/zero >"$T/_land/target/debug/deps/libfoo.rlib"
+}
+branch g1 g1.txt g1
+fake_target
+(cd "$T/wt/g1" && VSP_LAND_MAX_TARGET_KB=1000 "$LAND" >"$T/g1.log" 2>&1)
+check "g1 landed" test "$?" = 0
+check "incremental and examples are pruned" test ! -e "$T/_land/target/debug/incremental" -a ! -e "$T/_land/target/debug/examples/hello-0123abcd"
+check "the target is kept while below the limit" test -e "$T/_land/target/debug/deps/libfoo.rlib"
+branch g2 g2.txt g2
+fake_target
+(cd "$T/wt/g2" && VSP_LAND_MAX_TARGET_KB=100 "$LAND" >"$T/g2.log" 2>&1)
+check "g2 landed" test "$?" = 0
+check "an oversized target is deleted entirely" test ! -e "$T/_land/target/debug/deps/libfoo.rlib"
+check "the deletion is announced" grep -q "deleting it, the next build is cold" "$T/g2.log"
+branch g3 g3.txt g3
+before=$(git -C "$S" rev-parse main)
+RC=0
+(cd "$T/wt/g3" && VSP_LAND_MIN_FREE_KB=999999999999 "$LAND" >"$T/g3.log" 2>&1) || RC=$?
+check "low free space aborts the land (exit 1)" test "$RC" = 1
+check "with a clear message" grep -q "not starting a train" "$T/g3.log"
+check "and main is unchanged" test "$(git -C "$S" rev-parse main)" = "$before"
+check "the aborted entry left the queue" test -z "$(find "$S/.git/land-queue" -type f 2>/dev/null)"
 echo "all land train tests passed"

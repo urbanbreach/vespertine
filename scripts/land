@@ -25,7 +25,8 @@
 # VSP_LAND_MAIN (main checkout), VSP_LAND_LOCK, VSP_LAND_WORKTREE, VSP_LAND_QUEUE, VSP_LAND_LOGS,
 # VSP_LAND_POLL (seconds between polls, default 30), VSP_LAND_CAP (train size, default 6),
 # VSP_LAND_GATES (shell command run in the candidate checkout instead of the real gates),
-# VSP_LAND_RESERVATION_BLOCKS=0 (reserved branches only go first; trains do not wait for them).
+# VSP_LAND_RESERVATION_BLOCKS=0 (reserved branches only go first; trains do not wait for them),
+# VSP_LAND_MAX_TARGET_KB (default 150 GB) and VSP_LAND_MIN_FREE_KB (default 40 GB), see prune_target.
 #
 # The whole script is one function called on the last line: a rebase of the worktree's own branch
 # may rewrite this file while it is running, and bash must not read from it afterwards.
@@ -40,6 +41,8 @@ QUEUE_DIR="${VSP_LAND_QUEUE:-$MAIN_CHECKOUT/.git/land-queue}"
 LOG_DIR="${VSP_LAND_LOGS:-$MAIN_CHECKOUT/.git/land-logs}"
 POLL_SECONDS="${VSP_LAND_POLL:-30}"
 TRAIN_CAP="${VSP_LAND_CAP:-6}"
+MAX_TARGET_KB="${VSP_LAND_MAX_TARGET_KB:-157286400}"
+MIN_FREE_KB="${VSP_LAND_MIN_FREE_KB:-41943040}"
 RESERVATION_MINUTES=20
 
 export RUSTC_WRAPPER="${RUSTC_WRAPPER:-$HOME/Projects/vespertine-cleanroom/tools/bin/sccache}"
@@ -288,12 +291,34 @@ run_gates() {
     ./scripts/check-features --no-run-examples
 }
 
+# prune_target: keeps the integration target from filling the disk. Incremental data and example
+# binaries (a fresh hashed binary per candidate) are rebuilt cheaply and removed at the start of every
+# train and before every gate run; a target still above MAX_TARGET_KB is deleted entirely (cold
+# build). Aborts the land process when the filesystem has less than MIN_FREE_KB free, so that no
+# train starts into ENOSPC.
+prune_target() {
+    local target="$LAND_WORKTREE/target" size free
+    if [ -d "$target" ]; then
+        rm -rf "$target/debug/incremental" "$target/debug/examples"
+        size=$(du -sk "$target" | cut -f1)
+        if [ "$size" -gt "$MAX_TARGET_KB" ]; then
+            say "the integration target is $((size / 1048576)) GB (limit $((MAX_TARGET_KB / 1048576)) GB); deleting it, the next build is cold"
+            rm -rf "$target"
+        fi
+    fi
+    free=$(df -Pk "$LAND_WORKTREE" | awk 'NR == 2 {print $4}')
+    if [ "$free" -lt "$MIN_FREE_KB" ]; then
+        die "only $((free / 1048576)) GB free on the filesystem of $LAND_WORKTREE (need $((MIN_FREE_KB / 1048576)) GB); not starting a train. Free disk space, then re-run ./scripts/land"
+    fi
+}
+
 # test_candidate <key> <sha>: runs the gates on exactly this commit; records the result.
 test_candidate() {
     local key=$1 sha=$2 log rc start=$SECONDS
     GATE_COUNT=$((GATE_COUNT + 1))
     log="$LOG_DIR/$TRAIN_ID-$GATE_COUNT.log"
     checkout_clean "$sha"
+    rm -rf "$LAND_WORKTREE/target/debug/examples"
     say "gate run $GATE_COUNT on $(short "$sha") [$key]"
     set +e
     (
@@ -419,6 +444,7 @@ run_train() {
         git -C "$MAIN_CHECKOUT" worktree prune
         git -C "$MAIN_CHECKOUT" worktree add -q --detach "$LAND_WORKTREE" "$MAIN_SHA"
     fi
+    prune_target
     say "train of ${#train[@]} (of ${#queued[@]} queued) on main $(short "$MAIN_SHA"): $(
         for entry in "${train[@]}"; do printf '%s ' "$(entry_get "$entry" branch)"; done
     )"
