@@ -153,6 +153,36 @@ impl Scene {
             .push(PaintOperation::Primitive(primitive));
     }
 
+    /// [`Self::insert_primitive`] for a subpixel sprite, without the intermediate [`Primitive`].
+    pub fn insert_subpixel_sprite(&mut self, mut sprite: SubpixelSprite) {
+        sprite.scope.curved_clip = self.current_curved_clip();
+        let clipped_bounds = sprite.bounds.intersect(&sprite.content_mask.bounds);
+        if clipped_bounds.is_empty() {
+            return;
+        }
+        sprite.order = self.next_order(clipped_bounds);
+        self.subpixel_sprites.push(sprite);
+        self.paint_operations
+            .push(PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)));
+    }
+
+    /// [`Self::insert_primitive`] for a monochrome sprite, without the intermediate [`Primitive`].
+    pub fn insert_monochrome_sprite(&mut self, mut sprite: MonochromeSprite) {
+        sprite.scope.curved_clip = self.current_curved_clip();
+        let clipped_bounds = sprite
+            .painted_bounds()
+            .intersect(&sprite.content_mask.bounds);
+        if clipped_bounds.is_empty() {
+            return;
+        }
+        sprite.order = self.next_order(clipped_bounds);
+        self.monochrome_sprites.push(sprite);
+        self.paint_operations
+            .push(PaintOperation::Primitive(Primitive::MonochromeSprite(
+                sprite,
+            )));
+    }
+
     /// Inserts a backdrop-blur effect record together with its invisible ordering primitive: a
     /// fully transparent drop shadow with zero blur and the effect's bounds, radii and content
     /// mask, which gets the same order as the effect so that it produces a batch boundary
@@ -203,6 +233,12 @@ impl Scene {
     ) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
+                PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)) => {
+                    self.insert_subpixel_sprite(*sprite)
+                }
+                PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) => {
+                    self.insert_monochrome_sprite(*sprite)
+                }
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::BackdropBlur(blur) => self.insert_backdrop_blur(*blur),
@@ -230,6 +266,12 @@ impl Scene {
         let mut skipped: Vec<bool> = Vec::new();
         for operation in &source.paint_operations[range] {
             match operation {
+                PaintOperation::Primitive(Primitive::SubpixelSprite(sprite)) => {
+                    self.insert_subpixel_sprite(sprite.translated(offset, clip))
+                }
+                PaintOperation::Primitive(Primitive::MonochromeSprite(sprite)) => {
+                    self.insert_monochrome_sprite(sprite.translated(offset, clip))
+                }
                 PaintOperation::Primitive(primitive) => {
                     self.insert_primitive(primitive.translated(offset, clip))
                 }
@@ -693,34 +735,9 @@ impl Primitive {
     /// of the transformed quad. Ordering and content-mask culling use this rectangle so a
     /// translated or rotated sprite is neither culled nor ordered by where it was recorded.
     pub fn painted_bounds(&self) -> Bounds<ScaledPixels> {
-        let Primitive::MonochromeSprite(sprite) = self else {
-            return *self.bounds();
-        };
-        if sprite.transformation == TransformationMatrix::unit() {
-            return sprite.bounds;
-        }
-        let [[a, b], [c, d]] = sprite.transformation.rotation_scale;
-        let [tx, ty] = sprite.transformation.translation;
-        let (left, top) = (sprite.bounds.origin.x.0, sprite.bounds.origin.y.0);
-        let (right, bottom) = (
-            left + sprite.bounds.size.width.0,
-            top + sprite.bounds.size.height.0,
-        );
-        let mut min = [f32::INFINITY; 2];
-        let mut max = [f32::NEG_INFINITY; 2];
-        for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
-            let transformed = [a * x + b * y + tx, c * x + d * y + ty];
-            for axis in 0..2 {
-                min[axis] = min[axis].min(transformed[axis]);
-                max[axis] = max[axis].max(transformed[axis]);
-            }
-        }
-        Bounds {
-            origin: Point::new(ScaledPixels(min[0]), ScaledPixels(min[1])),
-            size: Size {
-                width: ScaledPixels(max[0] - min[0]),
-                height: ScaledPixels(max[1] - min[1]),
-            },
+        match self {
+            Primitive::MonochromeSprite(sprite) => sprite.painted_bounds(),
+            _ => *self.bounds(),
         }
     }
 
@@ -918,18 +935,8 @@ impl Primitive {
                 underline.bounds = moved(underline.bounds, offset);
                 underline.content_mask = moved_mask(underline.content_mask, offset, clip);
             }
-            Primitive::MonochromeSprite(sprite) => {
-                sprite.bounds = moved(sprite.bounds, offset);
-                sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
-                sprite.transformation = sprite.transformation.moved(offset);
-                sprite.scope = sprite.scope.moved(offset);
-            }
-            Primitive::SubpixelSprite(sprite) => {
-                sprite.bounds = moved(sprite.bounds, offset);
-                sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
-                sprite.transformation = sprite.transformation.moved(offset);
-                sprite.scope = sprite.scope.moved(offset);
-            }
+            Primitive::MonochromeSprite(sprite) => *sprite = sprite.translated(offset, clip),
+            Primitive::SubpixelSprite(sprite) => *sprite = sprite.translated(offset, clip),
             Primitive::PolychromeSprite(sprite) => {
                 sprite.bounds = moved(sprite.bounds, offset);
                 sprite.content_mask = moved_mask(sprite.content_mask, offset, clip);
@@ -1458,6 +1465,51 @@ impl From<MonochromeSprite> for Primitive {
     }
 }
 
+impl MonochromeSprite {
+    /// The rectangle the sprite covers once painted: its bounds, or with a non-identity
+    /// transformation (RND-005) the axis-aligned box of the transformed quad.
+    fn painted_bounds(&self) -> Bounds<ScaledPixels> {
+        if self.transformation == TransformationMatrix::unit() {
+            return self.bounds;
+        }
+        let [[a, b], [c, d]] = self.transformation.rotation_scale;
+        let [tx, ty] = self.transformation.translation;
+        let (left, top) = (self.bounds.origin.x.0, self.bounds.origin.y.0);
+        let (right, bottom) = (
+            left + self.bounds.size.width.0,
+            top + self.bounds.size.height.0,
+        );
+        let mut min = [f32::INFINITY; 2];
+        let mut max = [f32::NEG_INFINITY; 2];
+        for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
+            let transformed = [a * x + b * y + tx, c * x + d * y + ty];
+            for axis in 0..2 {
+                min[axis] = min[axis].min(transformed[axis]);
+                max[axis] = max[axis].max(transformed[axis]);
+            }
+        }
+        Bounds {
+            origin: Point::new(ScaledPixels(min[0]), ScaledPixels(min[1])),
+            size: Size {
+                width: ScaledPixels(max[0] - min[0]),
+                height: ScaledPixels(max[1] - min[1]),
+            },
+        }
+    }
+
+    /// A copy moved by `offset` device pixels; the content mask moves with it and is then
+    /// intersected with `clip`, when given.
+    fn translated(&self, offset: Point<ScaledPixels>, clip: Option<Bounds<ScaledPixels>>) -> Self {
+        Self {
+            bounds: moved(self.bounds, offset),
+            content_mask: moved_mask(self.content_mask, offset, clip),
+            transformation: self.transformation.moved(offset),
+            scope: self.scope.moved(offset),
+            ..*self
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 #[expect(missing_docs)]
@@ -1475,6 +1527,20 @@ pub struct SubpixelSprite {
 impl From<SubpixelSprite> for Primitive {
     fn from(sprite: SubpixelSprite) -> Self {
         Primitive::SubpixelSprite(sprite)
+    }
+}
+
+impl SubpixelSprite {
+    /// A copy moved by `offset` device pixels; the content mask moves with it and is then
+    /// intersected with `clip`, when given.
+    fn translated(&self, offset: Point<ScaledPixels>, clip: Option<Bounds<ScaledPixels>>) -> Self {
+        Self {
+            bounds: moved(self.bounds, offset),
+            content_mask: moved_mask(self.content_mask, offset, clip),
+            transformation: self.transformation.moved(offset),
+            scope: self.scope.moved(offset),
+            ..*self
+        }
     }
 }
 

@@ -276,12 +276,13 @@ mod property {
 }
 
 impl PartialEq for Hsla {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.h
-            .total_cmp(&other.h)
-            .then(self.s.total_cmp(&other.s))
-            .then(self.l.total_cmp(&other.l).then(self.a.total_cmp(&other.a)))
-            .is_eq()
+        // `total_cmp` orders by a bijection of the bit pattern, so it is equal exactly when the bits are.
+        self.h.to_bits() == other.h.to_bits()
+            && self.s.to_bits() == other.s.to_bits()
+            && self.l.to_bits() == other.l.to_bits()
+            && self.a.to_bits() == other.a.to_bits()
     }
 }
 

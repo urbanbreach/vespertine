@@ -272,7 +272,7 @@ impl Element for &'static str {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
-        let layout_id = state.layout(SharedString::from(*self), None, window, cx);
+        let layout_id = state.layout(SharedString::from(*self), RunSource::Plain, window, cx);
         (layout_id, state)
     }
 
@@ -346,7 +346,7 @@ impl Element for SharedString {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
-        let layout_id = state.layout(self.clone(), None, window, cx);
+        let layout_id = state.layout(self.clone(), RunSource::Plain, window, cx);
         (layout_id, state)
     }
 
@@ -555,19 +555,26 @@ impl Element for StyledText {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let font_family_overrides = self.delayed_font_family_overrides.take();
-        let mut runs = self.runs.take().or_else(|| {
-            self.delayed_highlights.take().map(|delayed_highlights| {
-                Self::compute_runs(&self.text, &window.text_style(), delayed_highlights)
-            })
-        });
-
-        if let Some(ref overrides) = font_family_overrides {
-            let runs =
-                runs.get_or_insert_with(|| vec![window.text_style().to_run(self.text.len())]);
+        let mut runs = self.runs.take();
+        if let Some(overrides) = &font_family_overrides {
+            let delayed = self.delayed_highlights.take();
+            let runs = runs.get_or_insert_with(|| match delayed {
+                Some(highlights) => {
+                    Self::compute_runs(&self.text, &window.text_style(), highlights)
+                }
+                None => vec![window.text_style().to_run(self.text.len())],
+            });
             Self::apply_font_family_overrides(runs, overrides);
         }
-
-        let layout_id = self.layout.layout(self.text.clone(), runs, window, cx);
+        let source = match (runs, self.delayed_highlights.take()) {
+            (Some(runs), _) => RunSource::Explicit(runs),
+            (None, Some(highlights)) => RunSource::Highlights {
+                highlights,
+                runs: Default::default(),
+            },
+            (None, None) => RunSource::Plain,
+        };
+        let layout_id = self.layout.layout(self.text.clone(), source, window, cx);
         (layout_id, ())
     }
 
@@ -714,6 +721,20 @@ enum Relation {
     Different,
 }
 
+/// Where the runs of a text measurement come from. Runs are only built when they are needed
+/// to shape, to rewrite decorations, or to compare against a measurement of another shape.
+enum RunSource {
+    /// A single run in the inherited style.
+    Plain,
+    /// An explicit list of runs.
+    Explicit(Vec<TextRun>),
+    /// Highlighted ranges over the inherited style; the runs derive from them on demand.
+    Highlights {
+        highlights: Vec<(Range<usize>, HighlightStyle)>,
+        runs: std::cell::OnceCell<Vec<TextRun>>,
+    },
+}
+
 /// The measuring function of a text element (PRF-011).
 ///
 /// Its inputs are the string, the ordered non-empty runs (byte length and font), the font size,
@@ -725,9 +746,7 @@ struct TextMeasure {
     text: SharedString,
     /// The shared resolved inherited style.
     style: Arc<TextStyle>,
-    /// `None` for plain text: a single run in the inherited style, materialized only when the
-    /// text has to be shaped.
-    runs: Option<Vec<TextRun>>,
+    runs: RunSource,
     font_size: Pixels,
     line_height: Pixels,
 }
@@ -758,8 +777,11 @@ impl TextMeasure {
     /// The runs to shape: the explicit list, or the single run of plain text.
     fn run_list(&self) -> Cow<'_, [TextRun]> {
         match &self.runs {
-            Some(runs) => Cow::Borrowed(runs),
-            None => Cow::Owned(vec![self.style.to_run(self.text.len())]),
+            RunSource::Plain => Cow::Owned(vec![self.style.to_run(self.text.len())]),
+            RunSource::Explicit(runs) => Cow::Borrowed(runs),
+            RunSource::Highlights { highlights, runs } => Cow::Borrowed(runs.get_or_init(|| {
+                StyledText::compute_runs(&self.text, &self.style, highlights.iter().cloned())
+            })),
         }
     }
 
@@ -784,7 +806,7 @@ impl TextMeasure {
         }
 
         let relation = match (&self.runs, &previous.runs) {
-            (None, None) => {
+            (RunSource::Plain, RunSource::Plain) => {
                 if self.text.is_empty() {
                     Relation::Identical
                 } else if !same_font_fields(&self.style, &previous.style) {
@@ -794,6 +816,20 @@ impl TextMeasure {
                 } else {
                     Relation::DecorationOnly
                 }
+            }
+            (
+                RunSource::Highlights {
+                    highlights: new, ..
+                },
+                RunSource::Highlights {
+                    highlights: old, ..
+                },
+            ) if new == old
+                && same_font_fields(&self.style, &previous.style)
+                && same_decoration_fields(&self.style, &previous.style) =>
+            {
+                // The runs derive from the highlights and the inherited style alone.
+                Relation::Identical
             }
             _ => {
                 let new_runs = self.run_list();
@@ -863,7 +899,7 @@ impl LayoutMeasure for TextMeasure {
                 }
                 // The node is given the new element's inputs for any later probe.
                 previous.style = self.style.clone();
-                previous.runs = self.runs.take();
+                previous.runs = std::mem::replace(&mut self.runs, RunSource::Plain);
                 count_measure!(decoration_rewrites);
                 MeasureDecision::Keep
             }
@@ -927,19 +963,20 @@ impl LayoutMeasure for TextMeasure {
         count_measure!(reshapes);
         let runs = self.run_list();
         let text = self.text.clone();
-        let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
         let (text, runs) = if let Some(truncate_width) = truncate_width {
             if let Some(max_lines) = text_style.line_clamp
                 && let Some(wrap_width) = wrap_width
             {
-                line_wrapper.truncate_wrapped_line(
-                    text,
-                    wrap_width,
-                    max_lines,
-                    &truncation_affix,
-                    &runs,
-                    truncate_from,
-                )
+                cx.text_system()
+                    .line_wrapper(text_style.font(), font_size)
+                    .truncate_wrapped_line(
+                        text,
+                        wrap_width,
+                        max_lines,
+                        &truncation_affix,
+                        &runs,
+                        truncate_from,
+                    )
             } else if let Some(unclipped) = window
                 .text_system()
                 .shape_text(text.clone(), font_size, &runs, None, None)
@@ -956,13 +993,15 @@ impl LayoutMeasure for TextMeasure {
                 // already measured untruncated this frame.
                 (text, Cow::Borrowed(&*runs))
             } else {
-                line_wrapper.truncate_line(
-                    text,
-                    truncate_width,
-                    &truncation_affix,
-                    &runs,
-                    truncate_from,
-                )
+                cx.text_system()
+                    .line_wrapper(text_style.font(), font_size)
+                    .truncate_line(
+                        text,
+                        truncate_width,
+                        &truncation_affix,
+                        &runs,
+                        truncate_from,
+                    )
             }
         } else {
             (text, Cow::Borrowed(&*runs))
@@ -1065,7 +1104,7 @@ impl TextLayout {
     fn layout(
         &self,
         content: SharedString,
-        explicit_runs: Option<Vec<TextRun>>,
+        runs: RunSource,
         window: &mut Window,
         cx: &mut App,
     ) -> LayoutId {
@@ -1077,7 +1116,7 @@ impl TextLayout {
         let measure = TextMeasure {
             layout: self.clone(),
             text: content,
-            runs: explicit_runs,
+            runs,
             style,
             font_size,
             line_height,

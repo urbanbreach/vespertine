@@ -373,7 +373,7 @@ fn measure_of(window: &mut Window, text: &str) -> TextMeasure {
             style.font_size = px(CELL_FONT_SIZE).into();
             Arc::new(style)
         },
-        runs: None,
+        runs: RunSource::Plain,
         font_size: px(CELL_FONT_SIZE),
         line_height: px(18.),
     }

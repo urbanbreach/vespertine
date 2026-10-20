@@ -90,6 +90,9 @@ pub(crate) struct IndexScratch {
     /// Counting-sort counters and destination of one order bucket of sprites.
     tile_counts: Vec<u32>,
     bucket_out: Vec<u32>,
+    /// `(tile << 32) | index` pairs of one order bucket and their radix ping-pong buffer.
+    radix_pairs: Vec<u64>,
+    radix_swap: Vec<u64>,
     /// Number of times any scratch vector had to grow.
     allocations: u64,
 }
@@ -256,6 +259,10 @@ fn sort_bucket<T: SortRecord>(records: &[T], scratch: &mut IndexScratch, start: 
         scratch.source[start..end].copy_from_slice(&scratch.bucket_out);
         return;
     }
+    if one_texture {
+        radix_sort_by_tile(records, scratch, start, end);
+        return;
+    }
 
     reserve_counted(&mut scratch.bucket_keys, len, &mut scratch.allocations);
     scratch.bucket_keys.clear();
@@ -271,6 +278,76 @@ fn sort_bucket<T: SortRecord>(records: &[T], scratch: &mut IndexScratch, start: 
         .zip(&scratch.bucket_keys)
     {
         *slot = *key as u32;
+    }
+}
+
+/// Buckets shorter than this are sorted by comparison instead of by digit.
+const RADIX_MIN_LEN: usize = 256;
+
+/// Orders `scratch.source[start..end]` (record indices of one order and one texture, ascending)
+/// by tile identity: a stable least-significant-digit radix sort over the tile's bytes, skipping
+/// the byte positions at which every record has the same digit, for large buckets and a sort of
+/// packed `(tile, index)` keys for small ones.
+fn radix_sort_by_tile<T: SortRecord>(
+    records: &[T],
+    scratch: &mut IndexScratch,
+    start: usize,
+    end: usize,
+) {
+    let len = end - start;
+    reserve_counted(&mut scratch.radix_pairs, len, &mut scratch.allocations);
+    scratch.radix_pairs.clear();
+    for &index in &scratch.source[start..end] {
+        let tile = records[index as usize].group_key().1;
+        scratch
+            .radix_pairs
+            .push((u64::from(tile) << 32) | u64::from(index));
+    }
+    if len < RADIX_MIN_LEN {
+        // The index in the low half makes every key unique, so the unstable sort is stable.
+        scratch.radix_pairs.sort_unstable();
+        for (slot, pair) in scratch.source[start..end]
+            .iter_mut()
+            .zip(&scratch.radix_pairs)
+        {
+            *slot = *pair as u32;
+        }
+        return;
+    }
+
+    reserve_counted(&mut scratch.radix_swap, len, &mut scratch.allocations);
+    scratch.radix_swap.clear();
+    scratch.radix_swap.resize(len, 0);
+    let mut histograms = [[0u32; 256]; 4];
+    for &pair in &scratch.radix_pairs {
+        for (byte, histogram) in histograms.iter_mut().enumerate() {
+            histogram[(pair >> (32 + 8 * byte)) as usize & 0xff] += 1;
+        }
+    }
+
+    let mut from = &mut scratch.radix_pairs;
+    let mut to = &mut scratch.radix_swap;
+    for (byte, histogram) in histograms.iter_mut().enumerate() {
+        let shift = 32 + 8 * byte;
+        let first_digit = (from[0] >> shift) as usize & 0xff;
+        if histogram[first_digit] as usize == len {
+            continue;
+        }
+        let mut offset = 0u32;
+        for count in histogram.iter_mut() {
+            let next = offset + *count;
+            *count = offset;
+            offset = next;
+        }
+        for &pair in from.iter() {
+            let slot = &mut histogram[(pair >> shift) as usize & 0xff];
+            to[*slot as usize] = pair;
+            *slot += 1;
+        }
+        std::mem::swap(&mut from, &mut to);
+    }
+    for (slot, pair) in scratch.source[start..end].iter_mut().zip(from.iter()) {
+        *slot = *pair as u32;
     }
 }
 

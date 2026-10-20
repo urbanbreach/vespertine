@@ -860,7 +860,12 @@ impl WindowTextSystem {
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
     ) -> Result<SmallVec<[WrappedLine; 1]>> {
-        let mut runs = runs.iter().filter(|run| run.len > 0).cloned().peekable();
+        let mut runs = runs
+            .iter()
+            .filter(|run| run.len > 0)
+            .map(|run| (run, run.len))
+            .peekable();
+        let mut last_resolved: Option<(&Font, FontId)> = None;
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
 
         let mut lines = SmallVec::new();
@@ -873,12 +878,13 @@ impl WindowTextSystem {
             let mut decoration_runs = <Vec<DecorationRun>>::with_capacity(4);
             let mut run_start = line_start;
             while run_start < line_end {
-                let Some(run) = runs.peek_mut() else {
+                let Some(next) = runs.peek_mut() else {
                     log::warn!("`TextRun`s do not cover the entire to be shaped text");
                     break;
                 };
+                let (run, remaining) = (next.0, &mut next.1);
 
-                let run_len_within_line = cmp::min(line_end - run_start, run.len);
+                let run_len_within_line = cmp::min(line_end - run_start, *remaining);
 
                 if let Some(last_run) = decoration_runs.last_mut()
                     && last_run.color == run.color
@@ -900,7 +906,14 @@ impl WindowTextSystem {
                 // Paint-only attributes (color, underline, strikethrough, background) live in
                 // `decoration_runs`; the font runs, and with them every shaping cache key, depend
                 // only on the font, so recoloring never reshapes (PRF-017 R3).
-                let font_id = self.resolve_font(&run.font);
+                let font_id = match last_resolved {
+                    Some((font, id)) if std::ptr::eq(font, &run.font) || *font == run.font => id,
+                    _ => {
+                        let id = self.resolve_font(&run.font);
+                        last_resolved = Some((&run.font, id));
+                        id
+                    }
+                };
                 if let Some(font_run) = font_runs.last_mut()
                     && font_id == font_run.font_id
                 {
@@ -913,8 +926,8 @@ impl WindowTextSystem {
                 }
 
                 // Preserve the remainder of the run for the next line
-                run.len -= run_len_within_line;
-                if run.len == 0 {
+                *remaining -= run_len_within_line;
+                if *remaining == 0 {
                     runs.next();
                 }
                 run_start += run_len_within_line;
@@ -936,9 +949,9 @@ impl WindowTextSystem {
             });
 
             // Skip `\n` character.
-            if let Some(run) = runs.peek_mut() {
-                run.len -= 1;
-                if run.len == 0 {
+            if let Some((_, remaining)) = runs.peek_mut() {
+                *remaining -= 1;
+                if *remaining == 0 {
                     runs.next();
                 }
             }

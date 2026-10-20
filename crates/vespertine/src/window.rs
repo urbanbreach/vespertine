@@ -110,7 +110,7 @@ pub use self::pointer::HOVER_SUPPRESSION_INTERVAL;
 use self::pointer::{PointerState, pointer_within_keyboard_slop};
 use self::present::PresentCallback;
 use crate::text_system::glyph_store::{
-    GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore,
+    GlyphCounter, GlyphLinePaint, GlyphReach, GlyphRunStyle, GlyphSprite, GlyphStore, RasterStore,
     quantize_emoji_origin, quantize_glyph_origin,
 };
 use crate::util::{
@@ -6050,11 +6050,24 @@ impl Window {
         color: Hsla,
     ) -> GlyphRunStyle {
         self.glyph_store.counters.bump(GlyphCounter::RenderPolicy);
+        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
+        let dilation = self.text_system().glyph_dilation_for_color(color);
+        let raster_run_hash = RasterStore::run_hash(&RenderGlyphParams {
+            font_id,
+            glyph_id: GlyphId(0),
+            font_size,
+            subpixel_variant: Default::default(),
+            scale_factor: self.scale_factor(),
+            is_emoji: false,
+            subpixel_rendering,
+            dilation,
+        });
         GlyphRunStyle {
             font_id,
             color,
-            subpixel_rendering: self.should_use_subpixel_rendering(font_id, font_size),
-            dilation: self.text_system().glyph_dilation_for_color(color),
+            subpixel_rendering,
+            dilation,
+            raster_run_hash,
         }
     }
 
@@ -6093,23 +6106,26 @@ impl Window {
             dilation: style.dilation,
         };
 
+        let slot = RasterStore::slot_for(style.raster_run_hash, glyph_id, subpixel_variant);
         let Some(sprite) =
-            self.resolve_glyph_sprite(&params, integer_origin, &line.snapped_mask)?
+            self.resolve_glyph_sprite(slot, &params, integer_origin, &line.snapped_mask)?
         else {
             return Ok(());
         };
         let color = style.color.opacity(line.opacity);
         if style.subpixel_rendering {
-            self.next_frame.scene.insert_primitive(SubpixelSprite {
-                order: 0,
-                pad: 0,
-                bounds: sprite.bounds,
-                content_mask: line.snapped_mask,
-                color,
-                tile: sprite.tile,
-                transformation: TransformationMatrix::unit(),
-                scope: self.paint_scope,
-            });
+            self.next_frame
+                .scene
+                .insert_subpixel_sprite(SubpixelSprite {
+                    order: 0,
+                    pad: 0,
+                    bounds: sprite.bounds,
+                    content_mask: line.snapped_mask,
+                    color,
+                    tile: sprite.tile,
+                    transformation: TransformationMatrix::unit(),
+                    scope: self.paint_scope,
+                });
         } else {
             self.next_frame.scene.insert_primitive(MonochromeSprite {
                 order: 0,
@@ -6129,6 +6145,7 @@ impl Window {
     /// bounds and the atlas for the tile only when the store cannot answer.
     fn resolve_glyph_sprite(
         &mut self,
+        slot: usize,
         params: &RenderGlyphParams,
         integer_origin: Point<ScaledPixels>,
         mask: &ContentMask<ScaledPixels>,
@@ -6138,6 +6155,7 @@ impl Window {
         let sprite_atlas = &self.sprite_atlas;
         let counters = &self.glyph_store.counters;
         self.glyph_store.raster.resolve(
+            slot,
             params,
             integer_origin,
             mask,
@@ -6339,8 +6357,9 @@ impl Window {
             dilation: 0,
         };
 
+        let slot = RasterStore::slot_index(&params);
         let Some(sprite) =
-            self.resolve_glyph_sprite(&params, integer_origin, &line.snapped_mask)?
+            self.resolve_glyph_sprite(slot, &params, integer_origin, &line.snapped_mask)?
         else {
             return Ok(());
         };

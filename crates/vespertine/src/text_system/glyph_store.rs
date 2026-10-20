@@ -7,7 +7,7 @@
 
 use crate::util::{ceil_fast, floor_fast};
 use crate::{
-    AtlasTile, Bounds, ContentMask, DevicePixels, FontId, Hsla, IsZero, Pixels, Point,
+    AtlasTile, Bounds, ContentMask, DevicePixels, FontId, GlyphId, Hsla, IsZero, Pixels, Point,
     RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Size,
 };
 use smallvec::SmallVec;
@@ -21,6 +21,8 @@ pub(crate) const RASTER_STORE_SLOTS: usize = 4096;
 /// Number of (font, size) bounding boxes kept per window.
 pub(crate) const RECENT_FONT_BOUNDS: usize = 16;
 
+/// Largest scaled coordinate (origin times variants, in device pixels) quantized with integers.
+const QUANTIZE_FAST_LIMIT: f32 = 1_048_576.0;
 /// Safety margin, in logical pixels, added to the conservative glyph reach.
 pub(crate) const GLYPH_REACH_MARGIN: f32 = 2.0;
 
@@ -98,6 +100,27 @@ impl GlyphCounters {
 #[inline]
 pub(crate) fn quantize_glyph_axis(value: f32, variants: u8) -> (f32, u8) {
     let variants = f32::from(variants);
+    let scaled = value * variants;
+    // Within this range `scaled - 0.5` is exact, so the quarter-pixel index is one rounding
+    // of an exact quantity: `ceil(scaled - 0.5)` counts steps from the origin of the axis, its
+    // quotient by the variant count is the whole pixel and its remainder the variant.
+    if scaled.abs() < QUANTIZE_FAST_LIMIT {
+        let target = scaled - 0.5;
+        let mut steps = target as i32;
+        if (steps as f32) < target {
+            steps += 1;
+        }
+        let count = variants as i32;
+        return (
+            steps.div_euclid(count) as f32,
+            steps.rem_euclid(count) as u8,
+        );
+    }
+    quantize_glyph_axis_wide(value, variants)
+}
+
+/// [`quantize_glyph_axis`] for coordinates too large (or not finite) for its integer path.
+fn quantize_glyph_axis_wide(value: f32, variants: f32) -> (f32, u8) {
     let whole = floor_fast(value);
     let fraction = value - whole;
     let steps = ceil_fast(fraction * variants - 0.5).max(0.0);
@@ -194,6 +217,8 @@ pub(crate) struct GlyphRunStyle {
     pub color: Hsla,
     pub subpixel_rendering: bool,
     pub dilation: u8,
+    /// [`RasterStore::run_hash`] of the requests of this run's glyphs.
+    pub raster_run_hash: u64,
 }
 
 impl GlyphRunStyle {
@@ -323,22 +348,39 @@ impl RasterStore {
         Self { slots: Vec::new() }
     }
 
-    /// Hash of every field of the request, reduced to a slot index.
+    /// Hash of the fields of a request that stay the same for every glyph of a run.
     #[inline]
-    pub(crate) fn slot_index(params: &RenderGlyphParams) -> usize {
+    pub(crate) fn run_hash(params: &RenderGlyphParams) -> u64 {
         let mut hasher = SlotHasher(0);
         hasher.mix(params.font_id.0 as u64);
-        hasher.mix(u64::from(params.glyph_id.0) | (u64::from(params.font_size.0.to_bits()) << 32));
+        hasher.mix(u64::from(params.font_size.0.to_bits()) | (u64::from(params.dilation) << 32));
         hasher.mix(
             u64::from(params.scale_factor.to_bits())
-                | (u64::from(params.subpixel_variant.x) << 32)
-                | (u64::from(params.subpixel_variant.y) << 40)
-                | (u64::from(params.is_emoji) << 48)
-                | (u64::from(params.subpixel_rendering) << 49)
-                | (u64::from(params.dilation) << 56),
+                | (u64::from(params.is_emoji) << 32)
+                | (u64::from(params.subpixel_rendering) << 33),
+        );
+        hasher.0
+    }
+
+    /// The slot of a glyph and subpixel variant within a run with hash `run_hash`.
+    #[inline]
+    pub(crate) fn slot_for(run_hash: u64, glyph_id: GlyphId, variant: Point<u8>) -> usize {
+        let mut hasher = SlotHasher(run_hash);
+        hasher.mix(
+            u64::from(glyph_id.0) | (u64::from(variant.x) << 32) | (u64::from(variant.y) << 40),
         );
         // The multiplicative hash mixes into the high bits.
         (hasher.0 >> (64 - RASTER_STORE_SLOTS.trailing_zeros())) as usize
+    }
+
+    /// Hash of every field of the request, reduced to a slot index.
+    #[inline]
+    pub(crate) fn slot_index(params: &RenderGlyphParams) -> usize {
+        Self::slot_for(
+            Self::run_hash(params),
+            params.glyph_id,
+            params.subpixel_variant,
+        )
     }
 
     pub(crate) fn clear(&mut self) {
@@ -359,6 +401,7 @@ impl RasterStore {
     /// only when it was looked up in `frame`, otherwise `make_tile` provides it.
     pub(crate) fn resolve(
         &mut self,
+        slot: usize,
         params: &RenderGlyphParams,
         integer_origin: Point<ScaledPixels>,
         mask: &ContentMask<ScaledPixels>,
@@ -369,7 +412,7 @@ impl RasterStore {
         if self.slots.is_empty() {
             self.slots.resize_with(RASTER_STORE_SLOTS, || None);
         }
-        let entry = &mut self.slots[Self::slot_index(params)];
+        let entry = &mut self.slots[slot];
         if !entry.as_ref().is_some_and(|slot| slot.params == *params) {
             let bounds = query_bounds(params)?;
             *entry = Some(RasterSlot {
@@ -750,6 +793,7 @@ mod tests {
         ) -> Option<GlyphSprite> {
             store
                 .resolve(
+                    RasterStore::slot_index(params),
                     params,
                     origin,
                     mask,
