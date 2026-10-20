@@ -66,11 +66,25 @@ pub trait EditorHost: EntityInputHandler + Sized {
         let Some(text) = content.text else {
             return false;
         };
+        let text = self.restore_pasted_text(text, content.metadata.as_deref());
+        let start = self.core().selection().start;
         let now = now_ms(cx);
         let changed = self.core_mut().paste(&text, now);
         self.finish_edit(changed, window, cx);
+        if changed {
+            self.finish_paste(start, cx);
+        }
         changed
     }
+
+    /// The text a paste inserts, given the clipboard text and the structured metadata of its
+    /// string entry: an editor with scoped structure restores it here (CMP-010 R16).
+    fn restore_pasted_text(&self, text: String, _metadata: Option<&str>) -> String {
+        text
+    }
+
+    /// A paste inserted text starting at `start`; the caret is at its end.
+    fn finish_paste(&mut self, _start: usize, _cx: &mut Context<Self>) {}
 
     // ---- state queries ---------------------------------------------------------------------
 

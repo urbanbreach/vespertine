@@ -16,6 +16,7 @@
 //! - [`insertion`]: `insert_reference`, `replace_reference`, `remove_attachment_references` (R10, R11)
 //! - [`attachments`]: per-scope attachments, stash and numbering (R13, R14)
 //! - [`clipboard`]: the scoped clipboard payload and the paste decision (R15, R16)
+//! - [`layer`]: the editor layer that projects references as chips and reconciles attachments (R1-R4, R13)
 
 pub mod activation;
 pub mod attachments;
@@ -24,6 +25,7 @@ pub mod clipboard;
 pub mod hover;
 pub mod insertion;
 pub mod label;
+pub mod layer;
 pub mod pill;
 pub mod reference;
 pub mod wrap;
@@ -53,6 +55,7 @@ pub use label::{
     COMPACT_LIMIT, PREFIX_SEPARATOR, compact_label, compact_labels, disambiguated_labels,
     reference_labels,
 };
+pub use layer::{ChipInfo, MentionsLayer};
 pub use pill::{
     CENTERING_CLAMP, FaceMetrics, IconWell, PillGeometry, PillRect, centering_offset,
     pill_geometry, snap_to_device,

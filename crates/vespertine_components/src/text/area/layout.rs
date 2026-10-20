@@ -4,7 +4,10 @@
 //! and split into visual rows. All positions here are in DISPLAY bytes (the projected text) and
 //! content coordinates (origin at the top-left of the content box, before scrolling).
 
-use crate::text::{common::closest_boundary, core::Affinity};
+use crate::{
+    mentions::{CharWrapLine, wrap_rows},
+    text::{common::closest_boundary, core::Affinity},
+};
 use std::{ops::Range, rc::Rc};
 use vespertine::{
     Bounds, Pixels, Point, ShapedLine, SharedString, TextRun, Window, point, px, size,
@@ -146,6 +149,40 @@ impl LineShape {
             .map(|(row, line)| self.row_origin(row) + line.width())
             .fold(px(0.0), Pixels::max)
     }
+}
+
+/// The row starts of a line that holds chips (CMP-010 R5): a chip is an unbreakable unit, so the
+/// wrap boundaries of the whole line are recomputed from the glyph edges of its unwrapped
+/// shaping with the chip-aware rule of [`wrap_rows`]. `chips` are the chips' byte ranges within
+/// `text`.
+pub fn chip_breaks(
+    window: &Window,
+    text: &str,
+    runs: &[TextRun],
+    font_size: Pixels,
+    wrap_width: Pixels,
+    chips: &[Range<usize>],
+) -> Vec<usize> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let full =
+        window
+            .text_system()
+            .shape_line(SharedString::from(text.to_owned()), font_size, runs, None);
+    let mut edges: Vec<f32> = text
+        .char_indices()
+        .map(|(index, _)| f32::from(full.x_for_index(index)))
+        .collect();
+    edges.push(f32::from(full.width()));
+    let Some(line) = CharWrapLine::new(text, edges) else {
+        return Vec::new();
+    };
+    wrap_rows(&line, chips, f32::from(wrap_width.max(px(MIN_SHAPE_WIDTH))))
+        .into_iter()
+        .skip(1)
+        .map(|row| row.start)
+        .collect()
 }
 
 /// A line placed in the document.

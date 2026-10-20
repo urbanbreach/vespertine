@@ -7,12 +7,14 @@ pub mod external;
 pub mod layers;
 pub mod layout;
 pub mod projection;
+mod references;
 pub mod runs;
 
 pub use external::{ExternalOutcome, ExternalPhase, ExternalReplacement};
 pub use layers::{AreaLayer, LayerEdit, LayerEnv, LayerIndent};
 pub use layout::OverflowEdges;
 pub use projection::{Projection, Replacement};
+pub use references::{ChipHit, ChipPill, ChipRecord, HoverPopup, PasteRecord, icon_asset_path};
 pub use runs::SpanStyle;
 
 use super::{
@@ -23,7 +25,7 @@ use super::{
     editor::{EditorHost, now_ms},
 };
 use layout::{AreaLayout, LineShape, auto_height, clamp_scroll, follow_scroll, row_bounds};
-use runs::{BaseStyle, SpanSweep, line_runs};
+use runs::{BaseStyle, SpanSweep, cut_spans, line_runs};
 use std::{collections::HashMap, ops::Range, path::PathBuf, rc::Rc};
 use vespertine::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
@@ -120,6 +122,12 @@ pub enum TextAreaEvent {
     ExternalPhaseChanged(ExternalPhase),
     /// A secondary press asks for a context menu at the window position.
     ContextMenu(Point<Pixels>),
+    /// Text was pasted; the record lets the owner amend the pasted text inside the paste's own
+    /// undo step with [`TextArea::amend_paste`] (CMP-010 R16).
+    Pasted(PasteRecord),
+    /// A press and release on an image chip without dragging activated it (CMP-010 R9); the
+    /// payload is the chip's attachment number.
+    ActivateReference(Option<u32>),
 }
 
 struct Drag {
@@ -135,6 +143,8 @@ struct CachedLine {
     indent_bits: i32,
     size_bits: i32,
     shape: Rc<LineShape>,
+    /// The chips of the line as ranges of the line's display text.
+    chips: Vec<Range<usize>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -145,6 +155,7 @@ struct LayoutKey {
     size: Pixels,
     color: Hsla,
     monospace: SharedString,
+    padding: Font,
     marked: Option<Range<usize>>,
     edit_epoch: u64,
 }
@@ -206,6 +217,7 @@ pub struct TextArea {
     pointer_generation: u64,
     autoscroll: Option<Task<()>>,
     external: ExternalReplacement,
+    refs: references::ReferenceState,
     _subscriptions: Vec<vespertine::Subscription>,
 }
 
@@ -299,6 +311,7 @@ impl TextArea {
             pointer_generation: 0,
             autoscroll: None,
             external: ExternalReplacement::new(),
+            refs: references::ReferenceState::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -637,6 +650,7 @@ impl TextArea {
         self.cancel_external(cx);
         let changed = self.core.set_value(value);
         let edit = self.core.take_edit();
+        self.text_changed(cx);
         self.scroll_y = px(0.0);
         self.follow = true;
         self.preferred_x = None;
@@ -662,6 +676,7 @@ impl TextArea {
         if outcome == Acknowledgement::Replaced {
             self.cancel_external(cx);
             let _ = self.core.take_edit();
+            self.text_changed(cx);
             self.scroll_y = px(0.0);
             self.follow = true;
             self.blink.reset(cx);
@@ -765,6 +780,7 @@ impl TextArea {
     ) -> bool {
         self.cancel_external(cx);
         let changed = self.core.replace_unrecorded(range, text);
+        self.text_changed(cx);
         if let Some((range, inserted)) = self.core.take_edit() {
             cx.emit(TextAreaEvent::Edited { range, inserted });
         }
@@ -834,6 +850,7 @@ impl TextArea {
     pub fn set_scroll_offset(&mut self, offset: Pixels, cx: &mut Context<Self>) {
         let viewport = self.settled_viewport();
         self.scroll_y = clamp_scroll(offset, self.content_height(), viewport);
+        self.refs.invalidate_hover();
         self.follow = false;
         cx.notify();
     }
@@ -886,6 +903,24 @@ impl TextArea {
             replacements.extend(layer.replacements(source, key.active.clone(), key.marked.clone()));
         }
         replacements.retain(|replacement| replacement.range.end <= source.len());
+        // A decoration that overlaps a chip is dropped (CMP-009 R5).
+        let mut chip_ranges: Vec<Range<usize>> = replacements
+            .iter()
+            .filter(|replacement| replacement.atomic)
+            .map(|replacement| replacement.range.clone())
+            .collect();
+        if !chip_ranges.is_empty() {
+            chip_ranges.sort_by_key(|range| range.start);
+            replacements.retain(|replacement| {
+                replacement.atomic || {
+                    let at =
+                        chip_ranges.partition_point(|chip| chip.end <= replacement.range.start);
+                    !chip_ranges
+                        .get(at)
+                        .is_some_and(|chip| chip.start < replacement.range.end)
+                }
+            });
+        }
         self.projection = if replacements.is_empty() {
             Projection::identity()
         } else {
@@ -902,7 +937,7 @@ impl TextArea {
             spans.extend(layer.style_spans(source, &key.env));
         }
         spans.sort_by_key(|(range, _)| range.start);
-        self.display_spans = spans
+        let mut display_spans: Vec<(Range<usize>, SpanStyle)> = spans
             .into_iter()
             .filter(|(range, _)| range.start < range.end && range.end <= source.len())
             .filter_map(|(range, style)| {
@@ -911,9 +946,33 @@ impl TextArea {
                 (start < end).then_some((start..end, style))
             })
             .collect();
+        self.refs.chips = self.surviving_chips(&atomics);
+        if !self.refs.chips.is_empty() {
+            // Within chips no face applies, and the padding is shaped in its fixed face (R2).
+            let holes: Vec<Range<usize>> = self
+                .refs
+                .chips
+                .iter()
+                .map(|chip| chip.display.clone())
+                .collect();
+            display_spans = cut_spans(display_spans, &holes);
+            let padding = SpanStyle {
+                padding_face: true,
+                ..SpanStyle::default()
+            };
+            for chip in &self.refs.chips {
+                let label = &chip.info.layout.label;
+                let start = chip.display.start;
+                display_spans.push((start..start + label.start, padding));
+                display_spans.push((start + label.end..chip.display.end, padding));
+            }
+            display_spans.sort_by_key(|(range, _)| range.start);
+        }
+        self.display_spans = display_spans;
         self.core.set_atomic_ranges(atomics);
         self.projection_key = Some(key);
         self.projection_epoch += 1;
+        self.refs.projection_rebuilt();
     }
 
     fn display_of(&self, source_offset: usize) -> usize {
@@ -944,6 +1003,7 @@ impl TextArea {
             .map(|theme| theme.typography.code_family.clone())
             .unwrap_or_else(|| "DejaVu Sans Mono".into());
         let marked_source = self.core.marked();
+        let padding_font = self.padding_font(cx);
         let key = LayoutKey {
             projection_epoch: self.projection_epoch,
             width_bits: display_width_bits(width),
@@ -951,6 +1011,7 @@ impl TextArea {
             size: self.metrics.size,
             color,
             monospace: monospace.clone(),
+            padding: padding_font.clone(),
             marked: marked_source.clone(),
             edit_epoch: self.core.edit_epoch(),
         };
@@ -963,6 +1024,7 @@ impl TextArea {
             font: self.resolved_font.clone(),
             monospace_family: monospace,
             color,
+            padding_font,
         };
         let marked_display =
             marked_source.map(|marked| self.display_of(marked.start)..self.display_of(marked.end));
@@ -971,6 +1033,7 @@ impl TextArea {
         let mut fresh: HashMap<u64, Vec<Rc<CachedLine>>> = HashMap::new();
         let mut shapes = Vec::new();
         let mut start = 0;
+        let mut chip_cursor = 0;
         let source = self.core.text();
         let mut source_lines = source.split('\n');
         let size = self.metrics.size;
@@ -981,6 +1044,17 @@ impl TextArea {
             let range = start..start + text.len();
             let spans = sweep.for_line(range.clone());
             let runs = line_runs(&base, range.clone(), &spans, marked_display.as_ref());
+            let mut line_chips: Vec<Range<usize>> = Vec::new();
+            while let Some(chip) = self.refs.chips.get(chip_cursor) {
+                if chip.display.end > range.end {
+                    break;
+                }
+                if chip.display.start >= range.start {
+                    line_chips
+                        .push(chip.display.start - range.start..chip.display.end - range.start);
+                }
+                chip_cursor += 1;
+            }
             let source_line = source_lines.next().unwrap_or("");
             let indent = self.hanging_indent(source, source_line, text, &runs, width, window);
             let indent_bits = display_width_bits(indent);
@@ -995,6 +1069,7 @@ impl TextArea {
                             && line.width_bits == width_bits
                             && line.indent_bits == indent_bits
                             && line.size_bits == size_bits
+                            && line.chips == line_chips
                     })
                     .cloned()
             });
@@ -1002,21 +1077,19 @@ impl TextArea {
                 Some(line) => line,
                 None => {
                     self.shape_count += 1;
-                    let shape = LineShape::shape(
-                        window,
-                        text,
-                        &runs,
-                        size,
-                        (width - indent).max(px(layout::MIN_SHAPE_WIDTH)),
-                        indent,
-                        None,
-                    );
+                    let wrap_width = (width - indent).max(px(layout::MIN_SHAPE_WIDTH));
+                    let breaks = (!line_chips.is_empty()).then(|| {
+                        layout::chip_breaks(window, text, &runs, size, wrap_width, &line_chips)
+                    });
+                    let shape =
+                        LineShape::shape(window, text, &runs, size, wrap_width, indent, breaks);
                     Rc::new(CachedLine {
                         text: text.to_owned(),
                         runs,
                         width_bits,
                         indent_bits,
                         size_bits,
+                        chips: line_chips,
                         shape: Rc::new(shape),
                     })
                 }
@@ -1318,6 +1391,7 @@ impl TextArea {
         cx: &mut Context<Self>,
     ) -> ExternalOutcome {
         if outcome == ExternalOutcome::Applied {
+            self.text_changed(cx);
             if let Some((range, inserted)) = self.core.take_edit() {
                 cx.emit(TextAreaEvent::Changed(self.core.text().to_owned()));
                 cx.emit(TextAreaEvent::Edited { range, inserted });
@@ -1524,6 +1598,7 @@ impl TextArea {
         window.focus(&self.focus_handle, cx);
         self.pointer_generation += 1;
         self.autoscroll = None;
+        self.chip_pointer_down(event.position, event.modifiers.shift, event.click_count);
         let Some((hit, affinity)) = self.hit_source(event.position) else {
             return;
         };
@@ -1533,6 +1608,13 @@ impl TextArea {
             event.modifiers.shift,
             self.triple_click_selects_all,
         );
+        if event.click_count == 2
+            && !event.modifiers.shift
+            && let Some(hit) = self.chip_at(event.position)
+        {
+            // A double click on a chip selects the whole chip (CMP-010 R2).
+            self.core.set_selection(hit.descriptor.range, false);
+        }
         if event.click_count <= 1 && self.core.selection().is_empty() {
             self.core.set_affinity(affinity);
         }
@@ -1604,7 +1686,8 @@ impl TextArea {
         cx.notify();
     }
 
-    pub(crate) fn on_pointer_up(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn on_pointer_up(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.chip_pointer_up(position, cx);
         if self.drag.is_some() {
             self.end_drag();
             cx.notify();
@@ -1668,6 +1751,7 @@ impl TextArea {
             return false;
         }
         self.scroll_y = target;
+        self.refs.invalidate_hover();
         self.follow = false;
         self.drag_selection(position, window, cx);
         true
@@ -1680,6 +1764,7 @@ impl TextArea {
         event: &vespertine::ScrollWheelEvent,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.refs.invalidate_hover();
         let viewport = self.settled_viewport();
         let content = self.content_height();
         if self.disabled || content <= viewport {
@@ -1687,6 +1772,7 @@ impl TextArea {
         }
         let delta = event.delta.pixel_delta(self.metrics.line_height);
         self.scroll_y = clamp_scroll(self.scroll_y - delta.y, content, viewport);
+        self.refs.invalidate_hover();
         self.follow = false;
         cx.notify();
         true
@@ -1813,6 +1899,7 @@ impl EditorHost for TextArea {
 
     fn finish_edit(&mut self, changed: bool, window: &mut Window, cx: &mut Context<Self>) {
         if changed {
+            self.text_changed(cx);
             if self.external.sync(&self.core) {
                 self.external_phase_events(cx);
             }
@@ -1883,6 +1970,24 @@ impl EditorHost for TextArea {
 
     fn copy_falls_through(&self) -> bool {
         self.copies_background_selection && self.core.selection().is_empty()
+    }
+
+    fn copy_item(&mut self, _cx: &App) -> Option<ClipboardItem> {
+        if self.core.selection().is_empty() {
+            return None;
+        }
+        self.scoped_copy_item().or_else(|| {
+            let text = self.core.selected_text();
+            (!text.is_empty()).then(|| ClipboardItem::new_string(text.to_owned()))
+        })
+    }
+
+    fn restore_pasted_text(&self, text: String, metadata: Option<&str>) -> String {
+        self.restored_paste_text(text, metadata)
+    }
+
+    fn finish_paste(&mut self, start: usize, cx: &mut Context<Self>) {
+        self.emit_pasted(start, cx);
     }
 }
 

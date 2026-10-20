@@ -170,3 +170,7 @@ path = "examples/dialog_modal_editor.rs"
 [[example]]
 name = "picker_palette"
 path = "examples/picker_palette.rs"
+
+[[example]]
+name = "mention_scopes"
+path = "examples/mention_scopes.rs"

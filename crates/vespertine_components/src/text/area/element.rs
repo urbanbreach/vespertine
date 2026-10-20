@@ -1,17 +1,22 @@
 //! The element and render function of the multiline editor.
 
-use super::{TextArea, TextAreaEvent, WASH_INSET_Y, WASH_RADIUS, layout::painted_height};
+use super::{
+    TextArea, TextAreaEvent, WASH_INSET_Y, WASH_RADIUS, icon_asset_path, layout::painted_height,
+    references::POPUP_PADDING_X,
+};
 use crate::{
     layout::paint_left_aligned,
+    mentions::{ChipIcon, PillRect},
     text::{actions::*, editor::EditorHost},
 };
 use vespertine::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, Context, Corners, CursorStyle,
     DispatchPhase, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
-    HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Style, Styled, Window, div,
-    fill, point, px, relative, size,
+    HitboxBehavior, Hsla, IconAppearance, InspectorElementId, InteractiveElement, IntoElement,
+    KeyDownEvent, KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Style, Styled, TransformationMatrix, Window, anchored, deferred, div, file_icon_image, fill,
+    point, px, relative, size,
 };
 
 struct AreaElement {
@@ -112,9 +117,12 @@ impl Element for AreaElement {
                 cx,
             );
         }
+        let pointing = !disabled && area.read(cx).pointing_hand_at(window.mouse_position());
         window.set_cursor_style(
             if disabled {
                 CursorStyle::Arrow
+            } else if pointing {
+                CursorStyle::PointingHand
             } else {
                 CursorStyle::IBeam
             },
@@ -143,6 +151,16 @@ impl Element for AreaElement {
             .flatten();
         let wash = state.wash().zip(state.line_wash_rect(bounds));
         let span_washes = state.wash_quads();
+        let pills = state.chip_pills(window);
+        let chip_colors = state.chip_colors(cx);
+        let icons: Vec<(Bounds<Pixels>, ChipIcon)> = pills
+            .iter()
+            .filter_map(|pill| {
+                pill.geometry
+                    .well
+                    .map(|well| (pill_bounds(well.icon), state.pill_icon(pill).clone()))
+            })
+            .collect();
         let empty = state.is_empty();
         let placeholder = state.placeholder_ref().clone();
         let font = state.resolved_font.clone();
@@ -197,6 +215,18 @@ impl Element for AreaElement {
             for rect in selection {
                 window.paint_quad(fill(rect, theme.selection));
             }
+            for pill in &pills {
+                window.paint_quad(
+                    fill(pill_bounds(pill.geometry.bounds), chip_colors.ink)
+                        .corner_radii(px(pill.geometry.radius)),
+                );
+                if let Some(well) = pill.geometry.well {
+                    window.paint_quad(
+                        fill(pill_bounds(well.bounds), chip_colors.well)
+                            .corner_radii(px(well.radius)),
+                    );
+                }
+            }
             if empty {
                 if !placeholder.is_empty() {
                     let run = vespertine::TextRun {
@@ -247,6 +277,9 @@ impl Element for AreaElement {
                     }
                 }
             }
+            for (icon_bounds, icon) in &icons {
+                paint_chip_icon(window, cx, *icon_bounds, icon, chip_colors.glyph);
+            }
             if let Some(caret) = caret {
                 window.paint_quad(fill(caret, theme.caret));
             }
@@ -277,9 +310,14 @@ impl Element for AreaElement {
         });
         window.on_mouse_event({
             let area = area.clone();
+            let hitbox = hitbox.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble {
-                    area.update(cx, |area, cx| area.on_pointer_move(event, window, cx));
+                    let over = hitbox.is_hovered(window);
+                    area.update(cx, |area, cx| {
+                        area.on_pointer_move(event, window, cx);
+                        area.on_hover_move(event.position, over, window, cx);
+                    });
                 }
             }
         });
@@ -287,7 +325,7 @@ impl Element for AreaElement {
             let area = area.clone();
             move |event: &MouseUpEvent, phase, _window, cx| {
                 if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                    area.update(cx, |area, cx| area.on_pointer_up(cx));
+                    area.update(cx, |area, cx| area.on_pointer_up(event.position, cx));
                 }
             }
         });
@@ -426,6 +464,34 @@ impl Render for TextArea {
                     window.focus_prev(cx);
                 }
             }));
+        let popup = self.hover_popup(window).map(|popup| {
+            deferred(
+                anchored()
+                    .position(popup.bounds.origin)
+                    .snap_to_window()
+                    .child(
+                        div()
+                            .id(ElementId::from(("vespertine-chip-detail", cx.entity_id())))
+                            .occlude()
+                            .flex()
+                            .items_center()
+                            .h(popup.bounds.size.height)
+                            .w(popup.bounds.size.width)
+                            .px(px(POPUP_PADDING_X))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface)
+                            .text_color(theme.text)
+                            .whitespace_nowrap()
+                            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                this.popup_hovered(*hovered, cx)
+                            }))
+                            .child(popup.text),
+                    ),
+            )
+            .with_priority(1)
+        });
         root.child(
             div()
                 .flex()
@@ -434,6 +500,43 @@ impl Render for TextArea {
                 .overflow_hidden()
                 .child(AreaElement { area: cx.entity() }),
         )
+        .children(popup)
+    }
+}
+
+fn pill_bounds(rect: PillRect) -> Bounds<Pixels> {
+    Bounds {
+        origin: point(px(rect.x), px(rect.y)),
+        size: size(px(rect.width), px(rect.height)),
+    }
+}
+
+/// Paints a chip icon (CMP-010 R6): a glyph tinted with the muted role, a themed icon in its own
+/// colors. An icon the application's assets do not provide leaves its well empty.
+fn paint_chip_icon(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    icon: &ChipIcon,
+    tint: Hsla,
+) {
+    match icon {
+        ChipIcon::Glyph(name) => {
+            let _ = window.paint_svg(
+                bounds,
+                SharedString::from(icon_asset_path(name)),
+                None,
+                TransformationMatrix::unit(),
+                tint,
+                cx,
+            );
+        }
+        ChipIcon::Themed(name) => {
+            let appearance = IconAppearance::from(window.appearance());
+            if let Some(image) = file_icon_image(cx, &icon_asset_path(name), appearance) {
+                let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            }
+        }
     }
 }
 

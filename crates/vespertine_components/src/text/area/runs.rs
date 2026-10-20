@@ -27,6 +27,9 @@ pub struct SpanStyle {
     pub monospace: bool,
     /// A wash painted behind the run.
     pub background: Option<Hsla>,
+    /// The fixed padding face of a chip's side bearing, icon slot and trailing pad (CMP-010 R2),
+    /// whatever font the surrounding text uses.
+    pub padding_face: bool,
 }
 
 impl SpanStyle {
@@ -63,6 +66,7 @@ impl SpanStyle {
             underline: self.underline || other.underline,
             monospace: self.monospace || other.monospace,
             background: other.background.or(self.background),
+            padding_face: self.padding_face || other.padding_face,
         }
     }
 }
@@ -76,6 +80,8 @@ pub struct BaseStyle {
     pub monospace_family: SharedString,
     /// The text color.
     pub color: Hsla,
+    /// The fixed face of chip padding.
+    pub padding_font: vespertine::Font,
 }
 
 /// Maps a span style over `base` to a text run of `len` bytes.
@@ -89,6 +95,9 @@ pub fn run_for(base: &BaseStyle, style: SpanStyle, len: usize, marked: bool) -> 
     }
     if style.monospace {
         font.family = base.monospace_family.clone();
+    }
+    if style.padding_face {
+        font = base.padding_font.clone();
     }
     let color = style.color.unwrap_or(base.color);
     TextRun {
@@ -195,6 +204,32 @@ fn same_look(a: &TextRun, b: &TextRun) -> bool {
     *a == b
 }
 
+/// The parts of `spans` outside `holes` (sorted, non-overlapping ranges): no face applies within
+/// a chip (CMP-009 R2, CMP-010).
+pub fn cut_spans(
+    spans: Vec<(Range<usize>, SpanStyle)>,
+    holes: &[Range<usize>],
+) -> Vec<(Range<usize>, SpanStyle)> {
+    let mut out = Vec::with_capacity(spans.len());
+    for (range, style) in spans {
+        let mut start = range.start;
+        let first = holes.partition_point(|hole| hole.end <= start);
+        for hole in &holes[first..] {
+            if hole.start >= range.end {
+                break;
+            }
+            if hole.start > start {
+                out.push((start..hole.start, style));
+            }
+            start = start.max(hole.end);
+        }
+        if start < range.end {
+            out.push((start..range.end, style));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +240,7 @@ mod tests {
             font: font("Test Sans"),
             monospace_family: "Test Mono".into(),
             color: hsla(0.0, 0.0, 1.0, 1.0),
+            padding_font: font("Test Pad"),
         }
     }
 
@@ -255,5 +291,17 @@ mod tests {
         assert_eq!(sweep.for_line(6..11).len(), 1);
         assert_eq!(sweep.for_line(12..13).len(), 2);
         assert_eq!(sweep.for_line(14..20).len(), 0);
+    }
+
+    #[test]
+    fn cutting_spans_around_holes_keeps_only_the_outside_parts() {
+        let spans = vec![
+            (0..20, SpanStyle::bold()),
+            (6..8, SpanStyle::italic()),
+            (30..40, SpanStyle::bold()),
+        ];
+        let cut = cut_spans(spans, &[5..10, 12..14, 35..36]);
+        let ranges: Vec<_> = cut.iter().map(|(range, _)| range.clone()).collect();
+        assert_eq!(ranges, [0..5, 10..12, 14..20, 30..35, 36..40]);
     }
 }
