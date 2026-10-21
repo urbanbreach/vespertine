@@ -60,7 +60,7 @@ when synchronizing:
 
 `vespertine_bench`, `vespertine_components`, `vespertine_desktop`, `vespertine_host_tree`,
 `vespertine_js`, `vespertine_js_node`, `vespertine_public_image_loader`,
-`vespertine_residency`, `vespertine_richtext`, `vespertine_scenes`, `vespertine_test_host`,
+`vespertine_richtext`, `vespertine_scenes`, `vespertine_test_host`,
 `vespertine_theme`, `vespertine_updater` and `vespertine_webview`.
 
 The npm packages under `packages/` and the scripts under `scripts/` are likewise
