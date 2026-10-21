@@ -22,9 +22,11 @@ record. The renderer processes an effect immediately before the first batch whos
 or above the effect's order: it copies the framebuffer region (the envelope: visible region plus
 `ceil(3 sigma) + 2` device pixels, clamped to the drawable) into a retained snapshot, runs a
 horizontal and a vertical Gaussian pass over scissored regions of two downsampled targets, and
-replaces the pixels inside the rounded bounds with the result. Surfaces that cannot be copied from
-(restricted OpenGL-backed surfaces) render effect frames through a full-frame intermediate that is
-then presented with a non-blending copy; frames without effects always present directly.
+replaces the pixels inside the rounded bounds with the result; below an effect opacity of 1 the
+composite blends the result over the unblurred pixels by that opacity (a blend constant). Surfaces
+that cannot be copied from (restricted OpenGL-backed surfaces) render effect frames through a
+full-frame intermediate that is then presented with a non-blending copy; frames without effects
+always present directly.
 
 Blur resources: one retained set (snapshot plus two filter targets, quantized to 256 device pixels
 and clamped to the drawable), at most 32 effects per frame, Gaussian weights computed once per

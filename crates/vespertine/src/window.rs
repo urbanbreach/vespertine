@@ -5669,7 +5669,10 @@ impl Window {
     /// filters it and writes it back inside the rounded bounds, hard-cut at the rounded edge.
     /// Content painted afterwards (tint, border, text, nested overlays) composites crisply
     /// above the blurred region. The active content mask clips both the snapshot and the
-    /// written region. A zero or negative radius emits nothing.
+    /// written region. Under an element opacity below 1 (an `opacity` style of the element or
+    /// an ancestor) the written region blends linearly between the unblurred and the blurred
+    /// backdrop by that opacity, and an opacity of 0 emits nothing. Rounded content clips and
+    /// edge fades do not apply to the effect. A zero or negative radius emits nothing.
     ///
     /// To keep a floating surface's blur, tint, border and descendants in one stable
     /// compositing order, paint them inside one [`Self::paint_layer`]; open a further
@@ -5718,6 +5721,7 @@ impl Window {
             corner_radii: radii.scale(scale_factor),
             blur_radius: sigma.scale(scale_factor),
             content_mask,
+            opacity: self.element_opacity(),
         });
     }
 

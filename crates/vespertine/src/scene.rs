@@ -208,11 +208,17 @@ impl Scene {
     /// mask, which gets the same order as the effect so that it produces a batch boundary
     /// exactly at the effect's order. The order is assigned exactly like an ordinary
     /// primitive's covering the same clipped bounds (the layer's order inside a paint layer).
-    /// Effects whose clipped bounds are empty and effects with a non-positive blur radius are
-    /// dropped. Replaying the recorded operation reproduces both records.
+    /// Effects whose clipped bounds are empty, effects with a non-positive blur radius and
+    /// effects with a non-positive opacity are dropped. Replaying the recorded operation
+    /// reproduces both records.
     pub fn insert_backdrop_blur(&mut self, mut blur: BackdropBlur) {
         let clipped_bounds = blur.bounds.intersect(&blur.content_mask.bounds);
-        if clipped_bounds.is_empty() || blur.blur_radius.0.is_nan() || blur.blur_radius.0 <= 0.0 {
+        if clipped_bounds.is_empty()
+            || blur.blur_radius.0.is_nan()
+            || blur.blur_radius.0 <= 0.0
+            || blur.opacity.is_nan()
+            || blur.opacity <= 0.0
+        {
             return;
         }
         blur.order = self.next_order(clipped_bounds);
@@ -1855,6 +1861,9 @@ pub struct BackdropBlur {
     pub blur_radius: ScaledPixels,
     /// Rectangular content mask clipping both the snapshot envelope and the composite.
     pub content_mask: ContentMask<ScaledPixels>,
+    /// Opacity in `0..=1` the composite blends by: the effect region shows the blurred
+    /// backdrop at 1 and the unblurred backdrop at 0, linearly in between.
+    pub opacity: f32,
 }
 
 impl Scene {

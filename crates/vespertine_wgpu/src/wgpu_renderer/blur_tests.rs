@@ -72,6 +72,7 @@ pub(super) fn blur(
         bounds,
         content_mask,
         corner_radii: radii,
+        opacity: 1.0,
     });
     let mut tint = quad(bounds, Hsla::transparent_black(), radii);
     tint.content_mask = content_mask;
@@ -730,6 +731,7 @@ fn trailing_blur(scene: &mut Scene, bounds: Bounds<ScaledPixels>, sigma: f32) {
         bounds,
         content_mask,
         corner_radii: Corners::default(),
+        opacity: 1.0,
     });
 }
 

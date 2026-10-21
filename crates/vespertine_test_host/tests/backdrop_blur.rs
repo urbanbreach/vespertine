@@ -141,6 +141,64 @@ fn backdrop_blur_is_clipped_by_an_ancestor_overflow_mask() {
     );
 }
 
+/// Frame pixels over a white (x = 62) and a black (x = 66) stripe under a blurred panel of
+/// `opacity`.
+fn panel_at_opacity(opacity: f32) -> [[u8; 3]; 2] {
+    let (mut host, scale) = host(move || {
+        div()
+            .size_full()
+            .child(stripes(0))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(40.))
+                    .top(px(20.))
+                    .w(px(120.))
+                    .h(px(80.))
+                    .opacity(opacity)
+                    .backdrop_blur(px(6.)),
+            )
+            .into_any_element()
+    });
+    let image = host.screenshot_image().expect("screenshot");
+    [
+        pixel(&image, scale, 62., 40.),
+        pixel(&image, scale, 66., 40.),
+    ]
+}
+
+#[test]
+fn backdrop_blur_at_opacity_zero_leaves_the_backdrop_unchanged() {
+    require_backend!();
+    let [white, black] = panel_at_opacity(0.0);
+    assert_stripe(white, 62., 0, "white stripe");
+    assert_stripe(black, 66., 0, "black stripe");
+}
+
+#[test]
+fn backdrop_blur_at_full_opacity_replaces_the_backdrop_with_the_blur() {
+    require_backend!();
+    for color in panel_at_opacity(1.0) {
+        assert_blurred(color, "full opacity");
+    }
+}
+
+#[test]
+fn backdrop_blur_at_half_opacity_is_halfway_between_backdrop_and_blur() {
+    require_backend!();
+    let blurred = panel_at_opacity(1.0);
+    let half = panel_at_opacity(0.5);
+    for ((half, blurred), sharp) in half.iter().zip(blurred).zip([255.0_f32, 0.0]) {
+        for (half, blurred) in half.iter().zip(blurred) {
+            let expected = (sharp + f32::from(blurred)) / 2.0;
+            assert!(
+                (f32::from(*half) - expected).abs() <= 2.0,
+                "half opacity: {half} expected about {expected} (sharp {sharp}, blurred {blurred})"
+            );
+        }
+    }
+}
+
 struct Backdrop {
     shift: usize,
     panel: Entity<Panel>,

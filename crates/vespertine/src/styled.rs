@@ -807,7 +807,9 @@ pub trait Styled: Sized {
     /// translucent background over it as the tint). `sigma` is the standard deviation of the
     /// Gaussian in logical pixels; zero or less paints no blur. The blur follows
     /// [`Window::paint_backdrop_blur`](crate::Window::paint_backdrop_blur): the active content
-    /// masks clip it, while curved overflow clips, edge fades and opacity do not apply to it.
+    /// masks clip it and the element's opacity fades it (none at 0, halfway between the sharp
+    /// and the blurred backdrop at 0.5), while curved overflow clips and edge fades do not
+    /// apply to it.
     fn backdrop_blur(mut self, sigma: impl Into<crate::Pixels>) -> Self {
         self.style().backdrop_blur = Some(sigma.into());
         self

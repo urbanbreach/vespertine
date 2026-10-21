@@ -124,6 +124,8 @@ struct PresentationIntermediate {
 /// What the main pass must draw after an effect's filters have run.
 pub(crate) struct CompositePlan {
     offset: u32,
+    /// The effect's opacity, the blend constant of the composite.
+    opacity: f32,
     /// Render passes spent assembling a snapshot from a base plane (zero without one).
     pub(crate) backdrop_passes: u64,
 }
@@ -251,6 +253,13 @@ impl BlurRenderer {
             None,
             wgpu::ColorWrites::ALL,
         );
+        // `blurred * opacity + target * (1 - opacity)` on every channel through the blend
+        // constant; at opacity 1 this writes the blurred value unchanged, as a replacement.
+        let opacity_blend = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
         let composite_pipeline = create(
             "blur_composite",
             &layout,
@@ -258,7 +267,10 @@ impl BlurRenderer {
             "vs_composite",
             "fs_composite",
             wgpu::PrimitiveTopology::TriangleStrip,
-            None,
+            Some(wgpu::BlendState {
+                color: opacity_blend,
+                alpha: opacity_blend,
+            }),
             wgpu::ColorWrites::ALL,
         );
         let blit_pipeline = create(
@@ -847,16 +859,25 @@ impl BlurRenderer {
         self.stats.effects_rendered += 1;
         Some(CompositePlan {
             offset: composite,
+            opacity: effect.opacity.clamp(0.0, 1.0),
             backdrop_passes,
         })
     }
 
-    /// Draws the replacement composite of an effect into the main pass.
+    /// Draws the composite of an effect into the main pass: a replacement at opacity 1, a
+    /// linear blend of the blurred over the unblurred backdrop below it.
     pub(crate) fn composite(&self, pass: &mut wgpu::RenderPass<'_>, plan: &CompositePlan) {
         let Some(set) = self.set.as_ref() else {
             return;
         };
+        let opacity = f64::from(plan.opacity);
         pass.set_pipeline(&self.composite_pipeline);
+        pass.set_blend_constant(wgpu::Color {
+            r: opacity,
+            g: opacity,
+            b: opacity,
+            a: opacity,
+        });
         pass.set_bind_group(0, &set.b_group, &[plan.offset]);
         pass.draw(0..4, 0..1);
     }
