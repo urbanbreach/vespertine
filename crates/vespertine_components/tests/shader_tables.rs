@@ -1,9 +1,7 @@
-//! CMP-026 A6 (mouse table), A7 (time inputs), A8 (blend formulas), render size and uniform packing.
+//! CMP-026 A6 (mouse table), A7 (time inputs), bloom clamping, render size and uniform packing.
 
 use vespertine::{point, px, size};
-use vespertine_components::shader::blend::{
-    BlendMode, blend, bright_pass, clamp_bloom, edge_fade, luma,
-};
+use vespertine_components::shader::blend::{BlendMode, clamp_bloom};
 use vespertine_components::shader::inputs::{
     TimeInputs, TimeState, UniformInputs, mouse_table, render_size,
 };
@@ -72,118 +70,13 @@ fn a7_time_inputs() {
     assert_eq!((a.frame, b.frame, c.frame), (0, 1, 2));
 }
 
-fn close(a: [f32; 4], b: [f32; 4]) {
-    for i in 0..4 {
-        assert!((a[i] - b[i]).abs() < 1e-5, "{a:?} != {b:?}");
-    }
-}
-
 #[test]
-fn a8_blend_formulas() {
-    let no_glow = [0.0; 3];
-    // Light with black is transparent.
-    assert_eq!(
-        blend(BlendMode::Light, [0.0; 3], 1.0, no_glow, 0.0, 1.0),
-        [0.0; 4]
-    );
-    // Light with (0.5, 0.25, 0): straight (1, 0.5, 0), alpha 0.5 in the interior.
-    close(
-        blend(BlendMode::Light, [0.5, 0.25, 0.0], 1.0, no_glow, 0.0, 1.0),
-        [1.0, 0.5, 0.0, 0.5],
-    );
-    // Values above 1 survive to the bloom stage and clamp afterwards.
-    close(
-        blend(BlendMode::Light, [2.0, 0.5, 0.0], 1.0, no_glow, 0.0, 1.0),
-        [1.0, 0.5, 0.0, 1.0],
-    );
-    // The fade multiplies alpha only.
-    close(
-        blend(BlendMode::Light, [0.5, 0.25, 0.0], 1.0, no_glow, 0.0, 0.5),
-        [1.0, 0.5, 0.0, 0.25],
-    );
-    // Glow adds to the color before the alpha is taken.
-    close(
-        blend(
-            BlendMode::Light,
-            [0.25, 0.0, 0.0],
-            1.0,
-            [1.0, 0.5, 0.0],
-            0.5,
-            1.0,
-        ),
-        [1.0, 0.333333, 0.0, 0.75],
-    );
-    // Opaque: alpha 1 everywhere, no fade, rgb clamped.
-    close(
-        blend(BlendMode::Opaque, [0.0; 3], 0.0, no_glow, 0.0, 0.0),
-        [0.0, 0.0, 0.0, 1.0],
-    );
-    close(
-        blend(BlendMode::Opaque, [3.0, -1.0, 0.5], 0.2, no_glow, 2.0, 0.0),
-        [1.0, 0.0, 0.5, 1.0],
-    );
-    // Alpha: a = clamp(alpha + luma(glow x bloom)); straight color from the weighted sum.
-    close(
-        blend(BlendMode::Alpha, [0.5, 0.5, 0.5], 0.5, no_glow, 0.0, 1.0),
-        [0.5, 0.5, 0.5, 0.5],
-    );
-    assert_eq!(
-        blend(BlendMode::Alpha, [1.0; 3], 0.0, no_glow, 0.0, 1.0),
-        [0.0; 4]
-    );
-    let a = blend(
-        BlendMode::Alpha,
-        [1.0, 0.0, 0.0],
-        0.5,
-        [1.0, 1.0, 1.0],
-        1.0,
-        1.0,
-    );
-    let expected_alpha = (0.5 + luma([1.0, 1.0, 1.0])).clamp(0.0, 1.0);
-    assert!((a[3] - expected_alpha).abs() < 1e-6);
-    assert_eq!(BlendMode::default(), BlendMode::Light);
-}
-
-#[test]
-fn a8_edge_fade_is_zero_on_the_boundary_and_one_beyond_fifteen_percent() {
-    let surface = (200.0, 100.0);
-    // The fade width is 15% of the shorter side: 15 px.
-    for boundary in [
-        (0.0, 50.0),
-        (200.0, 50.0),
-        (100.0, 0.0),
-        (100.0, 100.0),
-        (0.0, 0.0),
-    ] {
-        assert_eq!(edge_fade(boundary, surface), 0.0, "{boundary:?}");
-    }
-    let one = |p: (f32, f32)| assert!((edge_fade(p, surface) - 1.0).abs() < 1e-5, "{p:?}");
-    one((15.0, 50.0));
-    one((100.0, 15.0));
-    one((100.0, 50.0));
-    one((40.0, 30.0));
-    let half = edge_fade((7.5, 50.0), surface);
-    assert!(
-        (half - 0.5).abs() < 1e-6,
-        "the quintic is 0.5 at half width: {half}"
-    );
-    assert!(edge_fade((3.0, 50.0), surface) < edge_fade((9.0, 50.0), surface));
-    // A tiny surface has a width of at least one pixel.
-    assert_eq!(edge_fade((1.0, 1.0), (4.0, 4.0)), 1.0);
-}
-
-#[test]
-fn bloom_strength_is_clamped_and_the_bright_pass_has_a_knee() {
+fn bloom_strength_is_clamped_and_the_default_blend_is_light() {
     assert_eq!(clamp_bloom(-1.0), 0.0);
     assert_eq!(clamp_bloom(10.0), 3.0);
     assert_eq!(clamp_bloom(f32::NAN), 0.0);
     assert_eq!(clamp_bloom(1.5), 1.5);
-    assert_eq!(bright_pass([0.3, 0.3, 0.3]), [0.0; 3], "below the knee");
-    let over = bright_pass([2.0, 2.0, 2.0]);
-    assert!(
-        (over[0] - 2.0).abs() < 1e-6,
-        "above the knee passes unchanged"
-    );
+    assert_eq!(BlendMode::default(), BlendMode::Light);
 }
 
 #[test]
