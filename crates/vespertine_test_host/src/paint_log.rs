@@ -132,13 +132,4 @@ impl PaintLog {
         hits.sort_by_key(|hit| std::cmp::Reverse(hit.0));
         hits.into_iter().map(|(_, id)| id).collect()
     }
-
-    /// Every element painted in the last frame with its bounds, in stacking order (bottom
-    /// first).
-    pub fn all_bounds(&self) -> Vec<(u64, Rect)> {
-        let state = self.state.borrow();
-        let mut all: Vec<_> = state.bounds.iter().collect();
-        all.sort_by_key(|(_, _, order)| *order);
-        all.into_iter().map(|(id, rect, _)| (*id, *rect)).collect()
-    }
 }

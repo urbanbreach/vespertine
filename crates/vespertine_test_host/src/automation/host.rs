@@ -1,9 +1,7 @@
 //! The host side of the automation contract: what a host application must be able to do, and
 //! the one dispatcher that maps validated catalog requests onto it.
 
-use super::protocol::{
-    AutomationError, Capability, ErrorCode, METHODS, Request, method, validate_request,
-};
+use super::protocol::{AutomationError, Capability, ErrorCode, METHODS, Request, validate_request};
 use crate::{HostError, Rect, TestHost, TreeNode};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -372,11 +370,6 @@ pub fn call(
 /// Every catalog method name, for documentation and exhaustiveness tests.
 pub fn method_names() -> Vec<&'static str> {
     METHODS.iter().map(|method| method.name).collect()
-}
-
-/// Looks up whether a name is a catalog method.
-pub fn is_method(name: &str) -> bool {
-    method(name).is_some()
 }
 
 fn error(error: HostError) -> AutomationError {

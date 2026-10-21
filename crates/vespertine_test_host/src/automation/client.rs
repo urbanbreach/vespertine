@@ -2,7 +2,7 @@
 
 use super::{
     host::{AutomationHost, call},
-    protocol::{AutomationError, Capability, ErrorCode},
+    protocol::{AutomationError, ErrorCode},
     session::{InitInfo, LaunchOptions, Session, SessionOptions},
 };
 use crate::{Rect, TreeNode};
@@ -222,11 +222,6 @@ impl Automation {
             )
         })?;
         Self::connect_session(Arc::new(session))
-    }
-
-    /// Connects over a custom backend.
-    pub fn with_backend(backend: Rc<dyn Backend>) -> Self {
-        Self { backend }
     }
 
     /// What `initialize` reported.
@@ -871,12 +866,5 @@ impl Locator {
             }
             backend.sleep(POLL_INTERVAL_MS);
         }
-    }
-}
-
-impl Capability {
-    /// Whether `info` lists this capability.
-    pub fn is_offered(self, info: &InitInfo) -> bool {
-        info.capabilities.contains(&self)
     }
 }
