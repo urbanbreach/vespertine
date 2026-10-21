@@ -5,8 +5,7 @@
 //! connect latency measured on an injected [`ClockSource`]. [`ManualClock`] is
 //! a virtual clock whose timers fire only when the clock is advanced, so
 //! deadline behavior is tested without sleeping. They are used by this crate's
-//! tests and by the `a11y_context` example, and are available to consumers that
-//! need to test code built on [`ContextQuery`](super::ContextQuery).
+//! tests, and the `a11y_context` example includes this file by path.
 
 use super::{
     AccessibilityBus, AccessibilityConnection, BusError, ClockSource, NodeRole, NodeState,
@@ -36,7 +35,7 @@ struct ClockInner {
     timers: BTreeMap<u64, (Duration, Option<Waker>)>,
 }
 
-/// A virtual clock. Time passes only through [`advance`](Self::advance),
+/// A virtual clock. Time passes only through
 /// [`advance_to_next_timer`](Self::advance_to_next_timer) or
 /// [`run`](Self::run).
 #[derive(Clone)]
@@ -72,19 +71,6 @@ impl ManualClock {
     /// Number of timers that have not fired or been dropped.
     pub fn pending_timers(&self) -> usize {
         self.inner.lock().timers.len()
-    }
-
-    /// Advances virtual time and wakes the timers that became due.
-    pub fn advance(&self, by: Duration) {
-        let wakers = {
-            let mut inner = self.inner.lock();
-            inner.elapsed += by;
-            let elapsed = inner.elapsed;
-            Self::take_due(&mut inner, elapsed)
-        };
-        for waker in wakers {
-            waker.wake();
-        }
     }
 
     /// Advances virtual time to the earliest pending timer. Returns `false`

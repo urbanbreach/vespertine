@@ -10,11 +10,16 @@
 
 use std::sync::Arc;
 use vespertine_desktop::context::{
-    AccessibilityContext, AccessibilitySnapshot, ContextQuery, ContextRequest, ContextUnavailable,
-    ObservedWindow, SystemClock,
-    fake::{FakeBus, FakeNodeSpec},
-    serialize_untrusted_observations,
+    AccessibilityBus, AccessibilityConnection, AccessibilityContext, AccessibilitySnapshot,
+    BusError, ClockSource, ContextQuery, ContextRequest, ContextUnavailable, NodeRole, NodeState,
+    ObjectRef, ObservedWindow, SystemClock, serialize_untrusted_observations,
 };
+
+// The scripted bus resolves its trait and type imports from the crate root.
+#[allow(dead_code)]
+#[path = "../src/context/fake.rs"]
+mod fake;
+use fake::{FakeBus, FakeNodeSpec};
 
 fn describe(label: &str, result: &Result<AccessibilityContext, ContextUnavailable>) {
     match result {

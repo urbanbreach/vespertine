@@ -10,11 +10,12 @@
 //!
 //! All bus access goes through the [`AccessibilityBus`] and
 //! [`AccessibilityConnection`] traits and all time through [`ClockSource`], so
-//! tests drive the query with the in-memory [`fake`] bus and a manual clock.
+//! tests drive the query with an in-memory bus and a manual clock.
 //! [`ContextQuery::new`] uses the real AT-SPI bus (Linux only).
 
 mod clock;
-pub mod fake;
+#[cfg(test)]
+pub(crate) mod fake;
 mod select;
 pub mod untrusted;
 mod walk;
