@@ -1,5 +1,7 @@
 //! CMP-022 A8: page-provided menus (R14) against the scripted helper.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use serde_json::json;

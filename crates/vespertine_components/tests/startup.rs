@@ -1,6 +1,8 @@
 //! CMP-022 A2 (scripted part): asynchronous startup rules seen through the surface, and A7: close
 //! and presentation behaviour.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::time::Duration;

@@ -2,6 +2,7 @@
 //! text, one [`TextRun`] per style change, link ranges, and inline-code pill ranges.
 
 use super::tree::{PENDING_LINK, Run};
+#[cfg(feature = "math")]
 use crate::math::{MathStyle, MathText, Presentation, present_inline, slot_font};
 use std::ops::Range;
 use vespertine::{
@@ -61,6 +62,7 @@ pub struct Flat {
     /// The paragraph with typeset inline formulas (CMP-012): the displayed text of `text` with a
     /// reserved slot per formula and the original text with the delimited sources. `None` when
     /// no formula is typeset.
+    #[cfg(feature = "math")]
     pub math: Option<MathText>,
 }
 
@@ -79,9 +81,10 @@ pub fn flatten(
     theme: &DocumentTheme,
     ctx: &TextCtx,
     hide_task_marker: bool,
-    math: &MathStyle,
+    #[cfg(feature = "math")] math: &MathStyle,
 ) -> Flat {
     let muted = hsla(theme.text_muted);
+    #[cfg(feature = "math")]
     let mut paragraph = runs
         .iter()
         .any(|run| run.formula.is_some())
@@ -99,7 +102,9 @@ pub fn flatten(
         }
         let start = text.len();
         // A formula that typesets reserves a slot of no-break spaces; one that does not (math
-        // disabled, refused, too tall or too wide) is its delimited source as inline code.
+        // disabled, refused, too tall or too wide, or the `math` feature off) is its delimited
+        // source as inline code.
+        #[cfg(feature = "math")]
         let typeset = run.formula.as_ref().and_then(|source| {
             let paragraph = paragraph.as_mut()?;
             match present_inline(&source.tex, math) {
@@ -109,6 +114,8 @@ pub fn flatten(
                 _ => None,
             }
         });
+        #[cfg(not(feature = "math"))]
+        let typeset: Option<String> = None;
         let is_code = typeset.is_none() && (run.style.code || run.formula.is_some());
         let len = match &typeset {
             Some(slot) => {
@@ -117,6 +124,7 @@ pub fn flatten(
             }
             None => {
                 text.push_str(&run.text);
+                #[cfg(feature = "math")]
                 if let Some(paragraph) = paragraph.as_mut() {
                     paragraph.push_text(&run.text);
                 }
@@ -132,13 +140,15 @@ pub fn flatten(
         } else {
             ctx.weight
         };
-        let mut run_font = if typeset.is_some() {
-            slot_font()
-        } else if is_code {
+        let mut run_font = if is_code {
             font(theme.font_mono.clone())
         } else {
             font(theme.font_sans.clone())
         };
+        #[cfg(feature = "math")]
+        if typeset.is_some() {
+            run_font = slot_font();
+        }
         if typeset.is_none() {
             run_font.weight = if is_code { FontWeight::NORMAL } else { weight };
             if run.style.italic {
@@ -185,6 +195,7 @@ pub fn flatten(
             }
         }
     }
+    #[cfg(feature = "math")]
     let math = paragraph.filter(|paragraph| {
         debug_assert_eq!(paragraph.displayed(), text);
         !paragraph.slots().is_empty()
@@ -194,6 +205,7 @@ pub fn flatten(
         runs: out,
         links,
         pills,
+        #[cfg(feature = "math")]
         math,
     }
 }
@@ -274,7 +286,10 @@ mod tests {
                 None,
             ),
         ];
+        #[cfg(feature = "math")]
         let mut flat = flatten(&runs, &theme, &ctx, false, &MathStyle::new());
+        #[cfg(not(feature = "math"))]
+        let mut flat = flatten(&runs, &theme, &ctx, false);
         let before = (
             flat.text.clone(),
             flat.runs.iter().map(|r| r.len).sum::<usize>(),

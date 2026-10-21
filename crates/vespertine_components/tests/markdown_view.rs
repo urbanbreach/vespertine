@@ -8,6 +8,7 @@ use vespertine::{AnyElement, IntoElement, ParentElement, Styled, div, px};
 use vespertine_components::markdown_doc::{
     DiagramView, Markdown, MarkdownDocument, MarkdownOptions, TaskOptions,
 };
+#[cfg(feature = "math")]
 use vespertine_components::math::MathStyle;
 use vespertine_richtext::highlight;
 use vespertine_richtext::search::{HighlightDeclaration, HighlightSpec};
@@ -505,10 +506,15 @@ fn host_for(query: &'static str, source: &'static str) -> TestHost {
 fn a2_disabled_formulas_show_their_source_and_display_math_falls_back_to_a_math_card() {
     require_backend!();
     let mut host = md_host(400., 300., "inline $x^2$ here\n\n$$\na+b\n$$\n", || {
-        MarkdownOptions {
+        // Without the `math` feature formulas are always shown as source.
+        #[cfg(feature = "math")]
+        let options = MarkdownOptions {
             math: MathStyle::new().enabled(false),
             ..MarkdownOptions::default()
-        }
+        };
+        #[cfg(not(feature = "math"))]
+        let options = MarkdownOptions::default();
+        options
     });
     host.paint_frame();
     let painted = host.painted_text();

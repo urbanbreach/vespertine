@@ -4,6 +4,8 @@
 //! like the example does. A loopback server of the test process serves the pages, since files are
 //! rejected by the scheme policy.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::cell::RefCell;

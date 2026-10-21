@@ -1,5 +1,7 @@
 //! CMP-022 A9: actions, key bindings and mouse back/forward buttons.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::cell::RefCell;

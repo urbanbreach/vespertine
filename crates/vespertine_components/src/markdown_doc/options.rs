@@ -4,6 +4,7 @@ use super::cache::FlattenCache;
 use super::flatten::StreamingFade;
 use super::tree::{ImageInfo, TaskMarker};
 use crate::code::{CardAction, CodeScrollState};
+#[cfg(feature = "math")]
 use crate::math::MathStyle;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -82,6 +83,7 @@ pub struct MarkdownOptions {
     /// Code block controls.
     pub code: CodeOptions,
     /// Formula settings (CMP-012 style): enabled, face and size percentage.
+    #[cfg(feature = "math")]
     pub math: MathStyle,
     /// Whether the display tree (hanging syntax repaired) is shown instead of the canonical one.
     pub streaming: bool,
@@ -104,6 +106,7 @@ impl Default for MarkdownOptions {
             task: None,
             media: MediaOptions::default(),
             code: CodeOptions::default(),
+            #[cfg(feature = "math")]
             math: MathStyle::new(),
             streaming: false,
             selectable: true,

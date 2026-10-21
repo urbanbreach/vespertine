@@ -1,6 +1,8 @@
 //! CMP-022 A4 (external open), A5 (chrome), A6 (placeholders), A10 (labels)
 //! (accessibility) against the scripted helper.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::cell::RefCell;

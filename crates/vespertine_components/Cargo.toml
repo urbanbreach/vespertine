@@ -13,6 +13,17 @@ workspace = true
 path = "src/lib.rs"
 doctest = false
 
+[features]
+default = ["browser", "diagram", "math"]
+# The embedded browser surface (CMP-022). The web view is Linux-only, so the module exists only
+# on Linux with this feature.
+browser = ["dep:vespertine_webview"]
+# Mermaid diagrams (CMP-013). Without it, Mermaid fences render as ordinary source blocks.
+diagram = ["dep:merman", "dep:resvg"]
+# Typeset formulas (CMP-012) with the six embedded math faces. Without it, Markdown shows the
+# formula source.
+math = []
+
 [dependencies]
 bytemuck.workspace = true
 anyhow.workspace = true
@@ -20,7 +31,6 @@ accesskit.workspace = true
 vespertine.workspace = true
 vespertine_richtext.workspace = true
 vespertine_theme.workspace = true
-vespertine_webview.workspace = true
 thiserror.workspace = true
 image.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -29,11 +39,14 @@ unicode-segmentation.workspace = true
 unicode-width.workspace = true
 ttf-parser.workspace = true
 pulldown-cmark.workspace = true
-merman.workspace = true
+merman = { workspace = true, optional = true }
 url.workspace = true
 usvg.workspace = true
-resvg.workspace = true
+resvg = { workspace = true, optional = true }
 alacritty_terminal.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vespertine_webview = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 wgpu = { workspace = true, features = ["std", "metal", "gles", "vulkan", "wgsl", "glsl", "naga-ir"] }
@@ -49,12 +62,12 @@ serde_json.workspace = true
 tempfile.workspace = true
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
-vespertine_webview.workspace = true
 vespertine_test_host.workspace = true
 
 [[example]]
 name = "browser_surface"
 path = "examples/browser_surface.rs"
+required-features = ["browser"]
 
 [[example]]
 name = "badges_gallery"
@@ -95,6 +108,7 @@ path = "examples/diff_viewer.rs"
 [[example]]
 name = "math_formulas"
 path = "examples/math_formulas.rs"
+required-features = ["math"]
 
 [[example]]
 name = "floating_menus"
@@ -179,6 +193,7 @@ path = "examples/mention_scopes.rs"
 [[example]]
 name = "diagram_toggle"
 path = "examples/diagram_toggle.rs"
+required-features = ["diagram"]
 
 [[example]]
 name = "markdown_stream"
@@ -191,3 +206,39 @@ path = "examples/code_editor.rs"
 [[example]]
 name = "workbench"
 path = "examples/workbench/main.rs"
+
+[[test]]
+name = "chrome"
+required-features = ["browser"]
+
+[[test]]
+name = "menu"
+required-features = ["browser"]
+
+[[test]]
+name = "real_helper"
+required-features = ["browser"]
+
+[[test]]
+name = "shortcuts"
+required-features = ["browser"]
+
+[[test]]
+name = "startup"
+required-features = ["browser"]
+
+[[test]]
+name = "diagram"
+required-features = ["diagram"]
+
+[[test]]
+name = "diagram_host"
+required-features = ["diagram"]
+
+[[test]]
+name = "math"
+required-features = ["math"]
+
+[[test]]
+name = "math_lazy"
+required-features = ["math"]

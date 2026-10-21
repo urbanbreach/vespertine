@@ -8,14 +8,17 @@ use super::tree::{Align, Block, BlockKind, Formula, Item, Run, TaskMarker};
 use crate::code::{CardAction, CodeCard, CodeScrollState, CopyOptions, WrapToggle, widgets::Icon};
 use crate::diagram::DiagramView;
 use crate::doc_theme::{alpha, hsla, ink_alpha};
+#[cfg(feature = "math")]
 use crate::math::{DisplayBlock, MathBlock, MathTextOptions, inline_line_height, math_text};
 use std::cell::Cell;
 use std::rc::Rc;
 use vespertine::{
-    AnyElement, App, ClickEvent, CursorStyle, ElementId, Font, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Role, SharedString,
-    StatefulInteractiveElement, Styled, TextRun, Window, div, font, px,
+    AnyElement, App, ClickEvent, CursorStyle, ElementId, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Role, SharedString, StatefulInteractiveElement, Styled,
+    Window, div, px,
 };
+#[cfg(feature = "math")]
+use vespertine::{Font, TextRun, font};
 use vespertine_richtext::{RichText, RunKey, UnderWash, UserSelect, user_select};
 use vespertine_theme::document::DocumentTheme;
 
@@ -43,22 +46,40 @@ impl<'a> Ctx<'a> {
         &self.opts.theme
     }
 
+    /// Flattens `runs` under the document's formula settings (uncached).
+    fn flatten(&self, runs: &[Run], text: &TextCtx, hide_task_marker: bool) -> Flat {
+        #[cfg(feature = "math")]
+        {
+            flatten(runs, self.theme(), text, hide_task_marker, &self.opts.math)
+        }
+        #[cfg(not(feature = "math"))]
+        {
+            flatten(runs, self.theme(), text, hide_task_marker)
+        }
+    }
+
     /// Flattens through the document's cache (keyed by block generation and style identity).
     fn flat(&self, runs: &[Run], text: &TextCtx, hide_task_marker: bool) -> Flat {
         let theme = self.theme();
-        let math = &self.opts.math;
-        let build = || flatten(runs, theme, text, hide_task_marker, math);
+        let build = || self.flatten(runs, text, hide_task_marker);
         let Some(cache) = &self.opts.cache else {
             return build();
         };
         let generation = self.opts.generations.get(self.top).copied().unwrap_or(0);
         let mut style = style_identity(theme);
+        #[cfg(feature = "math")]
+        let math_key = {
+            let math = &self.opts.math;
+            (math.enabled, math.face.index(), math.size())
+        };
+        #[cfg(not(feature = "math"))]
+        let math_key = ();
         // The text context and marker handling are part of the identity of one flattening.
         let extra = (
             text.size.as_f32().to_bits(),
             text.weight.0.to_bits(),
             hide_task_marker,
-            (math.enabled, math.face.index(), math.size()),
+            math_key,
         );
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(
@@ -162,6 +183,7 @@ pub fn render_block(
 }
 
 /// A text element: one native run with the block's runs, links and pills.
+#[cfg_attr(not(feature = "math"), allow(unused_variables))]
 fn text_element(
     ctx: &Ctx,
     mut flat: Flat,
@@ -178,6 +200,7 @@ fn text_element(
     }
     let theme = ctx.theme();
     // A tall inline formula opens the line height of every line of its paragraph (CMP-012 R7).
+    #[cfg(feature = "math")]
     let line_height = match &flat.math {
         Some(math) => {
             let system = window.text_system().clone();
@@ -203,6 +226,8 @@ fn text_element(
         }
         None => text.line_height,
     };
+    #[cfg(not(feature = "math"))]
+    let line_height = text.line_height;
     let mut element = div()
         .w_full()
         .min_w_0()
@@ -219,6 +244,7 @@ fn text_element(
     if flat.is_empty() {
         return element.min_h(text.line_height).into_any_element();
     }
+    #[cfg(feature = "math")]
     let rich = match &flat.math {
         Some(math) => math_text(
             ctx.name(elem, "text"),
@@ -230,6 +256,8 @@ fn text_element(
         ),
         None => RichText::new(ctx.name(elem, "text"), flat.text.clone()).runs(flat.runs.clone()),
     };
+    #[cfg(not(feature = "math"))]
+    let rich = RichText::new(ctx.name(elem, "text"), flat.text.clone()).runs(flat.runs.clone());
     let mut run = rich
         .key(ctx.key(elem, 0))
         .native()
@@ -578,7 +606,8 @@ fn diagram_body(card: CodeCard, body: AnyElement, theme: &DocumentTheme) -> AnyE
 }
 
 /// A display formula (CMP-012 R8, R9) as a block of its own; one that cannot be typeset stays a
-/// code block labelled `math`.
+/// code block labelled `math` (always, without the `math` feature).
+#[cfg_attr(not(feature = "math"), allow(unused_variables))]
 fn display_math(
     formula: &Formula,
     ctx: &Ctx,
@@ -588,44 +617,50 @@ fn display_math(
 ) -> AnyElement {
     let theme = ctx.theme().clone();
     let elem = ctx.next();
-    let run = TextRun {
-        len: 0,
-        font: font(theme.font_sans.clone()),
-        color: text.color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let block = DisplayBlock::new(
-        ctx.name(elem, "math"),
-        &formula.tex,
-        ctx.opts.math,
-        run,
-        text.size,
-    )
-    .line_height(text.line_height)
-    .key(ctx.key(elem, 0))
-    .native()
-    .build(window, cx);
-    match block {
-        MathBlock::Typeset(element) => element,
-        MathBlock::Fallback { language, text } => {
-            CodeCard::new(ctx.name(elem, "math-code"), ctx.top, text)
-                .label(language)
-                .theme(theme)
-                .key_owner((ctx.opts.row_key.clone(), ctx.top, elem))
-                .into_any_element()
+    #[cfg(feature = "math")]
+    let (language, source) = {
+        let run = TextRun {
+            len: 0,
+            font: font(theme.font_sans.clone()),
+            color: text.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let block = DisplayBlock::new(
+            ctx.name(elem, "math"),
+            &formula.tex,
+            ctx.opts.math,
+            run,
+            text.size,
+        )
+        .line_height(text.line_height)
+        .key(ctx.key(elem, 0))
+        .native()
+        .build(window, cx);
+        match block {
+            MathBlock::Typeset(element) => return element,
+            MathBlock::Fallback { language, text } => (language, text),
         }
-    }
+    };
+    #[cfg(not(feature = "math"))]
+    let (language, source) = ("math", formula.tex.clone());
+    CodeCard::new(ctx.name(elem, "math-code"), ctx.top, source)
+        .label(language)
+        .theme(theme)
+        .key_owner((ctx.opts.row_key.clone(), ctx.top, elem))
+        .into_any_element()
 }
 
 /// Characters a line may break at: whitespace except the no-break spaces that formula slots are
 /// made of.
+#[cfg(feature = "math")]
 fn breaks_line(c: char) -> bool {
     c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}')
 }
 
 /// The runs of `runs` restricted to the byte `range` of the text they cover.
+#[cfg(feature = "math")]
 fn slice_runs(runs: &[TextRun], range: std::ops::Range<usize>) -> Vec<TextRun> {
     let mut out = Vec::new();
     let mut offset = 0;
@@ -645,6 +680,7 @@ fn slice_runs(runs: &[TextRun], range: std::ops::Range<usize>) -> Vec<TextRun> {
 /// The width of the widest unbreakable word of `flat` that contains a typeset formula: the slot
 /// text plus the text glued to it, shaped by `shape`. When that word exceeds 512 bytes the
 /// formula's own scaled extent stands in (CMP-011 R14).
+#[cfg(feature = "math")]
 fn widest_formula_word(
     flat: &Flat,
     size: Pixels,
@@ -674,6 +710,7 @@ fn widest_formula_word(
 }
 
 /// Longest word shaped for the formula-column rule; longer words use the formula's own extent.
+#[cfg(feature = "math")]
 const WORD_CAP: usize = 512;
 
 #[allow(clippy::too_many_arguments)]
@@ -704,12 +741,10 @@ fn table(
     // Flatten every cell once; measure each column's widest unwrapped content.
     let header_flat: Vec<Flat> = (0..columns)
         .map(|c| {
-            flatten(
+            ctx.flatten(
                 header.get(c).map_or(&[][..], |v| &v[..]),
-                theme,
                 &header_text,
                 false,
-                &ctx.opts.math,
             )
         })
         .collect();
@@ -717,15 +752,7 @@ fn table(
         .iter()
         .map(|row| {
             (0..columns)
-                .map(|c| {
-                    flatten(
-                        row.get(c).map_or(&[][..], |v| &v[..]),
-                        theme,
-                        text,
-                        false,
-                        &ctx.opts.math,
-                    )
-                })
+                .map(|c| ctx.flatten(row.get(c).map_or(&[][..], |v| &v[..]), text, false))
                 .collect()
         })
         .collect();
@@ -740,6 +767,7 @@ fn table(
     };
     // A column holding an inline formula is at least as wide as the widest unbreakable word
     // containing the formula (CMP-011 R14).
+    #[cfg(feature = "math")]
     let shape_word = |text: &str, runs: &[TextRun], size: Pixels| -> f32 {
         window
             .text_system()
@@ -747,12 +775,17 @@ fn table(
             .width
             .as_f32()
     };
+    #[cfg(feature = "math")]
     let scale = ctx.opts.math.scale();
     let mut content = vec![0f32; columns];
+    #[cfg_attr(not(feature = "math"), allow(unused_mut))]
     let mut words = vec![0f32; columns];
     let mut visit = |c: usize, flat: &Flat, size: Pixels| {
         content[c] = content[c].max(measure(flat, size));
-        words[c] = words[c].max(widest_formula_word(flat, size, scale, &shape_word));
+        #[cfg(feature = "math")]
+        {
+            words[c] = words[c].max(widest_formula_word(flat, size, scale, &shape_word));
+        }
     };
     for (c, flat) in header_flat.iter().enumerate() {
         visit(c, flat, header_text.size);

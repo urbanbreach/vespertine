@@ -8,6 +8,7 @@ pub(crate) fn centered_row() -> Div {
 }
 
 /// A flex column whose children are centered on the cross axis.
+#[cfg(all(feature = "browser", target_os = "linux"))]
 pub(crate) fn centered_column() -> Div {
     div().flex_col().flex().items_center()
 }

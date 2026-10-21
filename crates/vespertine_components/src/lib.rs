@@ -1,8 +1,9 @@
 //! Reusable components built from elements.
 //!
-//! [`browser`] is the embedded browser surface of CMP-022: ordinary framework chrome (history and
-//! reload buttons, an address input, an open-in-default-browser button, validation and
-//! placeholder states) around the embedded web page of `vespertine_webview`.
+//! The `browser` module (the `browser` feature, Linux only) is the embedded browser surface of
+//! CMP-022: ordinary framework chrome (history and reload buttons, an address input, an
+//! open-in-default-browser button, validation and placeholder states) around the embedded web
+//! page of `vespertine_webview`.
 //!
 //! [`media`] holds the bounded image layer and the zoomable viewer of CMP-020.
 //!
@@ -36,6 +37,7 @@ extern crate self as vespertine_components;
 
 pub mod audio;
 pub mod badges;
+#[cfg(all(feature = "browser", target_os = "linux"))]
 pub mod browser;
 pub mod chart;
 pub mod code;
@@ -49,6 +51,7 @@ pub mod floating;
 mod layout;
 pub mod markdown;
 pub mod markdown_doc;
+#[cfg(feature = "math")]
 pub mod math;
 pub mod media;
 pub mod mentions;

@@ -26,24 +26,37 @@
 //! diagrams.retain_rows(|row_key| rows.contains(row_key));
 //! ```
 
+// The renderer, rasterizer, cache and host need `merman` and `resvg`; the view and handler types
+// below are the contract of the document's hook and stay available without the feature, where
+// Mermaid fences render as ordinary source blocks.
+#[cfg(feature = "diagram")]
 pub mod adapter;
+#[cfg(feature = "diagram")]
 pub mod cache;
+#[cfg(feature = "diagram")]
 pub mod host;
+#[cfg(feature = "diagram")]
 pub mod media;
+#[cfg(feature = "diagram")]
 mod postprocess;
 
 use std::rc::Rc;
 use vespertine::{AnyElement, App, SharedString, Window};
 use vespertine_theme::document::DocumentTheme;
 
+#[cfg(feature = "diagram")]
 pub use adapter::{
     COMPLEXITY_LIMIT, DiagramRenderer, Family, MAX_LINES, MAX_SOURCE_BYTES, MAX_SVG_BYTES,
     MAX_TOKENS, MermanRenderer, OUTPUT_LIMIT, Palette, PaletteTokens, RENDER_PANIC, check_limits,
     count_tokens, detect_family, plate_color, render, render_with,
 };
+#[cfg(feature = "diagram")]
 pub use cache::{DiagramCache, Job, Lookup, MAX_BYTES, MAX_ENTRIES, Status, Update, row_key};
+#[cfg(feature = "diagram")]
 pub use host::DiagramHost;
+#[cfg(feature = "diagram")]
 pub use media::{DiagramMedia, View};
+#[cfg(feature = "diagram")]
 pub use postprocess::{DEFAULT_GRID_STROKE, restyle};
 
 /// What a document shows for a diagram fence.
