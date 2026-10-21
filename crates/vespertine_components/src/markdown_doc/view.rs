@@ -8,6 +8,7 @@ use super::render::render_blocks;
 use super::tree::{Block, source_line};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use vespertine::{
     App, Div, ElementId, InteractiveElement, Interactivity, IntoElement, ParentElement, RenderOnce,
     SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
@@ -32,6 +33,17 @@ struct Inner {
     /// Revision counter: bumped on every change, so views can tell a theme or paint change from
     /// a content change.
     revision: u64,
+    key: DocumentKey,
+}
+
+/// A row key unique to one document: the default row key of its views.
+struct DocumentKey(SharedString);
+
+impl Default for DocumentKey {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(format!("md{}", NEXT.fetch_add(1, Ordering::Relaxed)).into())
+    }
 }
 
 impl Inner {
@@ -222,9 +234,9 @@ impl Markdown {
         self
     }
 
-    /// A stable prefix for element identifiers (defaults to the view id).
+    /// A stable prefix for element identifiers (defaults to a key unique to the document).
     pub fn row_key(mut self, key: impl Into<SharedString>) -> Self {
-        self.options.row_key = key.into();
+        self.options.row_key = Some(key.into());
         self
     }
 
@@ -279,6 +291,9 @@ impl RenderOnce for Markdown {
         let theme = self.options.theme.clone();
         let (blocks, generations) = document.display_blocks(self.options.streaming);
         let mut options = self.options.clone();
+        if options.row_key.is_none() {
+            options.row_key = Some(document.inner.borrow().key.0.clone());
+        }
         options.cache = Some(document.flatten_cache());
         options.generations = generations;
         let elements = render_blocks(&blocks, 0, &options, window, cx);

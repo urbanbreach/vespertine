@@ -371,7 +371,7 @@ fn a7_a_drag_survives_rows_leaving_paint() {
                     .skip(cell.get())
                     .map(|(index, source)| {
                         let mut options = MarkdownOptions::default();
-                        options.row_key = format!("row{index}").into();
+                        options.row_key = Some(format!("row{index}").into());
                         Markdown::new(format!("md{index}"), *source).options(options)
                     }),
             )
@@ -396,6 +396,23 @@ fn a7_a_drag_survives_rows_leaving_paint() {
     );
     host.mouse_up(80., 54., 0, "").unwrap();
     host.paint_frame();
+}
+
+#[test]
+fn a7_a_drag_selects_across_documents_with_default_keys() {
+    require_backend!();
+    let second = MarkdownDocument::from_source("beta text");
+    let mut host = host(400., 200., move || {
+        div()
+            .p(px(10.))
+            .flex()
+            .flex_col()
+            .child(Markdown::new("first", "alpha text"))
+            .child(Markdown::document("second", second.clone()))
+            .into_any_element()
+    });
+    let text = docs_support::drag(&mut host, (11., 20.), (300., 43.));
+    assert_eq!(text.as_deref(), Some("alpha text\nbeta text"));
 }
 
 fn service_text(host: &mut TestHost) -> Option<String> {
@@ -686,7 +703,7 @@ fn mermaid_host(view: impl Fn() -> DiagramView + 'static, frames: Log<String>) -
             frames.borrow_mut().push(frame.to_owned());
             view.borrow_mut().take().unwrap_or(DiagramView::Source)
         }));
-        options.row_key = "row7".into();
+        options.row_key = Some("row7".into());
         doc("intro\n\n```Mermaid\ngraph TD\n  A-->B\n```\n", options)
     })
 }

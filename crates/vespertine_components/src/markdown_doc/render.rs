@@ -28,6 +28,8 @@ pub struct Ctx<'a> {
     pub top: usize,
     /// Whether this is the last top-level block (the streaming fade applies to it).
     pub last: bool,
+    /// The row key (the view fills an absent one with its document's key).
+    row_key: SharedString,
     elem: Cell<usize>,
 }
 
@@ -38,6 +40,7 @@ impl<'a> Ctx<'a> {
             opts,
             top,
             last,
+            row_key: opts.row_key.clone().unwrap_or_default(),
             elem: Cell::new(0),
         }
     }
@@ -110,11 +113,11 @@ impl<'a> Ctx<'a> {
     }
 
     fn name(&self, elem: usize, kind: &str) -> SharedString {
-        format!("{}-{}-{}-{kind}", self.opts.row_key, self.top, elem).into()
+        format!("{}-{}-{}-{kind}", self.row_key, self.top, elem).into()
     }
 
     fn key(&self, elem: usize, sub: u32) -> RunKey {
-        RunKey::new((self.opts.row_key.clone(), self.top, elem), sub)
+        RunKey::new((self.row_key.clone(), self.top, elem), sub)
     }
 }
 
@@ -301,7 +304,7 @@ fn paragraph(
         let mut pending: Vec<Run> = Vec::new();
         for run in runs {
             if let Some(image) = &run.image {
-                let key = format!("{}-{}-image-{}", ctx.opts.row_key, ctx.top, ctx.elem.get());
+                let key = format!("{}-{}-image-{}", ctx.row_key, ctx.top, ctx.elem.get());
                 if let Some(element) = resolver(image, &key, theme, window, cx) {
                     ctx.next();
                     if !pending.is_empty() {
@@ -533,14 +536,14 @@ fn code_block(info: &str, code: &str, ctx: &Ctx, window: &mut Window, cx: &mut A
     };
     let mut view = DiagramView::Source;
     if let Some(handler) = &diagram {
-        let frame = format!("{}-mermaid-{}", options.row_key, top);
+        let frame = format!("{}-mermaid-{}", ctx.row_key, top);
         view = handler(code, &frame, &theme, window, cx);
     }
 
     let mut card = CodeCard::new(id, top, code)
         .language(language.clone())
         .theme(theme.clone())
-        .key_owner((options.row_key.clone(), top, elem));
+        .key_owner((ctx.row_key.clone(), top, elem));
     let ui = options.code.ui.get(&top);
     if let Some(ui) = ui
         && let Some(scroll) = &ui.scroll
@@ -648,7 +651,7 @@ fn display_math(
     CodeCard::new(ctx.name(elem, "math-code"), ctx.top, source)
         .label(language)
         .theme(theme)
-        .key_owner((ctx.opts.row_key.clone(), ctx.top, elem))
+        .key_owner((ctx.row_key.clone(), ctx.top, elem))
         .into_any_element()
 }
 

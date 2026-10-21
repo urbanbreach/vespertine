@@ -72,8 +72,9 @@ pub struct CodeOptions {
 pub struct MarkdownOptions {
     /// The theme.
     pub theme: DocumentTheme,
-    /// A stable prefix for element identifiers.
-    pub row_key: SharedString,
+    /// A stable prefix for element identifiers. `None` (the default) uses a key unique to the
+    /// rendered document, so documents sharing a text root keep distinct selection keys.
+    pub row_key: Option<SharedString>,
     /// Link routing and policy.
     pub link_options: LinkOptions,
     /// Task options.
@@ -101,7 +102,7 @@ impl Default for MarkdownOptions {
     fn default() -> Self {
         Self {
             theme: DocumentTheme::dark(),
-            row_key: "md".into(),
+            row_key: None,
             link_options: LinkOptions::default(),
             task: None,
             media: MediaOptions::default(),
