@@ -16,7 +16,7 @@ use vespertine::{
     StyleRefinement, Styled, Window, canvas, div, px,
 };
 use vespertine_richtext::syntax::{
-    HighlightCache, HighlightedDocument, HighlighterAdapter, LanguageHint,
+    HighlightCache, HighlightedDocument, LanguageHint, RetainedHighlight,
 };
 use vespertine_richtext::{CodeLine, RichText, RunKey};
 use vespertine_theme::document::DocumentTheme;
@@ -70,12 +70,19 @@ enum Highlight {
     Document(Option<Arc<HighlightedDocument>>),
 }
 
+/// The highlight a cache-backed block keeps across frames, so unchanged code is not looked up
+/// (and hashed) again on every render (TXT-007 R17).
+struct RetainedBlockHighlight {
+    cache: Arc<HighlightCache>,
+    retained: RetainedHighlight,
+}
+
 /// The code block host. Construct with [`CodeBlock::new`].
 #[derive(IntoElement)]
 pub struct CodeBlock {
     id: ElementId,
     root: Stateful<Div>,
-    code: String,
+    code: Arc<str>,
     language: Option<String>,
     path: Option<String>,
     show_line_numbers: bool,
@@ -101,7 +108,7 @@ impl CodeBlock {
         Self {
             root: div().id(id.clone()),
             id,
-            code: normalize(code.as_ref()),
+            code: Arc::from(normalize(code.as_ref())),
             language: None,
             path: None,
             show_line_numbers: false,
@@ -270,7 +277,25 @@ impl RenderOnce for CodeBlock {
         };
         let document = match &self.highlight {
             Highlight::Document(document) => document.clone(),
-            Highlight::Cache(cache) => cache.document_for(&self.code, hint),
+            Highlight::Cache(cache) => {
+                let state = window.use_keyed_state((self.id.clone(), "code-highlight"), cx, {
+                    let cache = cache.clone();
+                    move |_, _| RetainedBlockHighlight {
+                        cache,
+                        retained: RetainedHighlight::new(),
+                    }
+                });
+                state.update(cx, |state, _| {
+                    if !Arc::ptr_eq(&state.cache, cache) {
+                        state.cache = cache.clone();
+                        state.retained = RetainedHighlight::new();
+                    }
+                    state
+                        .retained
+                        .resolve(&state.cache, &self.code, hint)
+                        .cloned()
+                })
+            }
         };
         let font = typography.font();
         let line_height = typography.line_height;

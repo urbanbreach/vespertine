@@ -1,12 +1,18 @@
 //! Line model of the code block host (CMP-014 R1, R6): normalization, splitting and the analytic
 //! gutter width.
 
+use std::borrow::Cow;
 use std::ops::Range;
 use vespertine_theme::document::DocumentMetrics;
 
-/// Normalizes line endings: every CRLF becomes LF (a lone CR is kept).
-pub fn normalize(code: &str) -> String {
-    code.replace("\r\n", "\n")
+/// Normalizes line endings: every CRLF becomes LF (a lone CR is kept). Code without CRLF is
+/// borrowed as is.
+pub fn normalize(code: &str) -> Cow<'_, str> {
+    if code.contains("\r\n") {
+        Cow::Owned(code.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(code)
+    }
 }
 
 /// Byte ranges (without terminators) of the logical lines of already normalized code: split on

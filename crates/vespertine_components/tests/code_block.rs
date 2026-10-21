@@ -110,6 +110,36 @@ fn a2_empty_code_is_one_row_and_height_is_lines_times_line_height() {
 }
 
 #[test]
+fn r5_an_unchanged_block_reuses_its_highlight_without_a_cache_lookup() {
+    require_backend!();
+    let cache = std::sync::Arc::new(vespertine_richtext::syntax::HighlightCache::new());
+    let code = std::rc::Rc::new(std::cell::RefCell::new("fn alpha() {}".to_owned()));
+    let (shared, source) = (cache.clone(), code.clone());
+    let mut host = host(300., 200., move || {
+        div()
+            .child(mono(
+                CodeBlock::new("code", source.borrow().as_str())
+                    .language("rust")
+                    .highlight_cache(shared.clone()),
+            ))
+            .into_any_element()
+    });
+    let lookups = || {
+        let stats = cache.stats();
+        stats.hits + stats.misses
+    };
+    host.paint_frame();
+    let first = lookups();
+    assert!(first >= 1);
+    host.paint_frame();
+    host.paint_frame();
+    assert_eq!(lookups(), first, "unchanged frames do not look up again");
+    *code.borrow_mut() = "fn beta() {}".to_owned();
+    host.paint_frame();
+    assert_eq!(lookups(), first + 1, "new code resolves once");
+}
+
+#[test]
 fn a2_line_numbers_are_chrome_excluded_from_copy_and_search() {
     require_backend!();
     let lines: Log<LineBounds> = log();
