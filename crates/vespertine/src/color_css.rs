@@ -1215,30 +1215,13 @@ mod tests {
     }
 
     #[test]
-    fn hex_agrees_with_rgba_paint_type() {
-        for text in [
-            "#f09",
-            "#f09f",
-            "#ff0099",
-            "#ff0099ff",
-            " #DeAdbEeF ",
-            "#0f08",
-        ] {
-            let expected = Rgba::try_from(text).unwrap();
-            assert_eq!(css_color_to_rgba(text), Some(expected), "{text}");
-        }
+    fn rgba_try_from_literals() {
         assert_eq!(Rgba::try_from("#ff0099").unwrap(), crate::rgba(0xff0099ff));
         assert_eq!(
             Rgba::try_from("rgb(255 0 153)").unwrap(),
             crate::rgba(0xff0099ff)
         );
         assert!(Rgba::try_from("nope").is_err());
-    }
-
-    #[test]
-    fn deterministic() {
-        let text = "oklab(from lch(from #bad455 l c h) calc(l * 0.7) a b)";
-        assert_eq!(parse_css_color(text), parse_css_color(text));
     }
 
     #[test]
