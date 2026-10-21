@@ -164,7 +164,8 @@ pub fn default_window_bounds(display: &DisplayWorkArea) -> Bounds<Pixels> {
 /// 3. Width and height are limited to the display's work area, then raised to `min_size` where
 ///    set. The minimum size takes precedence over the work area when they conflict.
 /// 4. A rectangle that does not intersect the work area is centered on it. Otherwise it is
-///    translated by the minimum amount that places it inside the work area on each axis.
+///    translated by the minimum amount that places it inside the work area on each axis. An
+///    axis longer than the work area starts at the work area's start.
 ///
 /// Without saved geometry, [`default_window_bounds`] on the primary display is returned.
 /// With no displays at all, the saved bounds (or the default size at the origin) are returned
@@ -239,33 +240,35 @@ pub fn restore_window_geometry(
         saved.bounds.origin
     };
     let candidate = Bounds::new(origin, clamped);
-
-    let final_bounds = if !candidate.intersects(&work_area) {
-        Bounds::centered_at(work_area.center(), clamped)
+    let origin = if candidate.intersects(&work_area) {
+        candidate.origin
     } else {
-        let shift = |start: f32, length: f32, low: f32, high: f32| {
-            if start < low {
-                low
-            } else if start + length > high {
-                high - length
-            } else {
-                start
-            }
-        };
-        let x = shift(
-            f32::from(candidate.origin.x),
-            width,
-            f32::from(work_area.origin.x),
-            f32::from(work_area.origin.x) + f32::from(work_area.size.width),
-        );
-        let y = shift(
-            f32::from(candidate.origin.y),
-            height,
-            f32::from(work_area.origin.y),
-            f32::from(work_area.origin.y) + f32::from(work_area.size.height),
-        );
-        Bounds::new(point(px(x), px(y)), clamped)
+        Bounds::centered_at(work_area.center(), clamped).origin
     };
+
+    // Translates by the minimum amount that keeps the window inside the work area. An axis
+    // longer than the work area (a minimum size larger than it) starts at the work area's start,
+    // so the titlebar stays reachable.
+    let shift = |start: f32, length: f32, low: f32, high: f32| {
+        if start + length > high {
+            (high - length).max(low)
+        } else {
+            start.max(low)
+        }
+    };
+    let x = shift(
+        f32::from(origin.x),
+        width,
+        f32::from(work_area.origin.x),
+        f32::from(work_area.origin.x) + f32::from(work_area.size.width),
+    );
+    let y = shift(
+        f32::from(origin.y),
+        height,
+        f32::from(work_area.origin.y),
+        f32::from(work_area.origin.y) + f32::from(work_area.size.height),
+    );
+    let final_bounds = Bounds::new(point(px(x), px(y)), clamped);
 
     RestoredWindowGeometry {
         display_id: Some(display.id),
@@ -478,6 +481,23 @@ mod tests {
             restored.window_bounds,
             WindowBounds::Windowed(bounds(100.0, 100.0, 400.0, 300.0))
         );
+    }
+
+    #[test]
+    fn minimum_size_larger_than_the_work_area_keeps_the_top_left_reachable() {
+        let work_area = bounds(0.0, 40.0, 1920.0, 1040.0);
+        let displays = [display(1, Some(1), work_area)];
+        let min_size = Some(size(px(400.0), px(1200.0)));
+        // Inside the work area, and entirely outside it (where the rectangle is centered).
+        for (origin, x) in [((100.0, 100.0), 100.0), ((5000.0, 5000.0), 760.0)] {
+            let saved = windowed(bounds(origin.0, origin.1, 400.0, 300.0), None);
+            let restored = restore_window_geometry(Some(&saved), &displays, None, min_size);
+            assert_eq!(
+                restored.window_bounds,
+                WindowBounds::Windowed(bounds(x, 40.0, 400.0, 1200.0)),
+                "saved origin {origin:?}"
+            );
+        }
     }
 
     #[test]
