@@ -586,8 +586,9 @@ impl Fingerprint {
         if self.has_half {
             self.mix((u64::from(self.half) << 32) | 0xFFFF_FFFF);
         }
-        let tags = self.tags | (u64::from(self.tag_bits) << 58);
-        self.mix(tags);
+        // The count is its own word: the last tag word may use all 64 bits.
+        self.mix(self.tags);
+        self.mix(u64::from(self.tag_bits));
         self.state
     }
 }

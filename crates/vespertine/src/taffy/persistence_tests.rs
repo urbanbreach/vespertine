@@ -1091,6 +1091,44 @@ fn a_matching_fingerprint_with_equal_styles_is_not_a_collision(cx: &mut TestAppC
 }
 
 #[vespertine::test]
+fn styles_differing_only_in_the_final_tag_word_are_both_written(cx: &mut TestAppContext) {
+    // The tag stream of this style ends in a partial word whose high bits carry the grid
+    // row template; changing its minimum size must still read as a different style.
+    let grid = |min_size| Style {
+        display: crate::Display::Grid,
+        margin: Edges {
+            top: Length::Auto,
+            right: Length::Auto,
+            bottom: Length::Auto,
+            left: Length::Auto,
+        },
+        padding: Edges {
+            top: DefiniteLength::Fraction(0.0),
+            right: DefiniteLength::Fraction(0.0),
+            ..Edges::default()
+        },
+        grid_rows: Some(crate::GridTemplate {
+            repeat: 1,
+            min_size,
+        }),
+        ..Style::default()
+    };
+    let window = cx.add_empty_window();
+    draw(
+        window,
+        100.,
+        Node::new(grid(crate::GridTemplateMinSize::Zero)).id("a"),
+    );
+    reset(window);
+    draw(
+        window,
+        100.,
+        Node::new(grid(crate::GridTemplateMinSize::MaxContent)).id("a"),
+    );
+    assert_eq!(stats(window).style_writes, 1);
+}
+
+#[vespertine::test]
 fn retained_nodes_survive_a_frame_without_reconstruction(cx: &mut TestAppContext) {
     let window = cx.add_empty_window();
     let log = new_log();
