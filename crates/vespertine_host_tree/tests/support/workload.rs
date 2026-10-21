@@ -289,14 +289,14 @@ pub struct VerifyReport {
     pub final_interned: usize,
 }
 
-/// Runs the workload on a [`HostTree`](crate::HostTree) and on the straightforward
-/// [`ReferenceTree`](crate::reference::ReferenceTree) in lockstep and checks that both
+/// Runs the workload on a [`HostTree`](vespertine_host_tree::HostTree) and on the straightforward
+/// [`ReferenceTree`](super::reference::ReferenceTree) in lockstep and checks that both
 /// produce the identical tree after the mount, after the resend frames and after the
 /// destroy frames, and identical destroyed identities for every destroy frame.
 pub fn verify_against_reference(hosts: u64) -> Result<VerifyReport, String> {
     let workload = Workload::new(hosts);
-    let mut tree = crate::HostTree::new();
-    let mut reference = crate::reference::ReferenceTree::new();
+    let mut tree = vespertine_host_tree::HostTree::new();
+    let mut reference = super::reference::ReferenceTree::new();
     let mut report = VerifyReport {
         resend_redraw_commits: 0,
         destroyed: 0,

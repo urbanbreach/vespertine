@@ -10,8 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::Value;
 
-use crate::style::content_eq;
-use crate::{HostTree, MAX_ID};
+use vespertine_host_tree::{HostTree, MAX_ID, content_eq};
 
 struct RefNode {
     element_type: String,

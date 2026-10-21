@@ -1,13 +1,15 @@
 //! PRF-015: compact retained state and no-op commit suppression.
 
 mod common;
+#[path = "support/mod.rs"]
+mod support;
 
 use std::fmt::Write;
 use std::sync::Arc;
 
 use common::{apply, apply_raw, fingerprint};
 use serde_json::json;
-use vespertine_host_tree::workload::{self, Workload};
+use support::workload::{self, Workload};
 use vespertine_host_tree::{HostTree, TreeOptions};
 
 fn base_tree() -> HostTree {

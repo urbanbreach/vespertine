@@ -9,11 +9,8 @@
 //! revision changes.
 
 mod decode;
-pub mod instrument;
-pub mod reference;
 mod style;
 mod tree;
-pub mod workload;
 
 pub use decode::MAX_ID;
 pub use style::{

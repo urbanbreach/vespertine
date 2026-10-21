@@ -2,12 +2,14 @@
 //! duplicate generic value tree, and builds the same tree as the reference build.
 
 mod common;
+#[path = "support/mod.rs"]
+mod support;
 
 use std::fmt::Write;
 
+use support::instrument::{self, AllocStats, CountingAllocator};
+use support::reference::ReferenceTree;
 use vespertine_host_tree::HostTree;
-use vespertine_host_tree::instrument::{self, AllocStats, CountingAllocator};
-use vespertine_host_tree::reference::ReferenceTree;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;

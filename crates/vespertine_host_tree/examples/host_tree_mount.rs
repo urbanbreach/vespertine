@@ -18,12 +18,15 @@
 
 use std::time::Instant;
 
-use vespertine_host_tree::HostTree;
-use vespertine_host_tree::instrument::{self, AllocStats, CountingAllocator};
-use vespertine_host_tree::reference::ReferenceTree;
-use vespertine_host_tree::workload::{
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::instrument::{self, AllocStats, CountingAllocator};
+use support::reference::ReferenceTree;
+use support::workload::{
     FULL_HOSTS, LAST_DESTROY_FRAME, LAST_RESEND_FRAME, Workload, verify_against_reference,
 };
+use vespertine_host_tree::HostTree;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
