@@ -180,11 +180,12 @@ pub const FLOATING_PROPERTIES: &[&str] = &[
     "deferred",
 ];
 
+/// A JSON number that is finite as an `f32` pixel value (larger magnitudes overflow to infinity).
 fn finite_number(value: Option<&Value>) -> Option<f32> {
     value
         .and_then(Value::as_f64)
-        .filter(|number| number.is_finite())
         .map(|number| number as f32)
+        .filter(|number| number.is_finite())
 }
 
 impl FloatingOptions {
@@ -907,6 +908,35 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(options, expected);
+    }
+
+    #[test]
+    fn numbers_beyond_the_pixel_range_fall_back_to_defaults() {
+        let options = FloatingOptions::from_properties(&props(json!({
+            "position": { "x": 1e300, "y": 20 },
+            "gap": -1e300,
+            "offset": { "x": 1e300, "y": 4 },
+            "snapMargin": 1e300,
+        })));
+        assert_eq!(
+            options,
+            FloatingOptions {
+                offset: point(px(0.), px(4.)),
+                ..Default::default()
+            }
+        );
+        let bounds = place_floating(
+            &options,
+            trigger(),
+            None,
+            size(px(100.), px(50.)),
+            size(px(320.), px(200.)),
+            px(0.),
+        );
+        assert_eq!(
+            bounds,
+            Bounds::new(point(px(100.), px(94.)), size(px(100.), px(50.)))
+        );
     }
 
     #[test]
