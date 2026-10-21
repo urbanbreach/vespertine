@@ -2611,6 +2611,12 @@ impl PlatformInputHandler {
         self.handler.accepts_text_input(window, cx)
     }
 
+    /// Whether the handler holds marked (uncommitted input-method) text, queried while the
+    /// window is already being updated.
+    pub(crate) fn has_marked_text(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        self.handler.marked_text_range(window, cx).is_some()
+    }
+
     #[allow(dead_code)]
     pub fn query_accepts_text_input(&mut self) -> bool {
         self.cx

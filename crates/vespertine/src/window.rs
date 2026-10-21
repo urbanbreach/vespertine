@@ -7217,6 +7217,23 @@ impl Window {
         }
     }
 
+    /// Whether the focused text input holds an input-method composition (marked text) that has
+    /// not been committed yet. While it does, keys such as Escape belong to the composition, so
+    /// global key handlers can leave them to the input.
+    pub fn focused_input_is_composing(&mut self, cx: &mut App) -> bool {
+        let Some(mut input_handler) = self.platform_window.take_input_handler() else {
+            return false;
+        };
+        // The platform keeps the last registered handler until another frame registers one, so
+        // a handler that belongs to an element which lost focus does not count.
+        let focused = input_handler
+            .focus_id()
+            .is_some_and(|id| self.focus == Some(id));
+        let composing = focused && input_handler.has_marked_text(self, cx);
+        self.platform_window.set_input_handler(input_handler);
+        composing
+    }
+
     /// Forwards the focused input handler's [`TextInputConfiguration`] to the
     /// platform window when it differs from the last forwarded value. With no
     /// input handler the default configuration applies, so a field's
