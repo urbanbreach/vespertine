@@ -216,14 +216,17 @@ FEATURES.md lists the tests and examples that verify each capability; nothing ru
 automatically, so run the tests and examples of the area you changed.
 
 The JavaScript packages are an npm workspace (one install, one lockfile; run `npm install` in `packages/`
-once for their third-party dependencies):
+once for their third-party dependencies). The package tests use the offscreen test renderer behind
+`@vespertine/host/testing` and the React and Solid `testing` helpers, which only an addon built with
+`--test-host` (cargo feature `offscreen` of `vespertine_js_node`) contains; a production addon leaves it
+and the test support of the framework out:
 
 ```sh
 cd packages/vespertine-host
-node scripts/build-native.mjs --release   # builds the Node-API addon, installs native/vespertine_js.node
+node scripts/build-native.mjs --release --test-host   # builds the addon, installs native/vespertine_js.node
 npm test
 cd ../vespertine-react && npm test        # likewise for the other packages
-cargo test -p vespertine_js_node          # builds the addon and runs the package tests under Node and Bun
+cargo test -p vespertine_js_node          # builds the addon (with the test renderer) and runs the package tests under Node and Bun
 ```
 
 ## Running examples
