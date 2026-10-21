@@ -393,6 +393,9 @@ pub struct StyledText {
     text: SharedString,
     runs: Option<Vec<TextRun>>,
     delayed_highlights: Option<Vec<(Range<usize>, HighlightStyle)>>,
+    /// The style [`Self::with_default_highlights`] applies its highlights to, in place of the
+    /// inherited one. The runs are built at layout, where the rem size resolves letter spacing.
+    default_style: Option<Box<TextStyle>>,
     delayed_font_family_overrides: Option<Vec<(Range<usize>, SharedString)>>,
     layout: TextLayout,
 }
@@ -404,6 +407,7 @@ impl StyledText {
             text: text.into(),
             runs: None,
             delayed_highlights: None,
+            default_style: None,
             delayed_font_family_overrides: None,
             layout: TextLayout::default(),
         }
@@ -425,8 +429,9 @@ impl StyledText {
             self.delayed_highlights.is_none(),
             "Can't use `with_default_highlights` and `with_highlights`"
         );
-        let runs = Self::compute_runs(&self.text, default_style, highlights);
-        self.with_runs(runs)
+        self.default_style = Some(Box::new(default_style.clone()));
+        self.delayed_highlights = Some(highlights.into_iter().collect());
+        self
     }
 
     /// Set the styling attributes for the given text, as well as
@@ -436,7 +441,7 @@ impl StyledText {
         highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
     ) -> Self {
         debug_assert!(
-            self.runs.is_none(),
+            self.runs.is_none() && self.default_style.is_none(),
             "Can't use `with_highlights` and `with_default_highlights`"
         );
         self.delayed_highlights = Some(
@@ -454,6 +459,7 @@ impl StyledText {
     fn compute_runs(
         text: &str,
         default_style: &TextStyle,
+        rem_size: Pixels,
         highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
     ) -> Vec<TextRun> {
         let mut runs = Vec::new();
@@ -461,14 +467,14 @@ impl StyledText {
         for (range, highlight) in highlights {
             if ix < range.start {
                 debug_assert!(text.is_char_boundary(range.start));
-                runs.push(default_style.to_run(range.start - ix));
+                runs.push(default_style.to_run(range.start - ix, rem_size));
             }
             debug_assert!(text.is_char_boundary(range.end));
-            runs.push(default_style.to_highlighted_run(highlight, range.len()));
+            runs.push(default_style.to_highlighted_run(highlight, range.len(), rem_size));
             ix = range.end;
         }
         if ix < text.len() {
-            runs.push(default_style.to_run(text.len() - ix));
+            runs.push(default_style.to_run(text.len() - ix, rem_size));
         }
         runs
     }
@@ -555,14 +561,24 @@ impl Element for StyledText {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let font_family_overrides = self.delayed_font_family_overrides.take();
+        let rem_size = window.rem_size();
         let mut runs = self.runs.take();
+        if let Some(default_style) = self.default_style.take() {
+            let highlights = self.delayed_highlights.take().unwrap_or_default();
+            runs = Some(Self::compute_runs(
+                &self.text,
+                &default_style,
+                rem_size,
+                highlights,
+            ));
+        }
         if let Some(overrides) = &font_family_overrides {
             let delayed = self.delayed_highlights.take();
             let runs = runs.get_or_insert_with(|| match delayed {
                 Some(highlights) => {
-                    Self::compute_runs(&self.text, &window.text_style(), highlights)
+                    Self::compute_runs(&self.text, &window.text_style(), rem_size, highlights)
                 }
-                None => vec![window.text_style().to_run(self.text.len())],
+                None => vec![window.text_style().to_run(self.text.len(), rem_size)],
             });
             Self::apply_font_family_overrides(runs, overrides);
         }
@@ -753,6 +769,8 @@ struct TextMeasure {
     /// The font set the measurement resolves fonts against: fonts added later can change which
     /// face a run resolves to.
     font_generation: usize,
+    /// Resolves the style's letter spacing.
+    rem_size: Pixels,
 }
 
 fn same_font_fields(a: &TextStyle, b: &TextStyle) -> bool {
@@ -761,6 +779,7 @@ fn same_font_fields(a: &TextStyle, b: &TextStyle) -> bool {
         && a.font_fallbacks == b.font_fallbacks
         && a.font_weight == b.font_weight
         && a.font_style == b.font_style
+        && a.letter_spacing == b.letter_spacing
 }
 
 fn same_decoration_fields(a: &TextStyle, b: &TextStyle) -> bool {
@@ -781,10 +800,15 @@ impl TextMeasure {
     /// The runs to shape: the explicit list, or the single run of plain text.
     fn run_list(&self) -> Cow<'_, [TextRun]> {
         match &self.runs {
-            RunSource::Plain => Cow::Owned(vec![self.style.to_run(self.text.len())]),
+            RunSource::Plain => Cow::Owned(vec![self.style.to_run(self.text.len(), self.rem_size)]),
             RunSource::Explicit(runs) => Cow::Borrowed(runs),
             RunSource::Highlights { highlights, runs } => Cow::Borrowed(runs.get_or_init(|| {
-                StyledText::compute_runs(&self.text, &self.style, highlights.iter().cloned())
+                StyledText::compute_runs(
+                    &self.text,
+                    &self.style,
+                    self.rem_size,
+                    highlights.iter().cloned(),
+                )
             })),
         }
     }
@@ -797,6 +821,7 @@ impl TextMeasure {
         if self.font_size != previous.font_size
             || self.font_generation != previous.font_generation
             || self.line_height != previous.line_height
+            || self.rem_size != previous.rem_size
             || self.style.white_space != previous.style.white_space
             || self.style.line_clamp != previous.style.line_clamp
             || self.style.text_overflow != previous.style.text_overflow
@@ -847,7 +872,10 @@ impl TextMeasure {
                     match (new_runs.next(), old_runs.next()) {
                         (None, None) => break,
                         (Some(new), Some(old)) => {
-                            if new.len != old.len || new.font != old.font {
+                            if new.len != old.len
+                                || new.font != old.font
+                                || new.letter_spacing != old.letter_spacing
+                            {
                                 return Relation::Different;
                             }
                             // Shaping splits font runs wherever a decoration changes, so the
@@ -1126,6 +1154,7 @@ impl TextLayout {
             font_size,
             line_height,
             font_generation: window.text_system().font_generation(),
+            rem_size,
         };
         window.request_measured_layout_with(Default::default(), measure, cx)
     }

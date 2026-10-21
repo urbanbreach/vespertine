@@ -563,6 +563,7 @@ impl RetainedHost for SelectableRun {
                         background_color: None,
                         underline: None,
                         strikethrough: None,
+                        letter_spacing: Pixels::ZERO,
                     }],
                     None,
                 );

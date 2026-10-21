@@ -670,6 +670,7 @@ pub fn widest_line(model: &Model, file: usize, font: &Font, size: f32, window: &
                 background_color: None,
                 underline: None,
                 strikethrough: None,
+                letter_spacing: px(0.),
             };
             let layout = text_system.layout_line(text, size_px, &[run], None);
             shaped = f32::from(layout.width);

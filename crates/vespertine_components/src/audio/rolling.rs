@@ -394,6 +394,7 @@ fn shape(window: &Window, text: &SharedString, font_size: Pixels, color: Hsla) -
         underline: None,
         background_color: None,
         color,
+        letter_spacing: Pixels::ZERO,
     };
     let system = window.text_system();
     system.shape_line(text.clone(), font_size, &[run], None)

@@ -297,6 +297,7 @@ fn shape(window: &Window, text: &str, size_px: f32, color: Hsla) -> vespertine::
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: Pixels::ZERO,
     };
     window.text_system().shape_line(
         SharedString::from(text.to_string()),

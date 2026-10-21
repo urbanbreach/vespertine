@@ -493,6 +493,7 @@ mod production {
             color: hsla(0.0, 0.0, 1.0, 1.0),
             font,
             len: text.len(),
+            letter_spacing: Pixels::ZERO,
         };
         let line = window
             .text_system()

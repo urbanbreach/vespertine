@@ -167,6 +167,7 @@ fn register_and_verify(face: usize, window: &Window, cx: &mut App) -> FaceStatus
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: Pixels::ZERO,
         };
         let layout = window_text.layout_line(text, px(16.0), &[run], None);
         layout

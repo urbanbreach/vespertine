@@ -116,6 +116,7 @@ pub fn run_for(base: &BaseStyle, style: SpanStyle, len: usize, marked: bool) -> 
             color: Some(base.color),
             thickness: px(1.0),
         }),
+        letter_spacing: px(0.),
     }
 }
 

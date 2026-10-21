@@ -108,6 +108,7 @@ smallvec.workspace = true
 stacksafe = { workspace = true, optional = true }
 strum.workspace = true
 thin-vec.workspace = true
+unicode-segmentation.workspace = true
 vespertine_sum_tree.workspace = true
 taffy = { workspace = true, features = [
     "std",

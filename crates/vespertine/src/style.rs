@@ -621,6 +621,12 @@ pub struct TextStyle {
     /// The line height to use, in pixels or fractions
     pub line_height: DefiniteLength,
 
+    /// Extra advance after every grapheme cluster except the last one of each shaped line, in
+    /// pixels or rems, or as a fraction of the font size. Zero by default; negative values
+    /// tighten the text. Wrapped rows keep the spacing after their last cluster: only the end of
+    /// a line between hard line breaks drops it.
+    pub letter_spacing: DefiniteLength,
+
     /// The font weight, e.g. bold
     pub font_weight: FontWeight,
 
@@ -667,6 +673,7 @@ impl Default for TextStyle {
             font_fallbacks: None,
             font_size: rems(1.).into(),
             line_height: phi(),
+            letter_spacing: px(0.).into(),
             font_weight: FontWeight::default(),
             font_style: FontStyle::default(),
             background_color: None,
@@ -718,7 +725,12 @@ impl TextStyle {
 
     /// The run [`TextStyle::highlight`] followed by [`TextStyle::to_run`] would produce, without
     /// cloning the style.
-    pub(crate) fn to_highlighted_run(&self, highlight: HighlightStyle, len: usize) -> TextRun {
+    pub(crate) fn to_highlighted_run(
+        &self,
+        highlight: HighlightStyle,
+        len: usize,
+        rem_size: Pixels,
+    ) -> TextRun {
         let mut color = self.color;
         if let Some(highlight_color) = highlight.color {
             color = color.blend(highlight_color);
@@ -739,6 +751,7 @@ impl TextStyle {
             background_color: highlight.background_color.or(self.background_color),
             underline: highlight.underline.or(self.underline),
             strikethrough: highlight.strikethrough.or(self.strikethrough),
+            letter_spacing: self.letter_spacing_in_pixels(rem_size),
         }
     }
 
@@ -758,8 +771,14 @@ impl TextStyle {
         self.line_height.to_pixels(self.font_size, rem_size).round()
     }
 
+    /// Returns the letter spacing in pixels; a fraction is relative to the font size.
+    pub fn letter_spacing_in_pixels(&self, rem_size: Pixels) -> Pixels {
+        self.letter_spacing.to_pixels(self.font_size, rem_size)
+    }
+
     /// Convert this text style into a [`TextRun`], for the given length of the text.
-    pub fn to_run(&self, len: usize) -> TextRun {
+    /// `rem_size` resolves the letter spacing.
+    pub fn to_run(&self, len: usize, rem_size: Pixels) -> TextRun {
         TextRun {
             len,
             font: Font {
@@ -773,6 +792,7 @@ impl TextStyle {
             background_color: self.background_color,
             underline: self.underline,
             strikethrough: self.strikethrough,
+            letter_spacing: self.letter_spacing_in_pixels(rem_size),
         }
     }
 }

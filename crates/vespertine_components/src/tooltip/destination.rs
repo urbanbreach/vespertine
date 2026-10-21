@@ -61,6 +61,7 @@ pub fn destination_card(
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: Pixels::ZERO,
     };
     // Hover surfaces are measured with minimum-content constraints, so the natural width comes
     // from the destination itself (the break opportunities are zero-width).

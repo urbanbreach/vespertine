@@ -924,6 +924,7 @@ fn prepare_layer(
             font: font.clone(),
             strikethrough: None,
             background_color: None,
+            letter_spacing: Pixels::ZERO,
         };
         let shaper = window.text_system();
         let line = shaper.shape_line(label, typography.size, &[run], None);

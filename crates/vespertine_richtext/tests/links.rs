@@ -226,6 +226,7 @@ fn a_shortened_link_copies_and_navigates_as_its_source() {
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: px(0.),
         };
         let start = source.find("https").unwrap();
         let end = start + URL.len();

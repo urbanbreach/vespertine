@@ -167,6 +167,7 @@ impl RenderOnce for ActivityPill {
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: Pixels::ZERO,
         };
         let system = window.text_system().clone();
         let line = system.shape_line(label, font_size, &[run], None);
@@ -254,6 +255,7 @@ impl RenderOnce for CornerCountBadge {
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: Pixels::ZERO,
         };
         let system = window.text_system().clone();
         let line = system.shape_line(label, font_size, &[run], None);

@@ -796,6 +796,14 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the letter spacing of this element and its children: extra advance after every
+    /// grapheme cluster except the last one of each line, in pixels or rems, or as a fraction of
+    /// the font size (`relative(0.05)`). Negative values tighten the text.
+    fn letter_spacing(mut self, spacing: impl Into<DefiniteLength>) -> Self {
+        self.text_style().letter_spacing = Some(spacing.into());
+        self
+    }
+
     /// Sets the opacity of this element and its children.
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);

@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+use unicode_segmentation::UnicodeSegmentation as _;
 use vespertine_collections::FxHashMap;
 
 use super::{LineWrapper, shape_cache::ShapeCaches};
@@ -735,6 +736,7 @@ impl LineLayoutCache {
         text: Text,
         font_size: Pixels,
         runs: &[FontRun],
+        spacing: &[LetterSpacingRun],
         wrap_width: Option<Pixels>,
         max_lines: Option<usize>,
     ) -> Arc<WrappedLineLayout>
@@ -747,6 +749,7 @@ impl LineLayoutCache {
             text: text.as_ref(),
             font_size,
             runs,
+            spacing,
             wrap_width,
             force_width: None,
         } as &dyn AsCacheKeyRef;
@@ -767,7 +770,8 @@ impl LineLayoutCache {
         } else {
             drop(current_frame);
             let text = SharedString::from(text);
-            let unwrapped_layout = self.layout_line::<&SharedString>(&text, font_size, runs, None);
+            let unwrapped_layout =
+                self.layout_line::<&SharedString>(&text, font_size, runs, spacing, None);
             let wrap_boundaries = if let Some(wrap_width) = wrap_width {
                 unwrapped_layout.compute_wrap_boundaries(text.as_ref(), wrap_width, max_lines)
             } else {
@@ -782,6 +786,7 @@ impl LineLayoutCache {
                 text,
                 font_size,
                 runs: SmallVec::from(runs),
+                spacing: SmallVec::from(spacing),
                 wrap_width,
                 force_width: None,
             });
@@ -801,6 +806,7 @@ impl LineLayoutCache {
         text: Text,
         font_size: Pixels,
         runs: &[FontRun],
+        spacing: &[LetterSpacingRun],
         force_width: Option<Pixels>,
     ) -> Arc<LineLayout>
     where
@@ -812,6 +818,7 @@ impl LineLayoutCache {
             text: text.as_ref(),
             font_size,
             runs,
+            spacing,
             wrap_width: None,
             force_width,
         } as &dyn AsCacheKeyRef;
@@ -829,6 +836,7 @@ impl LineLayoutCache {
         } else {
             let text = SharedString::from(text);
             let mut layout = self.shape_line(font_generation, &text, font_size, runs);
+            apply_letter_spacing(&mut layout, &text, spacing);
 
             if let Some(force_width) = force_width {
                 apply_force_width_to_layout(&mut layout, force_width);
@@ -838,6 +846,7 @@ impl LineLayoutCache {
                 text,
                 font_size,
                 runs: SmallVec::from(runs),
+                spacing: SmallVec::from(spacing),
                 wrap_width: None,
                 force_width,
             });
@@ -862,6 +871,7 @@ impl LineLayoutCache {
         text_len: usize,
         font_size: Pixels,
         runs: &[FontRun],
+        spacing: &[LetterSpacingRun],
         force_width: Option<Pixels>,
     ) -> Option<Arc<LineLayout>> {
         let _font_generation = self.clear_if_font_generation_changed();
@@ -870,6 +880,7 @@ impl LineLayoutCache {
             text_len,
             font_size,
             runs,
+            spacing,
             wrap_width: None,
             force_width,
         };
@@ -881,6 +892,7 @@ impl LineLayoutCache {
                 text_len: key.text_len,
                 font_size: key.font_size,
                 runs: key.runs.as_slice(),
+                spacing: key.spacing.as_slice(),
                 wrap_width: key.wrap_width,
                 force_width: key.force_width,
             } == key_ref
@@ -895,6 +907,7 @@ impl LineLayoutCache {
                 text_len: key.text_len,
                 font_size: key.font_size,
                 runs: key.runs.as_slice(),
+                spacing: key.spacing.as_slice(),
                 wrap_width: key.wrap_width,
                 force_width: key.force_width,
             } == key_ref
@@ -919,6 +932,7 @@ impl LineLayoutCache {
         text_len: usize,
         font_size: Pixels,
         runs: &[FontRun],
+        spacing: &[LetterSpacingRun],
         force_width: Option<Pixels>,
         materialize_text: impl FnOnce() -> SharedString,
     ) -> Arc<LineLayout> {
@@ -928,6 +942,7 @@ impl LineLayoutCache {
             text_len,
             font_size,
             runs,
+            spacing,
             wrap_width: None,
             force_width,
         };
@@ -940,6 +955,7 @@ impl LineLayoutCache {
                 text_len: key.text_len,
                 font_size: key.font_size,
                 runs: key.runs.as_slice(),
+                spacing: key.spacing.as_slice(),
                 wrap_width: key.wrap_width,
                 force_width: key.force_width,
             } == key_ref
@@ -961,6 +977,7 @@ impl LineLayoutCache {
                     text_len: key.text_len,
                     font_size: key.font_size,
                     runs: key.runs.as_slice(),
+                    spacing: key.spacing.as_slice(),
                     wrap_width: key.wrap_width,
                     force_width: key.force_width,
                 } == key_ref
@@ -978,6 +995,7 @@ impl LineLayoutCache {
 
         let text = materialize_text();
         let mut layout = self.shape_line(font_generation, &text, font_size, runs);
+        apply_letter_spacing(&mut layout, &text, spacing);
 
         if let Some(force_width) = force_width {
             apply_force_width_to_layout(&mut layout, force_width);
@@ -988,6 +1006,7 @@ impl LineLayoutCache {
             text_len,
             font_size,
             runs: SmallVec::from(runs),
+            spacing: SmallVec::from(spacing),
             wrap_width: None,
             force_width,
         });
@@ -1082,6 +1101,49 @@ pub struct FontRun {
     pub font_id: FontId,
 }
 
+/// A run of text with one letter spacing: the extra advance after each of its grapheme
+/// clusters. Lines without spacing pass no runs at all.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct LetterSpacingRun {
+    pub(crate) len: usize,
+    pub(crate) spacing: Pixels,
+}
+
+/// Adds letter spacing to a shaped line. Walking the glyphs in visual order, every change of
+/// grapheme cluster moves the glyphs from there on by the spacing of the cluster left behind,
+/// so each cluster but the last is followed by its run's spacing and the line grows by their
+/// sum. Glyphs of one cluster (a base and its marks, a ligature's parts) keep their offsets.
+fn apply_letter_spacing(layout: &mut LineLayout, text: &str, spacing: &[LetterSpacingRun]) {
+    if spacing.is_empty() {
+        return;
+    }
+    let starts: SmallVec<[usize; 64]> = text.grapheme_indices(true).map(|(ix, _)| ix).collect();
+    let cluster_of = |index: usize| starts.partition_point(|&start| start <= index) - 1;
+    let spacing_at = |index: usize| {
+        let mut end = 0;
+        spacing
+            .iter()
+            .find(|run| {
+                end += run.len;
+                index < end
+            })
+            .map_or(Pixels::ZERO, |run| run.spacing)
+    };
+    let mut offset = Pixels::ZERO;
+    let mut previous: Option<usize> = None;
+    for glyph in layout.runs.iter_mut().flat_map(|run| run.glyphs.iter_mut()) {
+        let cluster = cluster_of(glyph.index);
+        if let Some(previous) = previous
+            && previous != cluster
+        {
+            offset += spacing_at(starts[previous]);
+        }
+        previous = Some(cluster);
+        glyph.position.x += offset;
+    }
+    layout.width += offset;
+}
+
 trait AsCacheKeyRef {
     fn as_cache_key_ref(&self) -> CacheKeyRef<'_>;
 }
@@ -1091,6 +1153,7 @@ struct CacheKey {
     text: SharedString,
     font_size: Pixels,
     runs: SmallVec<[FontRun; 1]>,
+    spacing: SmallVec<[LetterSpacingRun; 1]>,
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -1100,6 +1163,7 @@ struct CacheKeyRef<'a> {
     text: &'a str,
     font_size: Pixels,
     runs: &'a [FontRun],
+    spacing: &'a [LetterSpacingRun],
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -1110,6 +1174,7 @@ struct HashedCacheKey {
     text_len: usize,
     font_size: Pixels,
     runs: SmallVec<[FontRun; 1]>,
+    spacing: SmallVec<[LetterSpacingRun; 1]>,
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -1120,6 +1185,7 @@ struct HashedCacheKeyRef<'a> {
     text_len: usize,
     font_size: Pixels,
     runs: &'a [FontRun],
+    spacing: &'a [LetterSpacingRun],
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
 }
@@ -1136,6 +1202,7 @@ impl PartialEq for HashedCacheKey {
             && self.text_len == other.text_len
             && self.font_size == other.font_size
             && self.runs.as_slice() == other.runs.as_slice()
+            && self.spacing.as_slice() == other.spacing.as_slice()
             && self.wrap_width == other.wrap_width
             && self.force_width == other.force_width
     }
@@ -1149,6 +1216,7 @@ impl Hash for HashedCacheKey {
         self.text_len.hash(state);
         self.font_size.hash(state);
         self.runs.as_slice().hash(state);
+        self.spacing.as_slice().hash(state);
         self.wrap_width.hash(state);
         self.force_width.hash(state);
     }
@@ -1160,6 +1228,7 @@ impl PartialEq for HashedCacheKeyRef<'_> {
             && self.text_len == other.text_len
             && self.font_size == other.font_size
             && self.runs == other.runs
+            && self.spacing == other.spacing
             && self.wrap_width == other.wrap_width
             && self.force_width == other.force_width
     }
@@ -1173,6 +1242,7 @@ impl Hash for HashedCacheKeyRef<'_> {
         self.text_len.hash(state);
         self.font_size.hash(state);
         self.runs.hash(state);
+        self.spacing.hash(state);
         self.wrap_width.hash(state);
         self.force_width.hash(state);
     }
@@ -1192,6 +1262,7 @@ impl AsCacheKeyRef for CacheKey {
             text: &self.text,
             font_size: self.font_size,
             runs: self.runs.as_slice(),
+            spacing: self.spacing.as_slice(),
             wrap_width: self.wrap_width,
             force_width: self.force_width,
         }

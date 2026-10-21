@@ -34,5 +34,6 @@ pub fn plain_run(text: &str, font: Font, color: Hsla) -> TextRun {
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: Default::default(),
     }
 }

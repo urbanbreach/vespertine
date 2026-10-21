@@ -90,6 +90,7 @@ fn measure(cx: &mut HeadlessAppContext, window: AnyWindowHandle) -> Widths {
                 background_color: None,
                 underline: None,
                 strikethrough: None,
+                letter_spacing: px(0.),
             };
             let line =
                 window

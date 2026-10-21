@@ -34,6 +34,7 @@ pub fn text_run(len: usize) -> TextRun {
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: px(0.),
     }
 }
 

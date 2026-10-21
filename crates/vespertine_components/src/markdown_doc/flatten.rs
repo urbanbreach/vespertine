@@ -174,6 +174,7 @@ pub fn flatten(
                 thickness: px(1.),
                 color: Some(muted),
             }),
+            letter_spacing: Pixels::ZERO,
         });
         if is_code {
             match pills.last_mut() {

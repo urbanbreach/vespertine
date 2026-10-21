@@ -21,6 +21,7 @@ fn run(len: usize, f: impl FnOnce(&mut TextRun)) -> TextRun {
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: px(0.),
     };
     f(&mut run);
     run

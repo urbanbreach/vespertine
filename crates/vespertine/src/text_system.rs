@@ -867,6 +867,7 @@ impl WindowTextSystem {
             .peekable();
         let mut last_resolved: Option<(&Font, FontId)> = None;
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+        let mut spacing_runs = SmallVec::<[LetterSpacingRun; 4]>::new();
 
         let mut lines = SmallVec::new();
         let mut max_wrap_lines = line_clamp;
@@ -874,6 +875,7 @@ impl WindowTextSystem {
 
         let mut process_line = |line_text: SharedString, line_start, line_end| {
             font_runs.clear();
+            spacing_runs.clear();
 
             let mut decoration_runs = <Vec<DecorationRun>>::with_capacity(4);
             let mut run_start = line_start;
@@ -924,7 +926,7 @@ impl WindowTextSystem {
                         font_id,
                     });
                 }
-
+                push_spacing(&mut spacing_runs, run_len_within_line, run.letter_spacing);
                 // Preserve the remainder of the run for the next line
                 *remaining -= run_len_within_line;
                 if *remaining == 0 {
@@ -937,6 +939,7 @@ impl WindowTextSystem {
                 &line_text,
                 font_size,
                 &font_runs,
+                spacing_of(&spacing_runs),
                 wrap_width,
                 max_wrap_lines.map(|max| max.saturating_sub(wrapped_lines)),
             );
@@ -1010,6 +1013,7 @@ impl WindowTextSystem {
     ) -> Arc<LineLayout> {
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
         font_runs.clear();
+        let mut spacing_runs = SmallVec::<[LetterSpacingRun; 4]>::new();
 
         // Font runs depend only on the font: paint-only attributes never split them (PRF-017 R3).
         for run in runs.iter() {
@@ -1024,12 +1028,14 @@ impl WindowTextSystem {
                     font_id,
                 });
             }
+            push_spacing(&mut spacing_runs, run.len, run.letter_spacing);
         }
 
         let layout = self.line_layout_cache.layout_line(
             &SharedString::new(text),
             font_size,
             &font_runs,
+            spacing_of(&spacing_runs),
             force_width,
         );
 
@@ -1050,6 +1056,7 @@ impl WindowTextSystem {
                     len: buffer.len(),
                     font_id,
                 }],
+                &[],
                 None,
             )
             .width
@@ -1078,6 +1085,7 @@ impl WindowTextSystem {
     ) -> Option<Arc<LineLayout>> {
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
         font_runs.clear();
+        let mut spacing_runs = SmallVec::<[LetterSpacingRun; 4]>::new();
 
         // Font runs depend only on the font: paint-only attributes never split them (PRF-017 R3).
         for run in runs.iter() {
@@ -1092,6 +1100,7 @@ impl WindowTextSystem {
                     font_id,
                 });
             }
+            push_spacing(&mut spacing_runs, run.len, run.letter_spacing);
         }
 
         let layout = self.line_layout_cache.try_layout_line_by_hash(
@@ -1099,6 +1108,7 @@ impl WindowTextSystem {
             text_len,
             font_size,
             &font_runs,
+            spacing_of(&spacing_runs),
             force_width,
         );
 
@@ -1126,6 +1136,7 @@ impl WindowTextSystem {
     ) -> Arc<LineLayout> {
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
         font_runs.clear();
+        let mut spacing_runs = SmallVec::<[LetterSpacingRun; 4]>::new();
 
         // Font runs depend only on the font: paint-only attributes never split them (PRF-017 R3).
         for run in runs.iter() {
@@ -1140,6 +1151,7 @@ impl WindowTextSystem {
                     font_id,
                 });
             }
+            push_spacing(&mut spacing_runs, run.len, run.letter_spacing);
         }
 
         let layout = self.line_layout_cache.layout_line_by_hash(
@@ -1147,6 +1159,7 @@ impl WindowTextSystem {
             text_len,
             font_size,
             &font_runs,
+            spacing_of(&spacing_runs),
             force_width,
             materialize_text,
         );
@@ -1154,6 +1167,25 @@ impl WindowTextSystem {
         self.font_runs_pool.lock().push(font_runs);
 
         layout
+    }
+}
+
+/// Appends `len` bytes with letter spacing `spacing` to `runs`, extending the last run when its
+/// spacing is the same.
+fn push_spacing(runs: &mut SmallVec<[LetterSpacingRun; 4]>, len: usize, spacing: Pixels) {
+    match runs.last_mut() {
+        Some(last) if last.spacing == spacing => last.len += len,
+        _ => runs.push(LetterSpacingRun { len, spacing }),
+    }
+}
+
+/// The spacing runs a line is laid out with: none when nothing in the line is spaced, so that
+/// unspaced lines share one cache key and skip the spacing pass.
+fn spacing_of(runs: &[LetterSpacingRun]) -> &[LetterSpacingRun] {
+    if runs.iter().all(|run| run.spacing == Pixels::ZERO) {
+        &[]
+    } else {
+        runs
     }
 }
 
@@ -1314,6 +1346,9 @@ pub struct TextRun {
     pub underline: Option<UnderlineStyle>,
     /// The strikethrough style (if any)
     pub strikethrough: Option<StrikethroughStyle>,
+    /// Extra advance after every grapheme cluster of this run, except the last cluster of the
+    /// line (see [`TextStyle::letter_spacing`](crate::TextStyle::letter_spacing)).
+    pub letter_spacing: Pixels,
 }
 
 #[cfg(all(target_os = "macos", test))]

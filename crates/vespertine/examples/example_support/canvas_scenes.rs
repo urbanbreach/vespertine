@@ -31,6 +31,7 @@ fn paint_text(text: &str, origin: Point<Pixels>, window: &mut Window, cx: &mut A
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: Pixels::ZERO,
     };
     let line = window.text_system().shape_line(
         SharedString::from(text.to_string()),

@@ -467,6 +467,7 @@ fn paint_command(command: &Command, bounds: Bounds<Pixels>, window: &mut Window,
                 color: color.unwrap_or(style.color),
                 font,
                 len: line_text.len(),
+                letter_spacing: px(0.),
             };
             let line = window
                 .text_system()

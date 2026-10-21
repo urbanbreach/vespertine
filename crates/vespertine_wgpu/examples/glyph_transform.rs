@@ -67,6 +67,7 @@ impl Render for Scene {
                             color,
                             font: font("Noto Sans"),
                             len: 1,
+                            letter_spacing: px(0.),
                         };
                         let line = window.text_system().shape_line(
                             "A".into(),

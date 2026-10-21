@@ -3093,7 +3093,7 @@ impl Interactivity {
                     .shape_text(
                         element_id.into(),
                         FONT_SIZE,
-                        &[window.text_style().to_run(str_len)],
+                        &[window.text_style().to_run(str_len, window.rem_size())],
                         None,
                         None,
                     )

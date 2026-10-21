@@ -243,6 +243,7 @@ impl Element for AreaElement {
                         background_color: None,
                         underline: None,
                         strikethrough: None,
+                        letter_spacing: Pixels::ZERO,
                     };
                     let line = window.text_system().shape_line(
                         SharedString::from(placeholder.replace('\n', " ")),

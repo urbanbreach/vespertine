@@ -852,6 +852,7 @@ fn text_runs(text: &str, font: &Font, color: Hsla, marked: Option<&Range<usize>>
         background_color: None,
         strikethrough: None,
         underline: None,
+        letter_spacing: Pixels::ZERO,
     };
     let runs: Vec<TextRun> = match marked {
         Some(marked) if marked.end <= text.len() => vec![

@@ -411,6 +411,7 @@ impl RenderOnce for CodeBlock {
                                 background_color: None,
                                 underline: None,
                                 strikethrough: None,
+                                letter_spacing: px(0.),
                             }]),
                     );
                 cell = if wrap {

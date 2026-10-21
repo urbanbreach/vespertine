@@ -1379,3 +1379,161 @@ mod appended {
         assert_eq!(f.system.shape_stats().appended_lines, 0);
     }
 }
+
+/// TXT-010: letter spacing after every grapheme cluster but the last of each line.
+mod letter_spacing {
+    use super::*;
+    use crate::{DefiniteLength, TextStyle, relative, rems};
+
+    fn setup() -> (Arc<TestShaper>, WindowTextSystem, Font) {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let window = WindowTextSystem::new(text_system(&shaper));
+        (shaper, window, font("Test Sans"))
+    }
+
+    fn spaced(text: &str, font: &Font, spacing: f32) -> TextRun {
+        TextRun {
+            letter_spacing: px(spacing),
+            ..run_of(text, font)
+        }
+    }
+
+    fn xs(layout: &LineLayout) -> Vec<f32> {
+        layout.runs[0]
+            .glyphs
+            .iter()
+            .map(|glyph| f32::from(glyph.position.x))
+            .collect()
+    }
+
+    #[test]
+    fn positive_and_negative_spacing_move_glyphs_and_width() {
+        let (_, window, font) = setup();
+        // Every letter advances 8 px at 16 px.
+        let plain = window.layout_line("abc", px(16.), &[spaced("abc", &font, 0.)], None);
+        assert_eq!((xs(&plain), plain.width), (vec![0., 8., 16.], px(24.)));
+        let wide = window.layout_line("abc", px(16.), &[spaced("abc", &font, 2.)], None);
+        assert_eq!((xs(&wide), wide.width), (vec![0., 10., 20.], px(28.)));
+        let tight = window.layout_line("abc", px(16.), &[spaced("abc", &font, -1.)], None);
+        assert_eq!((xs(&tight), tight.width), (vec![0., 7., 14.], px(22.)));
+    }
+
+    #[test]
+    fn spacing_follows_clusters_and_runs() {
+        let (_, window, font) = setup();
+        // `e` and its combining acute are one cluster: the mark keeps its offset.
+        let text = "e\u{301}xy";
+        let layout = window.layout_line(text, px(16.), &[spaced(text, &font, 2.)], None);
+        assert_eq!(xs(&layout), vec![0., 8., 18., 28.]);
+        // Each cluster takes the spacing of its own run.
+        let runs = [spaced("ab", &font, 1.), spaced("cd", &font, 3.)];
+        let layout = window.layout_line("abcd", px(16.), &runs, None);
+        assert_eq!(xs(&layout), vec![0., 9., 18., 29.]);
+        assert_eq!(layout.width, px(37.));
+    }
+
+    #[test]
+    fn fraction_and_absolute_spacing_resolve_against_font_and_rem_size() {
+        let style = TextStyle {
+            font_size: px(20.).into(),
+            letter_spacing: relative(0.1),
+            ..Default::default()
+        };
+        assert_eq!(style.to_run(3, px(16.)).letter_spacing, px(2.));
+        let style = TextStyle {
+            letter_spacing: DefiniteLength::from(rems(0.25)),
+            ..style
+        };
+        assert_eq!(style.to_run(3, px(16.)).letter_spacing, px(4.));
+        assert_eq!(
+            TextStyle::default().to_run(3, px(16.)).letter_spacing,
+            px(0.)
+        );
+    }
+
+    #[test]
+    fn wrap_boundary_moves_with_spacing() {
+        let (_, window, font) = setup();
+        let text = SharedString::from("aa bb cc dd");
+        let boundary = |spacing: f32| {
+            let lines = window
+                .shape_text(
+                    text.clone(),
+                    px(16.),
+                    &[spaced(&text, &font, spacing)],
+                    Some(px(80.)),
+                    None,
+                )
+                .unwrap();
+            let layout = &lines[0].layout;
+            let boundary = layout.wrap_boundaries()[0];
+            layout.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+        };
+        // At 8 px per character "aa bb cc " (72 px) fits in 80 px; at 12 px "cc" ends at 94 px.
+        assert_eq!(boundary(0.), 9);
+        assert_eq!(boundary(4.), 6);
+    }
+
+    #[test]
+    fn index_and_x_round_trip_on_spaced_lines() {
+        let (_, window, font) = setup();
+        let text = "lorem ipsum";
+        for spacing in [3., -2.] {
+            let layout = window.layout_line(text, px(16.), &[spaced(text, &font, spacing)], None);
+            for index in 0..text.len() {
+                let x = layout.x_for_index(index);
+                assert_eq!(layout.index_for_x(x), Some(index), "{spacing}: {index}");
+                assert_eq!(layout.closest_index_for_x(x), index, "{spacing}: {index}");
+            }
+            assert_eq!(layout.x_for_index(text.len()), layout.width);
+        }
+    }
+
+    #[test]
+    fn identical_text_with_different_spacing_never_shares_a_layout() {
+        let (shaper, window, font) = setup();
+        let text = "alpha";
+        let plain = window.layout_line(text, px(16.), &[spaced(text, &font, 0.)], None);
+        let wide = window.layout_line(text, px(16.), &[spaced(text, &font, 2.)], None);
+        let tight = window.layout_line(text, px(16.), &[spaced(text, &font, -2.)], None);
+        assert_eq!(
+            (plain.width, wide.width, tight.width),
+            (px(40.), px(48.), px(32.))
+        );
+        // The unspaced shape is shared: spacing is applied on top of one platform shaping.
+        assert_eq!(shaper.layout_calls.load(Ordering::SeqCst), 1);
+        let again = window.layout_line(text, px(16.), &[spaced(text, &font, 2.)], None);
+        assert!(Arc::ptr_eq(&wide, &again));
+    }
+}
+
+mod letter_spacing_truncation {
+    use super::*;
+
+    #[test]
+    fn truncation_counts_letter_spacing() {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let font = font("Test Sans");
+        let text = SharedString::from("lorem ipsum dolor sit amet");
+        let truncated = |spacing: f32| {
+            let runs = [TextRun {
+                letter_spacing: px(spacing),
+                ..run_of(&text, &font)
+            }];
+            let (line, runs) = system.line_wrapper(font.clone(), px(16.)).truncate_line(
+                text.clone(),
+                px(100.),
+                "…",
+                &runs,
+                TruncateFrom::End,
+            );
+            assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), line.len());
+            line
+        };
+        // Within 100 px: at 8 px per character "lorem ipsum" and the ellipsis fit (96 px); at
+        // 12 px seven characters and the ellipsis do (96 px).
+        assert_eq!(truncated(0.).as_ref(), "lorem ipsum…");
+        assert_eq!(truncated(4.).as_ref(), "lorem i…");
+    }
+}

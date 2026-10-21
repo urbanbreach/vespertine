@@ -43,6 +43,7 @@ fn width(cx: &mut HeadlessAppContext, window: AnyWindowHandle) -> f32 {
             color: black(),
             font: font(FAMILY),
             len: TEXT.len(),
+            letter_spacing: px(0.),
         };
         let line = window
             .text_system()

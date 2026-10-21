@@ -171,6 +171,7 @@ fn cell_run(cell: &CellSnapshot, theme: &TerminalTheme, base: &Font) -> TextRun 
             wavy: false,
         }),
         strikethrough: None,
+        letter_spacing: Pixels::ZERO,
     }
 }
 

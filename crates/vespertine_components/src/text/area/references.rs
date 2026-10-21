@@ -642,6 +642,7 @@ impl TextArea {
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: Pixels::ZERO,
         };
         let shaped = window.text_system().shape_line(
             vespertine::SharedString::from(text.clone()),

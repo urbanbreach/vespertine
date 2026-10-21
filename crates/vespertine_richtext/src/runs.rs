@@ -141,6 +141,7 @@ pub fn plain_run(len: usize, font: &Font, color: Hsla) -> TextRun {
         strikethrough: None,
         underline: None,
         background_color: None,
+        letter_spacing: Pixels::ZERO,
     }
 }
 

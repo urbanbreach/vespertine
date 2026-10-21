@@ -627,7 +627,7 @@ impl Element for RollingLabel {
         let rem_size = window.rem_size();
         let font_size = style.font_size.to_pixels(rem_size);
         let line_height = style.line_height_in_pixels(rem_size);
-        let run = style.to_run(self.text.len());
+        let run = style.to_run(self.text.len(), rem_size);
         let color = style.color;
         let text_system = window.text_system().clone();
         let line = text_system.shape_line(self.text.clone(), font_size, &[run], None);
@@ -642,7 +642,7 @@ impl Element for RollingLabel {
         let mut roll = None;
         let mut width = f32::from(line.width);
         if let Observation::Roll { old, started } = observation {
-            let old_run = style.to_run(old.len());
+            let old_run = style.to_run(old.len(), rem_size);
             let old_line = text_system.shape_line(old, font_size, &[old_run], None);
             let plan = RollPlan::new(
                 (

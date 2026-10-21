@@ -61,6 +61,7 @@ fn text_run(run: Run) -> TextRun {
             thickness: px(1.),
             color: Some(color),
         }),
+        letter_spacing: px(0.),
     }
 }
 

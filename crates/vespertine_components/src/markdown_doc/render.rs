@@ -634,6 +634,7 @@ fn display_math(
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: Pixels::ZERO,
         };
         let block = DisplayBlock::new(
             ctx.name(elem, "math"),

@@ -32,6 +32,8 @@ pub struct LineWrapper {
     pub(crate) font_size: Pixels,
     cached_ascii_char_widths: [Option<Pixels>; 128],
     cached_other_char_widths: HashMap<char, Pixels>,
+    /// Letter spacing added to every character width while a truncation runs; zero otherwise.
+    letter_spacing: Pixels,
 }
 
 impl LineWrapper {
@@ -45,6 +47,7 @@ impl LineWrapper {
             font_size,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
+            letter_spacing: Pixels::ZERO,
         }
     }
 
@@ -297,7 +300,24 @@ impl LineWrapper {
     }
 
     /// Truncate a line of text to the given width with this wrapper's font and font size.
+    /// Character widths include the letter spacing of the first run.
     pub fn truncate_line<'a>(
+        &mut self,
+        line: SharedString,
+        truncate_width: Pixels,
+        truncation_affix: &str,
+        runs: &'a [TextRun],
+        truncate_from: TruncateFrom,
+    ) -> (SharedString, Cow<'a, [TextRun]>) {
+        let spacing = runs.first().map_or(Pixels::ZERO, |run| run.letter_spacing);
+        let previous = std::mem::replace(&mut self.letter_spacing, spacing);
+        let result =
+            self.truncate_line_spaced(line, truncate_width, truncation_affix, runs, truncate_from);
+        self.letter_spacing = previous;
+        result
+    }
+
+    fn truncate_line_spaced<'a>(
         &mut self,
         line: SharedString,
         truncate_width: Pixels,
@@ -360,6 +380,29 @@ impl LineWrapper {
     ///
     /// For `max_lines == 1`, this delegates to `truncate_line`.
     pub fn truncate_wrapped_line<'a>(
+        &mut self,
+        text: SharedString,
+        wrap_width: Pixels,
+        max_lines: usize,
+        truncation_affix: &str,
+        runs: &'a [TextRun],
+        truncate_from: TruncateFrom,
+    ) -> (SharedString, Cow<'a, [TextRun]>) {
+        let spacing = runs.first().map_or(Pixels::ZERO, |run| run.letter_spacing);
+        let previous = std::mem::replace(&mut self.letter_spacing, spacing);
+        let result = self.truncate_wrapped_line_spaced(
+            text,
+            wrap_width,
+            max_lines,
+            truncation_affix,
+            runs,
+            truncate_from,
+        );
+        self.letter_spacing = previous;
+        result
+    }
+
+    fn truncate_wrapped_line_spaced<'a>(
         &mut self,
         text: SharedString,
         wrap_width: Pixels,
@@ -643,8 +686,14 @@ impl LineWrapper {
         )
     }
 
+    /// The advance of `c` plus the letter spacing of the truncation in progress.
     #[inline(always)]
     fn width_for_char(&mut self, c: char) -> Pixels {
+        self.advance_for_char(c) + self.letter_spacing
+    }
+
+    #[inline(always)]
+    fn advance_for_char(&mut self, c: char) -> Pixels {
         if (c as u32) < 128 {
             if let Some(cached_width) = self.cached_ascii_char_widths[c as usize] {
                 cached_width

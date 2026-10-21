@@ -97,6 +97,7 @@ pub fn canvas_plate(left: f32, top: f32) -> AnyElement {
                 color: rgb(0xF0F1F3).into(),
                 font: style.font(),
                 len: "Plate".len(),
+                letter_spacing: px(0.),
             };
             let line = window
                 .text_system()
