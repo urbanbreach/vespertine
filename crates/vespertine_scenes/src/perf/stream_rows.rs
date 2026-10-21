@@ -1,5 +1,5 @@
-//! PERF-STREAM shapes its growing live message incrementally (shaping of appended text). Tests
-//! only; the scene itself is `perf/stream.rs`.
+//! PERF-STREAM row accounting: the scene's list replays its rows and only the live message is
+//! built per frame (PRF-005 R1). Tests only; the scene itself is `perf/stream.rs`.
 
 #[cfg(test)]
 mod tests {
@@ -23,40 +23,6 @@ mod tests {
             window.request_animation_frame();
             element
         }
-    }
-
-    /// Frames of the scene's first live message and the splice that appends the next one.
-    const FRAMES: usize = 250;
-
-    #[vespertine::test]
-    fn the_live_message_is_shaped_incrementally_every_frame(_cx: &mut TestAppContext) {
-        let mut cx = TestAppContext::build_with_text_system(
-            TestDispatcher::new(0),
-            None,
-            Arc::new(vespertine_wgpu::CosmicTextSystem::new("Noto Sans")),
-        );
-        let handle: AnyWindowHandle = cx
-            .add_window(|_, _| Harness {
-                scene: StreamScene::new(),
-                frame: 0,
-            })
-            .into();
-        for _ in 0..FRAMES {
-            cx.update_window(handle, |_, window, cx| {
-                window.simulate_next_frame(cx);
-            })
-            .unwrap();
-            cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
-                .unwrap();
-        }
-        // The validation of the incremental shaping never turns it off, and most frames shape
-        // only the new words of the live message.
-        let shaping = cx.update(|cx| cx.text_system().shape_stats());
-        assert!(!shaping.append_disabled, "{shaping:?}");
-        assert!(
-            shaping.appended_lines as usize >= FRAMES / 2,
-            "most frames shape only the new words: {shaping:?}"
-        );
     }
 
     /// The scene's list has no id, and still retains its rows: in steady state only the live

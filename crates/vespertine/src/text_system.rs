@@ -303,7 +303,7 @@ impl TextSystem {
     }
 
     /// Counters of the shaping caches of this text system (platform line shapes, recent-shape
-    /// hits, numeric synthesis). Test support only.
+    /// hits). Test support only.
     #[cfg(any(test, feature = "test-support"))]
     pub fn shape_stats(&self) -> ShapeStats {
         self.shape_caches.stats()
@@ -319,12 +319,6 @@ impl TextSystem {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_shaping_timing(&self, enabled: bool) {
         self.shape_caches.set_timing_enabled(enabled);
-    }
-
-    /// Enables or disables numeric shaping (PRF-013). Test support only.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn set_numeric_shaping_enabled(&self, enabled: bool) {
-        self.shape_caches.set_numeric_enabled(enabled);
     }
 
     /// The current font generation; advances once per successful [`Self::add_fonts`].

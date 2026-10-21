@@ -12,10 +12,7 @@ use std::{
 };
 use vespertine_collections::FxHashMap;
 
-use super::{
-    LineWrapper,
-    shape_cache::{NumericOutcome, ShapeCaches},
-};
+use super::{LineWrapper, shape_cache::ShapeCaches};
 
 /// A laid out and styled line of text
 #[derive(Default, Debug, Clone)]
@@ -460,7 +457,7 @@ pub(crate) struct LineLayoutCache {
     font_generation: Arc<AtomicUsize>,
     /// Records the generation represented by both frame caches.
     cached_font_generation: AtomicUsize,
-    /// Recent shapes and numeric shaping, shared with every window text system of the text system.
+    /// Recent shapes, shared with every window text system of the text system.
     shape_caches: Arc<ShapeCaches>,
 }
 
@@ -583,9 +580,8 @@ impl LineLayoutCache {
         }
     }
 
-    /// Shapes a line that missed the frame cache: recent shapes first, then numeric assembly,
-    /// then the extension of a shorter recent line, then the platform. No cache lock is held
-    /// while the platform shapes.
+    /// Shapes a line that missed the frame cache: recent shapes first, then the platform. No
+    /// cache lock is held while the platform shapes.
     fn shape_line(
         &self,
         font_generation: usize,
@@ -598,34 +594,7 @@ impl LineLayoutCache {
             return layout;
         }
         let layout = caches.record_shaped(|| {
-            match caches.numeric_layout(
-                self.platform_text_system.as_ref(),
-                font_generation,
-                text,
-                font_size,
-                runs,
-            ) {
-                NumericOutcome::Layout(layout) => layout,
-                NumericOutcome::Platform => match caches.append_layout(
-                    self.platform_text_system.as_ref(),
-                    font_generation,
-                    text,
-                    font_size,
-                    runs,
-                ) {
-                    Some(layout) => layout,
-                    None => {
-                        let layout = caches.platform_shape(
-                            self.platform_text_system.as_ref(),
-                            text,
-                            font_size,
-                            runs,
-                        );
-                        caches.append_track(font_generation, text, font_size, runs, &layout);
-                        layout
-                    }
-                },
-            }
+            caches.platform_shape(self.platform_text_system.as_ref(), text, font_size, runs)
         });
         caches.recent_insert(font_generation, text, font_size, runs, &layout);
         layout
