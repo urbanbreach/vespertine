@@ -111,20 +111,23 @@ fn is_period(ch: char) -> bool {
 }
 
 /// UAX #29 word segments with full stops split out of the segments that join letters across them
-/// ("foo.bar" is "foo", ".", "bar"): punctuation counts as words in word movement (R7).
+/// ("foo.bar" is "foo", ".", "bar"): punctuation counts as words in word movement (R7). A split
+/// full stop keeps the combining marks of its grapheme cluster.
 fn word_segments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let starts_with_period = |grapheme: &str| grapheme.chars().next().is_some_and(is_period);
     text.split_word_bound_indices()
-        .flat_map(|(start, segment)| {
+        .flat_map(move |(start, segment)| {
             let mut pieces: Vec<(usize, &str)> = Vec::new();
             if segment.chars().count() > 1 && segment.chars().any(is_period) {
                 let mut piece_start = 0;
-                for (index, ch) in segment.char_indices() {
-                    if is_period(ch) {
+                for (index, grapheme) in segment.grapheme_indices(true) {
+                    if starts_with_period(grapheme) {
                         if piece_start < index {
                             pieces.push((start + piece_start, &segment[piece_start..index]));
                         }
-                        pieces.push((start + index, &segment[index..index + ch.len_utf8()]));
-                        piece_start = index + ch.len_utf8();
+                        let end = index + grapheme.len();
+                        pieces.push((start + index, &segment[index..end]));
+                        piece_start = end;
                     }
                 }
                 if piece_start < segment.len() {
@@ -280,6 +283,17 @@ mod tests {
         assert_eq!(word_left(text, 0), 0);
         assert_eq!(word_left("   ", 3), 0);
         assert_eq!(word_right("   ", 0), 3);
+    }
+
+    #[test]
+    fn word_moves_keep_a_full_stop_with_its_combining_mark() {
+        let text = ".\u{301}foo";
+        assert_eq!(word_right(text, 0), 3);
+        assert_eq!(word_left(text, 3), 0);
+        assert_eq!(word_at(text, 0), 0..3);
+        let text = "foo.\u{301}bar";
+        assert_eq!(word_right(text, 3), 6);
+        assert_eq!(word_left(text, 6), 3);
     }
 
     #[test]
