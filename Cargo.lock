@@ -8181,18 +8181,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vespertine_residency"
-version = "0.1.0"
-dependencies = [
- "image",
- "smallvec",
- "vespertine",
- "vespertine_platform",
- "vespertine_richtext",
- "vespertine_wgpu",
-]
-
-[[package]]
 name = "vespertine_richtext"
 version = "0.1.0"
 dependencies = [
@@ -8223,7 +8211,6 @@ dependencies = [
  "vespertine",
  "vespertine_components",
  "vespertine_platform",
- "vespertine_residency",
  "vespertine_richtext",
  "vespertine_theme",
  "vespertine_wgpu",

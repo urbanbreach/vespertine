@@ -28,8 +28,6 @@ vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_wgpu.workspace = true
 vespertine_richtext.workspace = true
 vespertine_components.workspace = true
-vespertine_residency.workspace = true
-
 vespertine_theme.workspace = true
 serde_json.workspace = true
 inventory.workspace = true

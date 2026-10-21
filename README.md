@@ -45,8 +45,8 @@ with the tests and examples that verify each one. In summary:
 - Persistent incremental layout nodes (with a vendored taffy), incremental scene ordering,
   compact interaction storage, adaptive tiled scroll-content reuse, incremental virtual-list row
   replay, a translation-invariant tessellation cache, batched GPU uploads and render-pass reuse,
-  bounded renderer resources, carried text measurements, bounded shaping caches, in-place image
-  atlas updates, and incremental document and media residency budgets (`vespertine_residency`).
+  bounded renderer resources, carried text measurements, bounded shaping caches, and in-place
+  image atlas updates.
 - Demand-gated display frame delivery, shared parked animation clocks, and retained state that
   suppresses no-op commits.
 
@@ -156,7 +156,6 @@ Vespertine.
 | `vespertine_public_image_loader` | Restricted HTTPS client for images from untrusted content. |
 | `vespertine_refineable` | The `Refineable` trait (*upstream*). |
 | `vespertine_reqwest_client` | `reqwest`-based HTTP client (*upstream*). |
-| `vespertine_residency` | Incremental block documents, bounded derived-result caches, media residency budgets. |
 | `vespertine_richtext` | Shaped rich text, syntax coloration, selection, links, search washes. |
 | `vespertine_scenes` | Fidelity and performance scenes and the `vsp-scene-runner` binary. |
 | `vespertine_scheduler` | Task scheduler and executors (*upstream*). |
