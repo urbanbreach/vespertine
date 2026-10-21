@@ -1015,10 +1015,15 @@ impl EditCore {
         true
     }
 
-    /// `unmark_text`: ends the composition keeping the marked text as typed.
+    /// `unmark_text`: ends the composition keeping the marked text as typed. The platform may
+    /// have placed the caret inside a grapheme of the composed text; it snaps to a boundary (R6).
     pub fn unmark(&mut self) {
+        let composing = self.marked.is_some() || self.composition_base.is_some();
         self.marked = None;
         self.composition_base = None;
+        if composing {
+            self.set_selection(self.selection.clone(), self.reversed);
+        }
     }
 
     /// Drops the pre-composition snapshot when the composition ended without changing anything
@@ -1419,6 +1424,16 @@ mod tests {
         core.replace_and_mark(None, "", None);
         assert_eq!(core.text(), "abc");
         assert_eq!(core.undo_len(), 0);
+    }
+
+    #[test]
+    fn ending_a_composition_puts_the_caret_on_a_grapheme_boundary() {
+        let mut core = EditCore::new("", false);
+        core.replace_and_mark(None, "e\u{301}", Some(1..1));
+        core.unmark();
+        assert_eq!(core.selection(), 0..0);
+        core.delete_backward(0.0);
+        assert_eq!(core.text(), "e\u{301}", "no combining mark is orphaned");
     }
 
     #[test]
