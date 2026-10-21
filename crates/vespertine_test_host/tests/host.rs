@@ -878,6 +878,34 @@ fn dev_006_register_font_rejects_invalid_bytes_and_accepts_a_font() {
     }
 }
 
+/// A font family no host has installed before a test registers it.
+const LILEX: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
+
+#[test]
+fn dev_006_registered_font_resolves_in_the_window_text_system() {
+    require_backend!();
+    let mut host = TestHost::new(Some(50.0), Some(50.0)).unwrap();
+    let resolves = |host: &mut TestHost| {
+        let window = host.window();
+        host.app()
+            .update_window(window, |_, window, _| {
+                let text_system = window.text_system();
+                text_system.resolve_font(&vespertine::font("Lilex"))
+                    != text_system.resolve_font(&vespertine::font("Unregistered Alpha"))
+            })
+            .unwrap()
+    };
+    assert!(
+        !resolves(&mut host),
+        "the family falls back before it is registered"
+    );
+    host.register_font(LILEX.to_vec()).unwrap();
+    assert!(
+        resolves(&mut host),
+        "the window resolves the registered family"
+    );
+}
+
 fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(directory) {

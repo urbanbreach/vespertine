@@ -42,7 +42,6 @@ log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-ttf-parser = "0.25"
 vespertine.workspace = true
 vespertine_platform = { workspace = true, optional = true }
 

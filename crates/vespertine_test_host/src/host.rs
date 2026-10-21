@@ -524,16 +524,13 @@ impl TestHost {
         Ok(())
     }
 
-    /// Registers a font from its bytes with the application's text system.
+    /// Registers a font from its bytes with the text system the host's window renders with.
+    /// Like [`App::register_font`], it requests a redraw of the window, in which text already on
+    /// screen takes the font up; call [`TestHost::flush`] (or any capture helper) to draw it.
     pub fn register_font(&mut self, bytes: Vec<u8>) -> HostResult<()> {
-        ttf_parser::Face::parse(&bytes, 0)
-            .map_err(|error| HostError::InvalidFont(error.to_string()))?;
         self.cx
-            .text_system()
-            .add_fonts(vec![std::borrow::Cow::Owned(bytes)])
-            .map_err(|error| HostError::InvalidFont(format!("{error:#}")))?;
-        self.invalidate();
-        Ok(())
+            .update(|cx| cx.register_font(&bytes))
+            .map_err(|error| HostError::InvalidFont(error.to_string()))
     }
 }
 
