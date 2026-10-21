@@ -959,14 +959,28 @@ impl TargetReader for X11TargetReader<'_> {
             .find_map(|(name, atom)| (name == target).then_some(*atom))
             .or_else(|| self.inner.atom_for_target(target))
             .ok_or(TargetFailure::Refused)?;
-        self.inner
-            .read_single(self.reader, self.selection, atom)
-            .map(|data| data.bytes)
-            .map_err(|error| match error {
-                Error::Timeout => TargetFailure::Timeout,
-                Error::ContentNotAvailable => TargetFailure::Refused,
-                _ => TargetFailure::Other,
-            })
+        let data = self.inner.read_single(self.reader, self.selection, atom);
+        data.map(|data| {
+            // An owner may answer a text target with type STRING, which is ISO 8859-1. The
+            // shared reader decodes by the requested target, so such a reply becomes UTF-8
+            // here; a STRING request stays as is because the reader decodes it as ISO 8859-1.
+            let latin1 = target != selection::STRING
+                && Some(data.format) == self.inner.atom_for_target(selection::STRING);
+            if latin1 {
+                data.bytes
+                    .into_iter()
+                    .map(char::from)
+                    .collect::<String>()
+                    .into_bytes()
+            } else {
+                data.bytes
+            }
+        })
+        .map_err(|error| match error {
+            Error::Timeout => TargetFailure::Timeout,
+            Error::ContentNotAvailable => TargetFailure::Refused,
+            _ => TargetFailure::Other,
+        })
     }
 }
 
@@ -1483,6 +1497,91 @@ pub(crate) mod tests {
     fn unowned_selection_reads_as_none() {
         let clipboard = connect_or_skip!();
         assert_eq!(clipboard.read(), Ok(None));
+    }
+
+    #[test]
+    fn text_a_legacy_owner_answers_as_latin1_string_reads_as_text() {
+        let clipboard = connect_or_skip!();
+        // A second X client owning the selection the way legacy owners do: it offers only
+        // TEXT and answers it with type STRING, whose bytes are ISO 8859-1.
+        let (conn, screen) = x11rb::connect(Some(&clipboard.clipboard().inner.display)).unwrap();
+        let window = conn.generate_id().unwrap();
+        conn.create_window(
+            COPY_DEPTH_FROM_PARENT,
+            window,
+            conn.setup().roots[screen].root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::COPY_FROM_PARENT,
+            COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .unwrap();
+        let intern = |name: &[u8]| conn.intern_atom(false, name).unwrap().reply().unwrap().atom;
+        let (targets, text) = (intern(b"TARGETS"), intern(b"TEXT"));
+        conn.set_selection_owner(window, AtomEnum::SECONDARY.into(), x11rb::CURRENT_TIME)
+            .unwrap();
+        conn.sync().unwrap();
+        let owner = std::thread::spawn(move || {
+            loop {
+                let Event::SelectionRequest(request) = conn.wait_for_event().unwrap() else {
+                    continue;
+                };
+                let answered = if request.target == targets {
+                    conn.change_property32(
+                        PropMode::REPLACE,
+                        request.requestor,
+                        request.property,
+                        AtomEnum::ATOM,
+                        &[targets, text],
+                    )
+                    .unwrap();
+                    true
+                } else if request.target == text {
+                    conn.change_property8(
+                        PropMode::REPLACE,
+                        request.requestor,
+                        request.property,
+                        AtomEnum::STRING,
+                        b"caf\xe9",
+                    )
+                    .unwrap();
+                    true
+                } else {
+                    false
+                };
+                conn.send_event(
+                    false,
+                    request.requestor,
+                    EventMask::NO_EVENT,
+                    SelectionNotifyEvent {
+                        response_type: SELECTION_NOTIFY_EVENT,
+                        sequence: request.sequence,
+                        time: request.time,
+                        requestor: request.requestor,
+                        selection: request.selection,
+                        target: request.target,
+                        property: if answered { request.property } else { NONE },
+                    },
+                )
+                .unwrap();
+                conn.flush().unwrap();
+                if request.target == text {
+                    conn.destroy_window(window).unwrap();
+                    conn.sync().unwrap();
+                    return;
+                }
+            }
+        });
+        let read = clipboard.read();
+        assert_eq!(
+            read.map(|item| item.and_then(|item| item.text())),
+            Ok(Some("café".to_owned()))
+        );
+        owner.join().unwrap();
     }
 
     #[test]
