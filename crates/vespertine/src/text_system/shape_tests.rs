@@ -889,7 +889,7 @@ mod resolved_font_cache {
 mod numeric {
     use super::*;
     use crate::text_system::shape_cache::{
-        NUMERIC_CHECK_INTERVAL, NUMERIC_INITIAL_CHECKS, layouts_agree,
+        NUMERIC_CHECK_INTERVAL, NUMERIC_INITIAL_CHECKS, NUMERIC_MAX_FONT_SIZES, layouts_agree,
     };
 
     struct Fixture {
@@ -926,6 +926,21 @@ mod numeric {
                 }],
             );
             (layout(&self.window, text, &self.font), platform)
+        }
+
+        /// Asks numeric shaping for `text` at `size` directly, past the frame and recent caches.
+        fn numeric(&self, text: &str, size: f32) {
+            let font_id = self.system.resolve_font(&self.font);
+            let _ = self.system.shape_caches.numeric_layout(
+                self.shaper.as_ref(),
+                self.system.font_generation(),
+                text,
+                px(size),
+                &[FontRun {
+                    len: text.len(),
+                    font_id,
+                }],
+            );
         }
     }
 
@@ -1093,6 +1108,46 @@ mod numeric {
         let stats = f.system.shape_stats();
         assert_eq!(stats.synthesized_lines, 0);
         assert_eq!(stats.platform_line_shapes, 50);
+    }
+
+    #[test]
+    fn only_the_most_recently_used_font_sizes_keep_their_learned_tables() {
+        let f = fixture();
+        // One size stays in use while more sizes than the cap are learned once each.
+        f.numeric("1.25", 10.);
+        for ix in 0..NUMERIC_MAX_FONT_SIZES {
+            f.numeric("1.25", 20. + ix as f32);
+            if ix % 16 == 0 {
+                f.numeric("1.25", 10.);
+            }
+        }
+        let learned = f.system.shape_stats().numeric_unit_shapes;
+        f.numeric("1.25", 10.);
+        assert_eq!(
+            f.system.shape_stats().numeric_unit_shapes,
+            learned,
+            "the size in use kept its table"
+        );
+        f.numeric("1.25", 20.);
+        assert!(
+            f.system.shape_stats().numeric_unit_shapes > learned,
+            "the least recently used size lost its table and is measured again"
+        );
+    }
+
+    #[test]
+    fn a_disabled_font_size_stays_disabled_while_tables_are_dropped() {
+        let f = fixture();
+        f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
+        layout(&f.window, "9.9", &f.font);
+        layout(&f.window, "999", &f.font);
+        let font_id = f.system.resolve_font(&f.font);
+        assert!(f.system.shape_caches.numeric_is_disabled(font_id, px(16.)));
+
+        for ix in 0..=NUMERIC_MAX_FONT_SIZES {
+            f.numeric("1.25", 20. + ix as f32);
+        }
+        assert!(f.system.shape_caches.numeric_is_disabled(font_id, px(16.)));
     }
 }
 

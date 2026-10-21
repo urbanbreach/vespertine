@@ -13,7 +13,7 @@ use std::{
     hash::{Hash, Hasher},
     sync::atomic::{AtomicU64, Ordering},
 };
-use vespertine_collections::{FxHashMap, FxHasher};
+use vespertine_collections::{FxHashMap, FxHashSet, FxHasher};
 
 /// Glyph units one generation of recent shapes may hold before the generations rotate.
 pub(crate) const RECENT_GENERATION_GLYPH_UNITS: usize = 16_384;
@@ -29,6 +29,10 @@ pub(crate) const NUMERIC_CHECK_INTERVAL: u64 = 256;
 
 /// Agreement tolerance between synthesized and platform lines, in logical pixels.
 pub(crate) const NUMERIC_TOLERANCE: f32 = 0.001;
+
+/// Font sizes whose learned characters and pairs are kept (about 1 MB). Beyond this the least
+/// recently used size's table is dropped; that size is learned again if it returns.
+pub(crate) const NUMERIC_MAX_FONT_SIZES: usize = 256;
 
 const NUMERIC_ALPHABET: &[u8; 20] = b"0123456789.,+-%$KMBT";
 
@@ -280,7 +284,8 @@ struct NumericFont {
     chars: [CharState; 20],
     pairs: Box<[[PairState; 20]; 20]>,
     synthesized: u64,
-    disabled: bool,
+    /// The [`NumericState::uses`] count at the last lookup of this table.
+    used: u64,
 }
 
 impl NumericFont {
@@ -289,7 +294,7 @@ impl NumericFont {
             chars: [CharState::Unknown; 20],
             pairs: Box::new([[PairState::Unknown; 20]; 20]),
             synthesized: 0,
-            disabled: false,
+            used: 0,
         }
     }
 }
@@ -298,17 +303,43 @@ impl NumericFont {
 struct NumericState {
     font_generation: usize,
     fonts: FxHashMap<(FontId, u32), NumericFont>,
+    /// Font sizes whose assembled line once disagreed with full shaping. They use the platform
+    /// until the font generation changes (PRF-013 R6), whichever tables are dropped meanwhile.
+    disabled: FxHashSet<(FontId, u32)>,
+    /// Table lookups so far; orders the tables by recency.
+    uses: u64,
 }
 
 impl NumericState {
     fn sync(&mut self, font_generation: usize) -> bool {
         if font_generation > self.font_generation {
             self.fonts.clear();
+            self.disabled.clear();
             self.font_generation = font_generation;
             true
         } else {
             font_generation == self.font_generation
         }
+    }
+
+    /// The table of `key`, marked as just used. A missing table is created, after dropping the
+    /// least recently used one when [`NUMERIC_MAX_FONT_SIZES`] tables exist.
+    fn table(&mut self, key: (FontId, u32)) -> &mut NumericFont {
+        self.uses += 1;
+        let uses = self.uses;
+        if self.fonts.len() >= NUMERIC_MAX_FONT_SIZES
+            && !self.fonts.contains_key(&key)
+            && let Some(oldest) = self
+                .fonts
+                .iter()
+                .min_by_key(|(_, font)| font.used)
+                .map(|(key, _)| *key)
+        {
+            self.fonts.remove(&oldest);
+        }
+        let font = self.fonts.entry(key).or_insert_with(NumericFont::new);
+        font.used = uses;
+        font
     }
 }
 
@@ -780,13 +811,10 @@ impl ShapeCaches {
             let (layout, validate) = {
                 let mut numeric = self.numeric.lock();
                 ShapeCounters::bump(&self.counters.lock_acquisitions);
-                if !numeric.sync(font_generation) {
+                if !numeric.sync(font_generation) || numeric.disabled.contains(&key) {
                     return NumericOutcome::Platform;
                 }
-                let font = numeric.fonts.entry(key).or_insert_with(NumericFont::new);
-                if font.disabled {
-                    return NumericOutcome::Platform;
-                }
+                let font = numeric.table(key);
 
                 let mut unsupported = false;
                 for (position, &ix) in indices.iter().enumerate() {
@@ -839,11 +867,9 @@ impl ShapeCaches {
                 }
                 let mut numeric = self.numeric.lock();
                 ShapeCounters::bump(&self.counters.lock_acquisitions);
-                if numeric.sync(font_generation)
-                    && let Some(font) = numeric.fonts.get_mut(&key)
-                    && !font.disabled
-                {
-                    font.disabled = true;
+                if numeric.sync(font_generation) && numeric.disabled.insert(key) {
+                    // The size uses the platform from now on, so its table is not needed.
+                    numeric.fonts.remove(&key);
                     ShapeCounters::bump(&self.counters.disabled_font_sizes);
                 }
                 return NumericOutcome::Layout(platform_layout);
@@ -899,10 +925,10 @@ impl ShapeCaches {
 
             let mut numeric = self.numeric.lock();
             ShapeCounters::bump(&self.counters.lock_acquisitions);
-            if !numeric.sync(font_generation) {
+            if !numeric.sync(font_generation) || numeric.disabled.contains(&key) {
                 return NumericOutcome::Platform;
             }
-            let font = numeric.fonts.entry(key).or_insert_with(NumericFont::new);
+            let font = numeric.table(key);
             for (ix, state) in char_results {
                 font.chars[ix as usize] = state;
             }
@@ -948,14 +974,14 @@ impl ShapeCaches {
     pub(crate) fn numeric_is_disabled(&self, font_id: FontId, font_size: Pixels) -> bool {
         self.numeric
             .lock()
-            .fonts
-            .get(&(font_id, font_size.0.to_bits()))
-            .is_some_and(|font| font.disabled)
+            .disabled
+            .contains(&(font_id, font_size.0.to_bits()))
     }
 
     #[cfg(test)]
     pub(crate) fn numeric_has_state(&self) -> bool {
-        !self.numeric.lock().fonts.is_empty()
+        let numeric = self.numeric.lock();
+        !numeric.fonts.is_empty() || !numeric.disabled.is_empty()
     }
 }
 

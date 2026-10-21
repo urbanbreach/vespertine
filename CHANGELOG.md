@@ -18,6 +18,10 @@ of the autonomous build are removed, and the crates build in more places.
 - Projects that depend on Vespertine by path or git build: taffy is a path dependency instead of a
   `[patch.crates-io]` entry (which Cargo applies only in the top-level workspace), and the vendored
   crate is its own workspace root, so checkouts nested in another workspace can run `cargo fmt --all`.
+- Numeric text shaping (PRF-013) keeps the learned tables of at most 256 font sizes (about 1 MB) and
+  drops the least recently used. They grew with every distinct font size until fonts changed, so a
+  smooth zoom over numbers added one per frame. A size whose check against full shaping failed stays
+  on platform shaping whichever tables are dropped.
 
 ### Changed
 
