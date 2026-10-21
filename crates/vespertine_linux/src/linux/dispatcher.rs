@@ -291,6 +291,26 @@ mod tests {
     }
 
     #[test]
+    fn pending_timers_do_not_each_hold_a_file_descriptor() {
+        fn open_descriptors() -> usize {
+            std::fs::read_dir("/proc/self/fd").unwrap().count()
+        }
+        const TIMERS: usize = 1000;
+        let executor = background_executor();
+        let before = open_descriptors();
+        let pending: Vec<_> = (0..TIMERS)
+            .map(|_| executor.timer(Duration::from_secs(3600)))
+            .collect();
+        drop(pending);
+        let added = open_descriptors().saturating_sub(before);
+        assert!(
+            added < TIMERS / 10,
+            "{added} descriptors opened for {TIMERS} timers"
+        );
+        futures::executor::block_on(executor.timer(Duration::from_millis(10)));
+    }
+
+    #[test]
     fn an_idle_dispatcher_stops_its_timer_thread_when_dropped() {
         let (sender, _receiver) = PriorityQueueCalloopReceiver::new();
         let dispatcher = LinuxDispatcher::new(sender);

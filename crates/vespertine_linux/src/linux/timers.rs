@@ -1,8 +1,9 @@
 //! The timer thread behind `PlatformDispatcher::dispatch_after`.
 //!
-//! Linux gives every timer a kernel timer of its own, armed by the thread that asks for it, so an
-//! idle process wakes the timer thread only when a timer fires. Other Unixes keep a thread that
-//! arms the timers itself, which costs it an extra wakeup per timer.
+//! Linux keeps pending timers in one deadline queue behind one kernel timer, which the thread
+//! asking for a timer arms itself when its deadline comes first, so an idle process wakes the
+//! timer thread only when a timer fires. Other Unixes keep a thread that arms the timers
+//! itself, which costs it an extra wakeup per timer.
 
 use std::{sync::Arc, thread, time::Duration};
 use vespertine::RunnableVariant;
@@ -64,11 +65,11 @@ mod kernel_timers {
         fd::{AsFd, OwnedFd},
         io::Errno,
         time::{
-            Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags, timerfd_create,
-            timerfd_settime,
+            ClockId, Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags, clock_gettime,
+            timerfd_create, timerfd_settime,
         },
     };
-    use std::{collections::HashMap, io, os::fd::AsRawFd as _};
+    use std::{cmp::Reverse, collections::BinaryHeap, io};
     use vespertine::profiler;
     use vespertine_util::ResultExt;
 
@@ -76,19 +77,65 @@ mod kernel_timers {
     /// outlives it.
     const LONGEST_TIMER: Duration = Duration::from_secs(100 * 365 * 24 * 3600);
 
-    /// Registered with the epoll set in place of a timer to end the thread.
-    const STOP_KEY: u64 = u64::MAX;
+    /// The epoll key of the kernel timer.
+    const TIMER_KEY: u64 = 0;
+    /// The epoll key of the event that ends the thread.
+    const STOP_KEY: u64 = 1;
 
-    /// A timer that has been armed and not yet fired.
+    /// A timer that has been armed and not yet fired, ordered by deadline and then by arming
+    /// order.
     struct PendingTimer {
-        timer_fd: OwnedFd,
+        /// On the monotonic clock.
+        deadline: Duration,
+        sequence: u64,
         runnable: RunnableVariant,
+    }
+
+    impl PendingTimer {
+        fn key(&self) -> (Duration, u64) {
+            (self.deadline, self.sequence)
+        }
+    }
+
+    impl PartialEq for PendingTimer {
+        fn eq(&self, other: &Self) -> bool {
+            self.key() == other.key()
+        }
+    }
+
+    impl Eq for PendingTimer {}
+
+    impl PartialOrd for PendingTimer {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for PendingTimer {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.key().cmp(&other.key())
+        }
+    }
+
+    #[derive(Default)]
+    struct Queue {
+        /// Earliest deadline first.
+        pending: BinaryHeap<Reverse<PendingTimer>>,
+        next_sequence: u64,
     }
 
     pub(crate) struct Shared {
         epoll: OwnedFd,
         stop: OwnedFd,
-        timers: parking_lot::Mutex<HashMap<u64, PendingTimer>>,
+        /// Armed for the earliest pending deadline, disarmed when nothing is pending.
+        timer_fd: OwnedFd,
+        /// Held while the kernel timer is changed, so it always matches the earliest deadline.
+        queue: parking_lot::Mutex<Queue>,
+    }
+
+    fn monotonic_now() -> Duration {
+        // The monotonic clock never reads negative, which is the only conversion failure.
+        Duration::try_from(clock_gettime(ClockId::Monotonic)).unwrap_or_default()
     }
 
     impl Shared {
@@ -101,10 +148,21 @@ mod kernel_timers {
                 epoll::EventData::new_u64(STOP_KEY),
                 epoll::EventFlags::IN,
             )?;
+            let timer_fd = timerfd_create(
+                TimerfdClockId::Monotonic,
+                TimerfdFlags::CLOEXEC | TimerfdFlags::NONBLOCK,
+            )?;
+            epoll::add(
+                &epoll,
+                &timer_fd,
+                epoll::EventData::new_u64(TIMER_KEY),
+                epoll::EventFlags::IN,
+            )?;
             Ok(Arc::new(Self {
                 epoll,
                 stop,
-                timers: parking_lot::Mutex::new(HashMap::default()),
+                timer_fd,
+                queue: parking_lot::Mutex::new(Queue::default()),
             }))
         }
 
@@ -113,52 +171,68 @@ mod kernel_timers {
             duration: Duration,
             runnable: RunnableVariant,
         ) -> Result<(), RunnableVariant> {
-            match Self::arm_timer(duration) {
-                Ok(timer_fd) => self.register(timer_fd, runnable),
-                Err(_) => Err(runnable),
+            // A zero deadline would disarm the timer instead of firing it at once.
+            let deadline = monotonic_now() + duration.clamp(Duration::from_nanos(1), LONGEST_TIMER);
+            let mut queue = self.queue.lock();
+            let first = queue
+                .pending
+                .peek()
+                .is_none_or(|Reverse(earliest)| deadline < earliest.deadline);
+            // Only a new earliest deadline moves the kernel timer, and this thread moves it, so
+            // the timer thread wakes once per firing and never to rearm.
+            if first && self.set_deadline(Some(deadline)).is_err() {
+                return Err(runnable);
             }
+            let sequence = queue.next_sequence;
+            queue.next_sequence += 1;
+            queue.pending.push(Reverse(PendingTimer {
+                deadline,
+                sequence,
+                runnable,
+            }));
+            Ok(())
         }
 
-        fn arm_timer(duration: Duration) -> io::Result<OwnedFd> {
-            let timer_fd = timerfd_create(
-                TimerfdClockId::Monotonic,
-                TimerfdFlags::CLOEXEC | TimerfdFlags::NONBLOCK,
-            )?;
-            // A zero value would disarm the timer instead of firing it at once.
-            let value = Timespec::try_from(duration.clamp(Duration::from_nanos(1), LONGEST_TIMER))
-                .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-            let never = Timespec::try_from(Duration::ZERO)
-                .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        /// Arms the kernel timer for an absolute monotonic `deadline`, or disarms it.
+        fn set_deadline(&self, deadline: Option<Duration>) -> io::Result<()> {
+            let invalid = |_| io::Error::from(io::ErrorKind::InvalidInput);
+            let never = Timespec::try_from(Duration::ZERO).map_err(invalid)?;
+            let value = match deadline {
+                Some(deadline) => Timespec::try_from(deadline).map_err(invalid)?,
+                None => never,
+            };
             timerfd_settime(
-                &timer_fd,
-                TimerfdTimerFlags::empty(),
+                &self.timer_fd,
+                TimerfdTimerFlags::ABSTIME,
                 &Itimerspec {
                     it_interval: never,
                     it_value: value,
                 },
             )?;
-            Ok(timer_fd)
+            Ok(())
         }
 
-        fn register(
-            &self,
-            timer_fd: OwnedFd,
-            runnable: RunnableVariant,
-        ) -> Result<(), RunnableVariant> {
-            // Keyed by the descriptor number, which stays unique while the timer is pending.
-            let key = timer_fd.as_raw_fd() as u64;
-            let mut timers = self.timers.lock();
-            let registered = epoll::add(
-                &self.epoll,
-                &timer_fd,
-                epoll::EventData::new_u64(key),
-                epoll::EventFlags::IN | epoll::EventFlags::ONESHOT,
-            );
-            if registered.is_err() {
-                return Err(runnable);
+        /// Takes the timers whose deadline passed, earliest first, and arms the kernel timer
+        /// for the next one.
+        fn take_due(&self) -> Vec<RunnableVariant> {
+            let mut queue = self.queue.lock();
+            // Clears the expiration; nothing is left to read when a caller moved the deadline.
+            let mut expirations = [0u8; 8];
+            let _ = rustix::io::read(&self.timer_fd, &mut expirations);
+            let now = monotonic_now();
+            let mut due = Vec::new();
+            while let Some(Reverse(earliest)) = queue.pending.peek()
+                && earliest.deadline <= now
+            {
+                if let Some(Reverse(timer)) = queue.pending.pop() {
+                    due.push(timer.runnable);
+                }
             }
-            timers.insert(key, PendingTimer { timer_fd, runnable });
-            Ok(())
+            let next = queue.pending.peek().map(|Reverse(timer)| timer.deadline);
+            if let Err(error) = self.set_deadline(next) {
+                log::error!("arming the timer thread's kernel timer failed: {error}");
+            }
+            due
         }
 
         pub(super) fn stop(&self) {
@@ -166,7 +240,7 @@ mod kernel_timers {
         }
 
         pub(super) fn run(&self) {
-            let mut events: Vec<epoll::Event> = Vec::with_capacity(16);
+            let mut events: Vec<epoll::Event> = Vec::with_capacity(2);
             loop {
                 events.clear();
                 match epoll::wait(&self.epoll, spare_capacity(&mut events), None) {
@@ -177,21 +251,15 @@ mod kernel_timers {
                         return;
                     }
                 }
-                for event in &events {
-                    let key = event.data.u64();
-                    if key == STOP_KEY {
-                        return;
-                    }
-                    // Dropping the timer closes it, which removes it from the epoll set.
-                    let timer = self.timers.lock().remove(&key);
-                    if let Some(PendingTimer { timer_fd, runnable }) = timer {
-                        drop(timer_fd);
-                        let location = runnable.metadata().location;
-                        let spawned = runnable.metadata().spawned;
-                        profiler::update_running_task(spawned, location);
-                        runnable.run();
-                        profiler::save_task_timing();
-                    }
+                if events.iter().any(|event| event.data.u64() == STOP_KEY) {
+                    return;
+                }
+                for runnable in self.take_due() {
+                    let location = runnable.metadata().location;
+                    let spawned = runnable.metadata().spawned;
+                    profiler::update_running_task(spawned, location);
+                    runnable.run();
+                    profiler::save_task_timing();
                 }
             }
         }
