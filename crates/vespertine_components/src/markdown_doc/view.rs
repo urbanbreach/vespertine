@@ -15,6 +15,9 @@ use vespertine::{
 };
 use vespertine_richtext::{UserSelect, user_select};
 
+/// Generation flag of a repaired display block (generation counters never reach it).
+const REPAIRED: u64 = 1 << 63;
+
 /// A Markdown document: the stored source, its incremental parse and the streaming flag. Clones
 /// share the same state.
 #[derive(Clone, Default)]
@@ -167,12 +170,19 @@ impl MarkdownDocument {
 
     fn display_blocks(&self, streaming: bool) -> (Vec<Block>, Rc<Vec<u64>>) {
         let inner = self.inner.borrow();
+        let mut generations = inner.generations.clone();
         let blocks = if streaming {
-            inner.parser.display_tree().to_vec()
+            let display = inner.parser.display_tree();
+            // Repaired blocks flatten differently from the canonical blocks at the same index,
+            // so they get a distinct generation in the shared flatten cache.
+            for generation in generations.iter_mut().skip(display.repaired_from()) {
+                *generation |= REPAIRED;
+            }
+            display.to_vec()
         } else {
             inner.parser.tree().to_vec()
         };
-        (blocks, Rc::new(inner.generations.clone()))
+        (blocks, Rc::new(generations))
     }
 }
 

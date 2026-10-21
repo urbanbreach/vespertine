@@ -30,6 +30,11 @@ impl<'a> DisplayTree<'a> {
         self.len() == 0
     }
 
+    /// Index of the first repaired block (the length when nothing is repaired).
+    pub fn repaired_from(&self) -> usize {
+        self.prefix.len()
+    }
+
     /// The blocks as a vector (cloned).
     pub fn to_vec(&self) -> Vec<Block> {
         self.iter().cloned().collect()

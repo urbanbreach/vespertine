@@ -614,6 +614,32 @@ fn a8_streaming_work_per_frame_is_proportional_to_the_tail_block() {
 }
 
 #[test]
+fn a8_ending_the_stream_shows_the_unrepaired_source() {
+    require_backend!();
+    let document = MarkdownDocument::from_source("alpha\n\nbeta **open");
+    let streaming = Rc::new(std::cell::Cell::new(true));
+    let (shared, flag) = (document.clone(), streaming.clone());
+    let mut host = host(400., 200., move || {
+        div()
+            .child(Markdown::document("md", shared.clone()).streaming(flag.get()))
+            .into_any_element()
+    });
+    host.paint_frame();
+    let painted = host.painted_text();
+    assert!(
+        !painted.iter().any(|text| text.contains("**")),
+        "{painted:?}"
+    );
+    streaming.set(false);
+    host.paint_frame();
+    let painted = host.painted_text();
+    assert!(
+        painted.iter().any(|text| text == "beta **open"),
+        "{painted:?}"
+    );
+}
+
+#[test]
 fn a2_nested_lists_indent_by_the_marker_column_plus_gap_and_number_from_the_start() {
     require_backend!();
     let mut host = host(400., 200., || {
