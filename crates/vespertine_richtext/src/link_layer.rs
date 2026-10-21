@@ -107,7 +107,8 @@ struct OpenMenu {
 #[derive(Default)]
 struct Runtime {
     handles: Vec<FocusHandle>,
-    press: Option<LinkPress>,
+    /// The pressed link's index with the press.
+    press: Option<(usize, LinkPress)>,
     menu: Option<OpenMenu>,
     disclosure_dismissed: bool,
     signature: Vec<[f32; 4]>,
@@ -236,12 +237,15 @@ impl LinkLayer {
                         let layout = layout.clone();
                         let link = link.clone();
                         move |event, _window, _cx| {
-                            runtime.borrow_mut().press = Some(LinkPress {
-                                position: event.position,
-                                button: MouseButton::Left,
-                                click_count: event.click_count,
-                                over_link: exact_hit(&layout, &link, event.position),
-                            });
+                            runtime.borrow_mut().press = Some((
+                                index,
+                                LinkPress {
+                                    position: event.position,
+                                    button: MouseButton::Left,
+                                    click_count: event.click_count,
+                                    over_link: exact_hit(&layout, &link, event.position),
+                                },
+                            ));
                         }
                     })
                     .on_mouse_up(MouseButton::Left, {
@@ -251,8 +255,14 @@ impl LinkLayer {
                         let options = options.clone();
                         let service = service.clone();
                         move |event, window, cx| {
+                            // Only the link that received the press can be activated by it.
                             let press = runtime.borrow_mut().press.take();
-                            let Some(press) = press else { return };
+                            let Some((pressed, press)) = press else {
+                                return;
+                            };
+                            if pressed != index {
+                                return;
+                            }
                             let selection_has_text = service
                                 .as_ref()
                                 .is_some_and(TextService::selection_has_text);

@@ -373,3 +373,65 @@ fn a_press_outside_dismisses_the_focused_disclosure() {
         "an outside press dismisses it"
     );
 }
+
+/// `text` with one link per `(range, destination)`.
+fn two_links(
+    text: &'static str,
+    links: [(std::ops::Range<usize>, &'static str); 2],
+    log: &Log,
+) -> Build {
+    let log = log.clone();
+    Rc::new(move |_, _| {
+        text_root(
+            div()
+                .size_full()
+                .bg(rgb(0x181818))
+                .font_family("Noto Sans")
+                .text_size(px(16.))
+                .line_height(px(24.))
+                .text_color(rgb(0xeeeeee))
+                .child(
+                    div().w(px(300.)).child(
+                        RichText::new("t", text)
+                            .links(
+                                links
+                                    .iter()
+                                    .map(|(range, destination)| Link {
+                                        range: range.clone(),
+                                        destination: destination.to_string(),
+                                    })
+                                    .collect(),
+                            )
+                            .link_options(options(&log)),
+                    ),
+                ),
+        )
+        .into_any_element()
+    })
+}
+
+#[test]
+fn a_release_on_an_adjacent_link_activates_neither() {
+    let log = new_log();
+    let mut harness = Harness::new(
+        WIDTH,
+        100.,
+        two_links(
+            "mm",
+            [
+                (0..1, "https://example.com/alpha"),
+                (1..2, "https://example.com/beta"),
+            ],
+            &log,
+        ),
+    );
+    // Each "m" is about 13.6 px wide: press near the end of the first, release 3.5 px later
+    // inside the second.
+    harness.press(at(12., 12.), MouseButton::Left, 1);
+    harness.release(at(15.5, 12.), MouseButton::Left, 1);
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    // A click inside the second link still activates it.
+    harness.click(at(20., 12.));
+    assert_eq!(log.borrow().len(), 1);
+    assert_eq!(log.borrow()[0].destination, "https://example.com/beta");
+}
