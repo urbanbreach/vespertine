@@ -536,7 +536,12 @@ fn code_block(info: &str, code: &str, ctx: &Ctx, window: &mut Window, cx: &mut A
     };
     let mut view = DiagramView::Source;
     if let Some(handler) = &diagram {
-        let frame = format!("{}-mermaid-{}", ctx.row_key, top);
+        // Element 0 (every top-level fence) keeps the `<row>-mermaid-<block>` form; any later
+        // element of the block adds its index, so fences nested in one quote or list differ.
+        let frame = match elem {
+            0 => format!("{}-mermaid-{top}", ctx.row_key),
+            _ => format!("{}-mermaid-{top}-{elem}", ctx.row_key),
+        };
         view = handler(code, &frame, &theme, window, cx);
     }
 

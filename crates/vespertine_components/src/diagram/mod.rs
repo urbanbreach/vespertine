@@ -78,6 +78,7 @@ pub enum DiagramView {
 }
 
 /// The owner's optional diagram handler: source text, frame identifier
-/// (`"<row key>-mermaid-<block index>"`) and the active theme in; the view to show out.
+/// (`"<row key>-mermaid-<block index>"`, plus `"-<element index>"` for a fence nested after the
+/// first element of its top-level block) and the active theme in; the view to show out.
 pub type DiagramHandler =
     Rc<dyn Fn(&str, &str, &DocumentTheme, &mut Window, &mut App) -> DiagramView>;

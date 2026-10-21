@@ -756,6 +756,34 @@ fn a2_mermaid_fences_go_to_the_diagram_handler_with_a_frame_id() {
 }
 
 #[test]
+fn a2_nested_mermaid_fences_get_distinct_frame_ids() {
+    require_backend!();
+    let frames: Log<String> = log();
+    let sink = frames.clone();
+    let mut host = host(500., 400., move || {
+        let sink = sink.clone();
+        let mut options = MarkdownOptions::default();
+        options.media.diagram = Some(Rc::new(move |_source, frame, _, _, _| {
+            sink.borrow_mut().push(frame.to_owned());
+            DiagramView::Source
+        }));
+        options.row_key = Some("row7".into());
+        doc(
+            "> ```mermaid\n> graph TD\n> ```\n>\n> ```mermaid\n> graph LR\n> ```\n",
+            options,
+        )
+    });
+    host.paint_frame();
+    let frames: std::collections::BTreeSet<String> = frames.borrow().iter().cloned().collect();
+    assert_eq!(frames.len(), 2, "one frame id per fence: {frames:?}");
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame.starts_with("row7-mermaid-0"))
+    );
+}
+
+#[test]
 fn a2_a_failed_diagram_keeps_the_source_and_shows_a_warning_marker() {
     require_backend!();
     let frames: Log<String> = log();
