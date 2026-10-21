@@ -771,6 +771,7 @@ fn a2_a_rendered_diagram_toggles_with_its_source() {
     );
 }
 
+#[cfg(feature = "math")]
 #[test]
 fn r13_typeset_inline_formulas_reserve_slots_and_copy_as_delimited_source() {
     require_backend!();
@@ -791,6 +792,7 @@ fn r13_typeset_inline_formulas_reserve_slots_and_copy_as_delimited_source() {
     assert_eq!(copied, "before $\\frac{a}{b}$ after");
 }
 
+#[cfg(feature = "math")]
 #[test]
 fn r13_display_formulas_are_blocks_of_their_own_that_copy_with_double_dollars() {
     require_backend!();
@@ -813,6 +815,7 @@ fn r13_display_formulas_are_blocks_of_their_own_that_copy_with_double_dollars() 
     assert_eq!(copied, "$$x^2+y^2$$");
 }
 
+#[cfg(feature = "math")]
 #[test]
 fn r13_a_tall_inline_formula_opens_the_line_height_of_its_paragraph() {
     require_backend!();
@@ -831,6 +834,7 @@ fn r13_a_tall_inline_formula_opens_the_line_height_of_its_paragraph() {
     );
 }
 
+#[cfg(feature = "math")]
 #[test]
 fn r14_a_column_holding_a_formula_floors_at_its_widest_unbreakable_word() {
     require_backend!();
