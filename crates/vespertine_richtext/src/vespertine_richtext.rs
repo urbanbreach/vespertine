@@ -73,6 +73,6 @@ pub use runs::{
     CoverError, RichSpans, floor_char_boundary, plain_run, runs_from_spans, shaping_key,
 };
 pub use syntax::{
-    CodeLine, CodeView, HighlightCache, HighlightError, HighlightRequest, HighlightedDocument,
+    CodeLine, HighlightCache, HighlightError, HighlightRequest, HighlightedDocument,
     HighlighterAdapter, Language, LanguageHint, RetainedHighlight, SyntaxColors, TokenKind,
 };

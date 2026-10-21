@@ -197,19 +197,6 @@ fn content_end(bytes: &[u8], start: usize, next: usize) -> usize {
     end
 }
 
-/// Byte range of the content of every line, excluding `\n` and `\r\n` terminators.
-pub(crate) fn line_contents(source: &str) -> Vec<Range<usize>> {
-    let starts = line_starts(source);
-    starts
-        .iter()
-        .enumerate()
-        .map(|(i, &start)| {
-            let next = starts.get(i + 1).copied().unwrap_or(source.len());
-            start..content_end(source.as_bytes(), start, next)
-        })
-        .collect()
-}
-
 /// Splits an absolute span at line boundaries and pushes the line-relative pieces, dropping the
 /// bytes of line terminators.
 fn split_span(

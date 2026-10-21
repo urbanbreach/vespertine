@@ -302,7 +302,6 @@ impl RenderOnce for CodeBlock {
                     .map(|span| (span.range.clone(), colors.color_for(span.kind))),
                 typography.color,
                 &font,
-                line_height,
             );
             let GutterLine { number, marker } = gutter_callback
                 .as_ref()

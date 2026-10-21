@@ -1,11 +1,13 @@
-//! PERF-TXT-007: two code views (TypeScript and Rust documents) through the bounded syntax
+//! PERF-TXT-007: two code blocks (TypeScript and Rust documents) through the bounded syntax
 //! cache; a new pair of documents every third frame and a palette change every 150 frames.
 
 use crate::common::hex;
 use crate::scene::{Scene, register_scene};
 use std::sync::Arc;
-use vespertine::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
-use vespertine_richtext::syntax::{CodeView, HighlightCache, RetainedHighlight, SyntaxColors};
+use vespertine::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px, rgb};
+use vespertine_components::code::CodeBlock;
+use vespertine_richtext::syntax::{HighlightCache, LanguageHint, RetainedHighlight};
+use vespertine_theme::document::DocumentTheme;
 
 /// TypeScript document `n`: 40 lines, a pure function of `n`.
 pub fn typescript_document(n: u64) -> String {
@@ -40,17 +42,17 @@ pub fn rust_document(n: u64) -> String {
     out
 }
 
-/// Palette A (THM-002 dark defaults) when `floor(f / 150)` is even, palette B otherwise.
-pub fn palette(f: u64) -> SyntaxColors {
-    let a = SyntaxColors::dark().with_plain(hex(0xEEEEEE));
-    if (f / 150).is_multiple_of(2) {
-        a
-    } else {
-        a.with_category("keyword", hex(0xFF6688))
-            .with_category("string", hex(0x66DDAA))
-            .with_category("comment", hex(0x99AA88))
-            .with_category("number", hex(0xFFCC44))
+/// Theme A (THM-002 dark defaults) when `floor(f / 150)` is even, theme B otherwise.
+pub fn theme(f: u64) -> DocumentTheme {
+    let mut theme = DocumentTheme::dark();
+    theme.text = rgb(0xEEEEEE);
+    if !(f / 150).is_multiple_of(2) {
+        theme.syntax.keyword = rgb(0xFF6688);
+        theme.syntax.string = rgb(0x66DDAA);
+        theme.syntax.comment = rgb(0x99AA88);
+        theme.syntax.number = rgb(0xFFCC44);
     }
+    theme
 }
 
 pub struct Txt007Perf {
@@ -74,33 +76,54 @@ impl Txt007Perf {
         }
     }
 
-    /// Applies the update for frame `f` and builds the two views (idempotent per `f`).
-    pub fn views(&mut self, f: u64) -> (CodeView, CodeView) {
+    /// Applies the update for frame `f` and builds the two blocks (idempotent per `f`).
+    pub fn views(&mut self, f: u64) -> (CodeBlock, CodeBlock) {
         let n = f / 3;
         if self.document != Some(n) {
             self.typescript = Arc::from(typescript_document(n));
             self.rust = Arc::from(rust_document(n));
             self.document = Some(n);
         }
-        let colors = palette(f);
-        let left = CodeView::new(self.typescript.clone())
+        let typescript = self
+            .typescript_handle
+            .resolve(
+                &self.cache,
+                &self.typescript,
+                LanguageHint {
+                    fence_label: Some("typescript"),
+                    path: None,
+                },
+            )
+            .cloned();
+        let rust = self
+            .rust_handle
+            .resolve(
+                &self.cache,
+                &self.rust,
+                LanguageHint {
+                    fence_label: Some("rust"),
+                    path: None,
+                },
+            )
+            .cloned();
+        let left = CodeBlock::new("perf-txt-007-typescript", &*self.typescript)
             .language("typescript")
-            .retained(&mut self.typescript_handle, &self.cache)
-            .colors(colors)
+            .highlight(typescript)
+            .theme(theme(f))
             .font_family("Liberation Mono")
-            .font_size(px(12.))
+            .text_size(px(12.))
             .line_height(px(16.))
             .absolute()
             .left(px(20.))
             .top(px(20.))
             .w(px(430.))
             .h(px(460.));
-        let right = CodeView::new(self.rust.clone())
+        let right = CodeBlock::new("perf-txt-007-rust", &*self.rust)
             .language("rust")
-            .retained(&mut self.rust_handle, &self.cache)
-            .colors(colors)
+            .highlight(rust)
+            .theme(theme(f))
             .font_family("Liberation Mono")
-            .font_size(px(12.))
+            .text_size(px(12.))
             .line_height(px(16.))
             .absolute()
             .left(px(470.))

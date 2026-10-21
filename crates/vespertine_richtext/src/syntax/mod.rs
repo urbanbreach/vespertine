@@ -1,7 +1,7 @@
 //! Bounded cached theme-independent syntax coloration (TXT-007).
 
 mod cache;
-mod code_view;
+mod code_line;
 mod document;
 mod highlighter;
 mod kind;
@@ -12,7 +12,7 @@ pub use cache::{
     CACHE_MAX_BYTES, CACHE_MAX_DOCUMENTS, CacheLimits, CacheStats, GRAMMAR_GENERATION,
     HighlightCache, HighlighterAdapter, LanguageHint, RetainedHighlight,
 };
-pub use code_view::{CodeLine, CodeView};
+pub use code_line::CodeLine;
 pub use document::{
     HighlightError, HighlightedDocument, Limits, MAX_RAW_SPANS, MAX_SOURCE_BYTES, Span,
 };

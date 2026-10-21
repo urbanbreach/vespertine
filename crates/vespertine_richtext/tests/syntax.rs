@@ -2,7 +2,7 @@
 //! limits, the bounded cache, theme recoloring and the cache-stress benchmark.
 
 use std::sync::Arc;
-use vespertine::{Hsla, TextRun, font, rgb};
+use vespertine::{Hsla, rgb};
 use vespertine_richtext::syntax::*;
 
 fn hex(value: u32) -> Hsla {
@@ -943,41 +943,6 @@ fn weight_is_32_plus_24_per_line_plus_24_per_span() {
 // ------------------------------------------------------------------ A6: theme and widgets
 
 #[test]
-fn palette_change_recolors_with_zero_lookups_and_zero_parses() {
-    let cache = HighlightCache::new();
-    let source: Arc<str> = Arc::from("pub const A: u32 = 1; // note\nfn f() {}\n");
-    let mut retained = RetainedHighlight::new();
-    let hint = LanguageHint {
-        fence_label: Some("rust"),
-        path: None,
-    };
-    let document = retained.resolve(&cache, &source, hint).cloned().unwrap();
-    let after_first = cache.stats();
-    assert_eq!((after_first.misses, after_first.parses), (1, 1));
-
-    let mut runs_with = |colors: &SyntaxColors| -> Vec<Hsla> {
-        let view = CodeView::new(source.clone())
-            .language("rust")
-            .retained(&mut retained, &cache)
-            .colors(*colors);
-        view.lines()
-            .iter()
-            .flat_map(|line| line.runs().iter().map(|run| run.color))
-            .collect()
-    };
-    let dark = SyntaxColors::dark();
-    let other = dark
-        .with_category("keyword", hex(0xFF6688))
-        .with_category("comment", hex(0x99AA88));
-    let a = runs_with(&dark);
-    let b = runs_with(&other);
-    assert_ne!(a, b, "the recolor changed some span colors");
-    assert_eq!(a.len(), b.len(), "same runs, only colors differ");
-    assert_eq!(cache.stats(), after_first, "no lookup, no parse, no hit");
-    assert!(Arc::ptr_eq(retained.document().unwrap(), &document));
-}
-
-#[test]
 fn retained_handle_re_resolves_only_when_source_hint_or_generation_changes() {
     let cache = HighlightCache::new();
     let mut retained = RetainedHighlight::new();
@@ -1020,7 +985,7 @@ fn retained_handle_re_resolves_only_when_source_hint_or_generation_changes() {
 }
 
 #[test]
-fn code_view_and_editable_surface_share_kinds() {
+fn the_adapter_and_direct_highlighting_share_one_document() {
     let cache = Arc::new(HighlightCache::new());
     let text = "pub struct P { x: u32 }\n// done\n";
     let hint = LanguageHint {
@@ -1031,40 +996,18 @@ fn code_view_and_editable_surface_share_kinds() {
     let adapter: &dyn HighlighterAdapter = &*cache;
     let from_adapter = adapter.document_for(text, hint).unwrap();
 
-    let colors = SyntaxColors::dark();
-    let view = CodeView::new(text)
-        .language("rust")
-        .cache(cache.clone())
-        .colors(colors);
-    let lines = view.lines();
-    let from_view = cache
+    let from_direct = cache
         .highlight_as(Language::Rust, text, Limits::default())
         .unwrap();
     assert!(
-        Arc::ptr_eq(&from_adapter, &from_view),
+        Arc::ptr_eq(&from_adapter, &from_direct),
         "one shared document for both"
     );
     assert_eq!(cache.stats().parses, 1);
-
-    // The view's run colors are exactly the palette colors of the document's kinds.
-    for (index, spans) in from_adapter.lines().iter().enumerate() {
-        let line = &lines[index];
-        let mut offset = 0;
-        for run in line.runs() {
-            let kind = spans
-                .iter()
-                .find(|span| span.range.start <= offset && offset < span.range.end)
-                .map(|span| span.kind);
-            let expected = kind.map(|k| colors.color_for(k)).unwrap_or(colors.plain);
-            assert_eq!(run.color, expected, "line {index} offset {offset}");
-            offset += run.len;
-        }
-        assert_eq!(offset, line.text().len());
-    }
 }
 
 #[test]
-fn editing_changes_the_key_and_stale_spans_are_clipped() {
+fn editing_changes_the_key() {
     let cache = HighlightCache::new();
     let old = "let value = 12345;";
     let new = "let v = 1;";
@@ -1076,28 +1019,6 @@ fn editing_changes_the_key_and_stale_spans_are_clipped() {
         .unwrap();
     assert!(!Arc::ptr_eq(&old_document, &new_document));
     assert_eq!(cache.stats().misses, 2);
-
-    // Applying the previous revision's document to the new text clips instead of overflowing.
-    let view = CodeView::new(new)
-        .language("rust")
-        .document(Some(old_document.clone()));
-    for line in view.lines() {
-        assert_eq!(
-            line.runs().iter().map(|run| run.len).sum::<usize>(),
-            line.text().len()
-        );
-    }
-    // A document with fewer lines leaves the extra lines plain.
-    let two_lines =
-        CodeView::new("let a = 1;\nlet b = 2;\nlet c = 3;").document(Some(old_document));
-    let lines = two_lines.lines();
-    assert_eq!(lines.len(), 3);
-    assert!(
-        lines[2]
-            .runs()
-            .iter()
-            .all(|run| run.color == SyntaxColors::dark().plain)
-    );
 }
 
 #[test]
@@ -1164,68 +1085,6 @@ fn syntax_colors_map_every_kind_to_its_palette_category() {
         colors.type_builtin
     );
     assert!(!SyntaxColors::dark().clone().set_category("nope", hex(0)));
-}
-
-// ------------------------------------------------------------------ A7: the visual fixture
-
-fn colored_text(line: &str, runs: &[TextRun]) -> Vec<(String, Hsla)> {
-    let mut offset = 0;
-    runs.iter()
-        .map(|run| {
-            let text = line[offset..offset + run.len].to_owned();
-            offset += run.len;
-            (text, run.color)
-        })
-        .collect()
-}
-
-#[test]
-fn json_fixture_line_gets_the_prescribed_colors_with_one_shared_font() {
-    let source = r#"{"enabled":true,"count":2}"#;
-    assert_eq!(source.len(), 26);
-    let orange = hex(0xFFAA44);
-    let white = hex(0xEEEEEE);
-    let colors = SyntaxColors::dark()
-        .with_plain(white)
-        .with_category("string", hex(0x44CC88))
-        .with_category("property", orange)
-        .with_category("boolean", orange)
-        .with_category("number", orange)
-        .with_category("punctuation", white);
-    let cache = Arc::new(HighlightCache::new());
-    let view = CodeView::new(source)
-        .language("json")
-        .cache(cache)
-        .colors(colors)
-        .font_family("Liberation Mono")
-        .font_size(vespertine::px(14.))
-        .line_height(vespertine::px(22.));
-    let lines = view.lines();
-    assert_eq!(lines.len(), 1);
-    let runs = lines[0].runs();
-    let expected = [
-        ("{", white),
-        ("\"enabled\"", orange),
-        (":", white),
-        ("true", orange),
-        (",", white),
-        ("\"count\"", orange),
-        (":", white),
-        ("2", orange),
-        ("}", white),
-    ];
-    let actual = colored_text(source, runs);
-    assert_eq!(actual.len(), expected.len());
-    for ((text, color), (expected_text, expected_color)) in actual.iter().zip(expected) {
-        assert_eq!(text, expected_text);
-        assert_eq!(*color, expected_color, "color of {text}");
-        assert_ne!(*color, hex(0x44CC88));
-    }
-    let shared = font("Liberation Mono");
-    assert!(
-        runs.iter().all(|run| run.font == shared),
-        "one font for every run"
-    );
 }
 
 // ------------------------------------------------------------------ A8: cache stress

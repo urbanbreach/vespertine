@@ -1,24 +1,27 @@
-//! FID-TXT-007: a one-line JSON code view colored through the syntax palette with theme
+//! FID-TXT-007: a one-line JSON code block colored through the syntax palette with theme
 //! overrides; unclassified gaps (none here) share the metrics of colored text.
 
 use crate::common::hex;
 use crate::scene::{Scene, register_scene};
 use std::sync::Arc;
-use vespertine::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px};
-use vespertine_richtext::syntax::{CodeView, HighlightCache, RetainedHighlight, SyntaxColors};
+use vespertine::{AnyElement, App, IntoElement, ParentElement, Styled, Window, div, px, rgb};
+use vespertine_components::code::CodeBlock;
+use vespertine_richtext::syntax::{HighlightCache, LanguageHint, RetainedHighlight};
+use vespertine_theme::document::DocumentTheme;
 
 const SOURCE: &str = r#"{"enabled":true,"count":2}"#;
 
-/// The palette of the scene: THM-002 dark defaults with the spec's overrides and the plain
+/// The theme of the scene: THM-002 dark defaults with the spec's syntax overrides and the plain
 /// foreground #EEEEEE.
-fn palette() -> SyntaxColors {
-    SyntaxColors::dark()
-        .with_plain(hex(0xEEEEEE))
-        .with_category("string", hex(0x44CC88))
-        .with_category("property", hex(0xFFAA44))
-        .with_category("boolean", hex(0xFFAA44))
-        .with_category("number", hex(0xFFAA44))
-        .with_category("punctuation", hex(0xEEEEEE))
+fn theme() -> DocumentTheme {
+    let mut theme = DocumentTheme::dark();
+    theme.text = rgb(0xEEEEEE);
+    theme.syntax.string = rgb(0x44CC88);
+    theme.syntax.property = rgb(0xFFAA44);
+    theme.syntax.boolean = rgb(0xFFAA44);
+    theme.syntax.number = rgb(0xFFAA44);
+    theme.syntax.punctuation = rgb(0xEEEEEE);
+    theme
 }
 
 struct Txt007 {
@@ -33,12 +36,20 @@ impl Scene for Txt007 {
     }
 
     fn frame(&mut self, _f: u64, _window: &mut Window, _cx: &mut App) -> AnyElement {
-        let view = CodeView::new(self.source.clone())
+        let hint = LanguageHint {
+            fence_label: Some("json"),
+            path: None,
+        };
+        let document = self
+            .retained
+            .resolve(&self.cache, &self.source, hint)
+            .cloned();
+        let view = CodeBlock::new("fid-txt-007", &*self.source)
             .language("json")
-            .retained(&mut self.retained, &self.cache)
-            .colors(palette())
+            .highlight(document)
+            .theme(theme())
             .font_family("Liberation Mono")
-            .font_size(px(14.))
+            .text_size(px(14.))
             .line_height(px(22.))
             .absolute()
             .left(px(20.))
