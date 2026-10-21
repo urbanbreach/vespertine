@@ -5,20 +5,9 @@
 use crate::harness::{REFRESH_HZ, SCALE_FACTOR};
 use std::{env, fs};
 
-/// Which kind of run produced the numbers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunKind {
-    /// The headless runner: a real window on the deterministic test platform.
-    Headless,
-    /// A real window on the desktop session.
-    RealWindow,
-}
-
 /// The environment of a measurement.
 #[derive(Clone, Debug)]
 pub struct PlatformReport {
-    /// The kind of run.
-    pub kind: RunKind,
     /// The display backend and compositor the process ran under.
     pub backend: String,
     /// Scale factor of the measured window.
@@ -38,9 +27,9 @@ pub struct PlatformReport {
 }
 
 impl PlatformReport {
-    /// Collects the environment for a run of `kind`. `instructions` says whether instruction
+    /// Collects the environment of a headless run. `instructions` says whether instruction
     /// counts are measured (with the reason when not).
-    pub fn collect(kind: RunKind, instructions: Result<(), &str>) -> Self {
+    pub fn collect(instructions: Result<(), &str>) -> Self {
         let mut measured = vec![
             "UI-thread CPU time (per-thread CPU clock)".to_owned(),
             "wall time".to_owned(),
@@ -52,22 +41,11 @@ impl PlatformReport {
         });
         measured.push("not measured: process CPU, GPU time".to_owned());
         Self {
-            kind,
-            backend: backend(kind),
-            scale_factor: match kind {
-                RunKind::Headless => SCALE_FACTOR,
-                RunKind::RealWindow => SCALE_FACTOR,
-            },
-            refresh: match kind {
-                RunKind::Headless => {
-                    format!("{REFRESH_HZ} Hz (simulated frame interval of the test clock)")
-                }
-                RunKind::RealWindow => {
-                    "as reported by the window's display (see the application)".to_owned()
-                }
-            },
+            backend: backend(),
+            scale_factor: SCALE_FACTOR,
+            refresh: format!("{REFRESH_HZ} Hz (simulated frame interval of the test clock)"),
             cpu: cpu(),
-            gpu: gpu(kind),
+            gpu: gpu(),
             profile: if cfg!(debug_assertions) {
                 "dev (unoptimized, debug assertions on): not comparable with release numbers"
             } else {
@@ -83,11 +61,7 @@ impl PlatformReport {
     /// Plain text, one fact per line.
     pub fn text(&self) -> String {
         let mut out = String::new();
-        let kind = match self.kind {
-            RunKind::Headless => "headless runner",
-            RunKind::RealWindow => "real window",
-        };
-        out.push_str(&format!("platform: {kind}\n"));
+        out.push_str("platform: headless runner\n");
         out.push_str(&format!("  backend/compositor: {}\n", self.backend));
         out.push_str(&format!("  scale factor: {}\n", self.scale_factor));
         out.push_str(&format!("  refresh rate: {}\n", self.refresh));
@@ -103,7 +77,7 @@ impl PlatformReport {
     }
 }
 
-fn backend(kind: RunKind) -> String {
+fn backend() -> String {
     let session = env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_owned());
     let wayland = env::var("WAYLAND_DISPLAY")
         .ok()
@@ -121,13 +95,10 @@ fn backend(kind: RunKind) -> String {
         (None, Some(display)) => format!("X11 ({display}), {compositor}"),
         (None, None) => "no display server".to_owned(),
     };
-    match kind {
-        RunKind::Headless => format!(
-            "deterministic test platform (no display server involved); session: {display}, \
-             XDG_SESSION_TYPE={session}"
-        ),
-        RunKind::RealWindow => format!("{display}; XDG_SESSION_TYPE={session}"),
-    }
+    format!(
+        "deterministic test platform (no display server involved); session: {display}, \
+         XDG_SESSION_TYPE={session}"
+    )
 }
 
 fn cpu() -> String {
@@ -142,7 +113,7 @@ fn cpu() -> String {
     format!("{model}, {cores} logical cores")
 }
 
-fn gpu(kind: RunKind) -> String {
+fn gpu() -> String {
     let mut found = Vec::new();
     if let Ok(entries) = fs::read_dir("/sys/class/drm") {
         let mut names: Vec<_> = entries
@@ -185,8 +156,5 @@ fn gpu(kind: RunKind) -> String {
     } else {
         found.join("; ")
     };
-    match kind {
-        RunKind::Headless => format!("not used by the headless runner (present: {gpus})"),
-        RunKind::RealWindow => gpus,
-    }
+    format!("not used by the headless runner (present: {gpus})")
 }

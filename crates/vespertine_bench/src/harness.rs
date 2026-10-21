@@ -229,8 +229,7 @@ pub trait Driver {
     fn step(&mut self, frame: u64, stage: &mut Stage<'_>);
 }
 
-/// Where a workload builds its window: the headless [`Harness`] or a real window of an
-/// application running on the desktop session.
+/// Where a workload builds its window: the headless [`Harness`].
 pub trait Host {
     /// Opens the benchmark window around the content `build` makes, at the normalized size.
     fn open_boxed(

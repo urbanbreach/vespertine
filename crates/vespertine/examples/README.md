@@ -116,9 +116,8 @@ cargo run -p vespertine --example hello_world
 ## Diagnostics and benchmarks
 
 The DEV-003 examples live in the `vespertine_bench` crate (see its README): `panel_updates`
-(an update to one panel of a dashboard rebuilds that panel only), `lockstep_verification`
-(retained output equals full-render output, and a one-pixel fault fails), and
-`retention_showcase` (a real window with independent retention and refresh controls). The clipped
+(an update to one panel of a dashboard rebuilds that panel only) and `lockstep_verification`
+(retained output equals full-render output, and a one-pixel fault fails). The clipped
 rounded content example is `rounded_clip` above, and the Linux composition of framework content
 around an embedded native page is `web_page_layers` in `vespertine_webview`.
 

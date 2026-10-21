@@ -5,7 +5,7 @@ use std::{cell::RefCell, process::ExitCode, rc::Rc};
 use vespertine_bench::{
     Meter, RetentionMode, RunOptions, catalogue,
     harness::real_text_system,
-    platform_report::{PlatformReport, RunKind},
+    platform_report::PlatformReport,
     report, run_scenario, select,
     verify::{FaultPlan, Lockstep, LockstepOptions},
 };
@@ -27,7 +27,6 @@ options:
   --pixels               with --verify: also compare GPU-rendered pixels
   --perturb-atlas        with --verify: give the retained window a different atlas packing history
   --phase-times          enable the phase and shaping timers (counters always run)
-  --window               automatic real-window mode instead of the headless runner
   --json                 machine-readable output
   -h, --help             this text
 ";
@@ -46,7 +45,6 @@ struct Cli {
     pixels: bool,
     perturb_atlas: bool,
     phase_times: bool,
-    window: bool,
     json: bool,
 }
 
@@ -80,7 +78,6 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Cli>> {
             "--pixels" => cli.pixels = true,
             "--perturb-atlas" => cli.perturb_atlas = true,
             "--phase-times" => cli.phase_times = true,
-            "--window" => cli.window = true,
             "--json" => cli.json = true,
             other if other.starts_with('-') => bail!("unknown option {other}\n\n{USAGE}"),
             filter => cli.filters.push(filter.to_owned()),
@@ -128,20 +125,14 @@ fn run() -> Result<ExitCode> {
         frames: cli.frames,
         phase_times: cli.phase_times,
     };
-    if cli.window {
-        return vespertine_bench::real::run(&workloads, &options, &cli.retention, cli.json);
-    }
-
     let text_system = real_text_system();
     let meter = Rc::new(RefCell::new(Meter::new()));
     let instructions = match meter.borrow().instructions_unavailable() {
         None => Ok(()),
         Some(reason) => Err(reason.to_owned()),
     };
-    let platform = PlatformReport::collect(
-        RunKind::Headless,
-        instructions.as_ref().map(|_| ()).map_err(String::as_str),
-    );
+    let platform =
+        PlatformReport::collect(instructions.as_ref().map(|_| ()).map_err(String::as_str));
     let mut json = Vec::new();
     if !cli.json {
         print!("{}", platform.text());

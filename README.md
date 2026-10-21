@@ -255,7 +255,7 @@ More examples, by crate (`cargo run --release -p <crate> --example <name>`):
 | `vespertine_webview` | `web_page`, `web_page_layers` |
 | `vespertine_richtext` | `rich_geometry` |
 | `vespertine_theme` | `theme_appearance`, `theme_import`, `color_swatches`, `document_theme_live` |
-| `vespertine_bench` | `retention_showcase`, `lockstep_verification`, `panel_updates` |
+| `vespertine_bench` | `lockstep_verification`, `panel_updates` |
 | `vespertine_desktop` | `a11y_context`, `capture_service`, `permission_status` |
 | `vespertine_linux` | `native_input`, `native_layering`, `native_popover`, `native_resize`, `wayland_protocol` |
 | `vespertine_wgpu` | `edge_fade`, `glyph_transform`, `registered_font`, `typography` |

@@ -27,4 +27,3 @@ pub use harness::{Driver, EventLog, FaultKind, FrameOutcome, Harness, RetentionM
 pub use metrics::{Cost, Distribution, Instructions, Meter, Metric};
 pub use runner::{RunOptions, ScenarioReport, run_scenario};
 pub use workload::{Family, Workload, catalogue, select};
-pub mod real;

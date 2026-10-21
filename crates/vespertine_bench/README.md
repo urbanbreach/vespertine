@@ -11,7 +11,6 @@ cargo run --release -p vespertine_bench --bin vsp-bench -- --list
 cargo run --release -p vespertine_bench --bin vsp-bench -- quotes --frames 200 --warmup 30
 cargo run --release -p vespertine_bench --bin vsp-bench -- transcript --retention on --verify
 cargo run --release -p vespertine_bench --bin vsp-bench -- quotes-sparse --verify-only --fault 7   # must FAIL
-cargo run --release -p vespertine_bench --bin vsp-bench -- wheel-scroll --window                  # real window
 ```
 
 Each workload is created fresh for each retention mode in a real window on the deterministic test
@@ -63,9 +62,6 @@ same workload run twice gives identical draws and counters.
 
 ## Examples
 
-- `retention_showcase`: real-window showcase with independent retention and data-refresh controls,
-  automatic idle/sidebar/page/table/refresh runs, status metrics every 500 ms, and a controlled
-  retention off/on comparison in one process.
 - `lockstep_verification`: lockstep verification passes on identical windows (also with different
   atlas packing) and fails on a seeded one-pixel fault of every kind.
 - `panel_updates`: updating one panel of a dashboard rebuilds that panel only.

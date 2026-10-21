@@ -17,10 +17,6 @@ doctest = false
 name = "vsp-bench"
 path = "src/bin/vsp-bench.rs"
 
-[[example]]
-name = "retention_showcase"
-path = "examples/retention_showcase.rs"
-
 [dependencies]
 anyhow.workspace = true
 image.workspace = true
