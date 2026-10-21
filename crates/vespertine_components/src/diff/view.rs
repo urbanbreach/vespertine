@@ -541,10 +541,10 @@ impl RenderOnce for DiffView {
 
         let width_state = state.clone();
         let tracker = canvas(
-            move |bounds, _window, cx| {
+            move |bounds, window, cx| {
                 let width = f32::from(bounds.size.width);
                 if (width_state.read(cx).width - width).abs() > 0.01 {
-                    width_state.update(cx, |state, _| state.width = width);
+                    width_state.update(cx, |state, _| state.set_width(width, window));
                 }
             },
             |_, _, _, _| {},

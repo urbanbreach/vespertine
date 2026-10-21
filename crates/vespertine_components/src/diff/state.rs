@@ -367,6 +367,24 @@ impl DiffViewState {
         }
     }
 
+    /// Sets the viewer width and keeps every pan within its file's new maximum (R22).
+    pub(super) fn set_width(&mut self, width: f32, window: &mut Window) {
+        self.width = width;
+        self.clamp_horizontal_offsets(window);
+    }
+
+    /// Lowers each horizontal offset to its file's current maximum: the viewer width, the text
+    /// metrics or the mode may have changed since the code was panned.
+    fn clamp_horizontal_offsets(&mut self, window: &mut Window) {
+        let files: Vec<usize> = self.hscroll.keys().copied().collect();
+        for file in files {
+            let max = self.max_horizontal_offset(file, window);
+            if let Some(offset) = self.hscroll.get_mut(&file) {
+                *offset = offset.min(max);
+            }
+        }
+    }
+
     /// Toggles a file's collapsed state in the viewer's own tracking (R26). In a controlled
     /// viewer the owner decides; this has no effect there.
     pub fn toggle_file(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -456,7 +474,8 @@ impl DiffViewState {
             self.patch_key = Some(patch_key);
             self.tweens.clear();
             self.hover = None;
-            // Cached widths belong to the old model; offsets are clamped when used.
+            // Offsets are keyed by file index and measured against the old content.
+            self.hscroll.clear();
         }
         self.controlled = input.collapsed.is_some();
         let collapsed: HashSet<String> = match input.collapsed {
@@ -536,6 +555,7 @@ impl DiffViewState {
             ],
         ));
         self.layout = Some(input.layout.clone());
+        self.clamp_horizontal_offsets(window);
         if self.rows_key != Some(rows_key) {
             self.rebuild(
                 input,

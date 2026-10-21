@@ -486,6 +486,31 @@ fn a9_each_file_pans_independently_with_the_specified_content_widths_and_switche
     );
 }
 
+#[test]
+fn a9_replacing_the_patch_or_widening_the_viewer_never_leaves_code_panned_past_its_end() {
+    require_backend!();
+    let mut config = Config::new(long_line_patch(), 500., 400.);
+    config.scroll = false;
+    let mut rig = Rig::new(config, (500., 400.));
+    let y = 36. + 28. + 21. * 2. + 10.;
+    rig.host.scroll_wheel(300., y, -100_000., 0., "").unwrap();
+    rig.refresh();
+    assert!(rig.read(|state| state.horizontal_offset(0)) > 1000.);
+    // A wider viewer shows more of the line: the offset shrinks to the new maximum.
+    rig.set(|config| config.width = 1500.);
+    let max = rig.with_window(|state, window| state.max_horizontal_offset(0, window));
+    assert!(max > 0.);
+    assert!(
+        (rig.read(|state| state.horizontal_offset(0)) - max).abs() < 0.5,
+        "clamped to {max}"
+    );
+    // A new patch of short lines starts unpanned.
+    rig.set(|config| {
+        config.patch = "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-alpha\n+beta\n".to_owned()
+    });
+    assert_eq!(rig.read(|state| state.horizontal_offset(0)), 0.);
+}
+
 // --- R23: text size ---
 
 #[test]
