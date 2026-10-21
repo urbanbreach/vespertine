@@ -73,6 +73,13 @@ browser surface; loading placeholders and progress; retained three-dimensional a
 surfaces; audio activity visualizations; badges and review cards; streaming bottom-follow lists;
 elastic overscroll; and scrollbars. The `workbench` example composes many of them.
 
+Three default cargo features carry the heaviest parts: `browser` (the embedded browser surface, which
+needs `vespertine_webview` and so WebKitGTK; Linux only), `diagram` (Mermaid diagrams through the
+`merman` crate; without it, Mermaid fences render as source) and `math` (inline and display math with
+4.2 MB of embedded math faces; without it, formulas render as source). An application that does not
+need them depends on `vespertine_components` with `default-features = false` and enables the ones
+it uses.
+
 ### Embedded web view (PLT-014 to PLT-016)
 
 `vespertine_webview` runs WebKitGTK 4.1 in a separate helper process (never linked into the
@@ -192,7 +199,8 @@ JavaScript packages (an npm workspace under `packages/`):
   `rustfmt`, `clippy` and `rust-src`.
 - Linux with a Wayland or X11 session and a working Vulkan driver. The framework links the
   development packages of `libxcb`, `libxkbcommon` and `libxkbcommon-x11`.
-- For `vespertine_webview` (a workspace member, so part of every workspace build): `pkg-config` and
+- For `vespertine_webview` (a workspace member, so part of every workspace build, and a dependency of
+  `vespertine_components` through its default `browser` feature): `pkg-config` and
   the `webkit2gtk-4.1` and `json-glib-1.0` development files (Debian/Ubuntu `libwebkit2gtk-4.1-dev`,
   `libjson-glib-dev`; Fedora `webkit2gtk4.1-devel`, `json-glib-devel`). Set
   `VSP_WEBKIT_HELPER_BINARY` to embed a prebuilt helper instead of compiling `helper/*.c`.
