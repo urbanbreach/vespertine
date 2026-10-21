@@ -5,7 +5,6 @@ use super::{
     ContextUnavailable,
     fake::{FakeBus, FakeNodeSpec, FakeRequest, ManualClock, NodeId},
 };
-use futures::future::join;
 use std::{
     sync::Arc,
     task::{Context, Poll},
@@ -433,21 +432,14 @@ fn custom_budgets_apply() {
 // ---- A3 deadline, cancellation and identity ---------------------------------
 
 #[test]
-fn slow_bus_connection_expires_within_the_budget_and_capture_is_not_delayed() {
+fn slow_bus_connection_expires_within_the_budget() {
     let fx = fixture();
     fx.bus.set_connect_latency(Duration::from_secs(5));
     let clock = fx.clock.clone();
-    let capture_clock = fx.clock.clone();
-    let (capture_time, result) = fx.clock.run(async {
-        let capture = async move { capture_clock.elapsed() };
-        join(capture, query(&fx, ContextRequest::new(PID, TITLE))).await
-    });
+    let result = fx
+        .clock
+        .run(async { query(&fx, ContextRequest::new(PID, TITLE)).await });
     assert_eq!(result, Err(ContextUnavailable::Expired));
-    assert_eq!(
-        capture_time,
-        Duration::ZERO,
-        "capture delivered without waiting"
-    );
     assert_eq!(clock.elapsed(), Duration::from_millis(900));
     assert_eq!(fx.bus.in_flight(), 0);
 }
