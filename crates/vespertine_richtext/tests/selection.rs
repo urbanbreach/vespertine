@@ -9,11 +9,11 @@ use support::{Build, Harness, at, near, rgb_at};
 use unicode_segmentation::UnicodeSegmentation;
 use vespertine::{
     AnyElement, FocusHandle, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-    deferred, div, px, rgb,
+    deferred, div, font, px, rgb,
 };
 use vespertine_richtext::{
-    RichText, RunKey, SelectionRequest, UserSelect, selection_color, surface, text_layer,
-    text_root, user_select,
+    RichLayout, RichText, RunKey, SelectionRequest, UserSelect, plain_run, selection_color,
+    surface, text_layer, text_root, user_select,
 };
 
 const WIDTH: f32 = 240.0;
@@ -600,4 +600,46 @@ fn selection_over_a_soft_wrapped_run_washes_every_row_one_line_high() {
         [0x18, 0x18, 0x18],
         1
     ));
+}
+
+#[test]
+fn inherited_letter_spacing_moves_carets_and_selection_rects_with_the_glyphs() {
+    const TEXT: &str = "lorem ipsum";
+    let geometry = |spacing: f32| {
+        let captured: Rc<RefCell<Option<RichLayout>>> = Rc::default();
+        let sink = captured.clone();
+        let build: Build = Rc::new(move |_, _| {
+            let sink = sink.clone();
+            let runs = vec![plain_run(
+                TEXT.len(),
+                &font("Noto Sans"),
+                rgb(0xeeeeee).into(),
+            )];
+            page([div()
+                .letter_spacing(px(spacing))
+                .child(
+                    RichText::new("spaced", TEXT)
+                        .runs(runs)
+                        .after_paint(move |layout, _, _| *sink.borrow_mut() = Some(layout.clone())),
+                )
+                .into_any_element()])
+        });
+        let _harness = Harness::new(WIDTH, 100., build);
+        captured.take().expect("the run painted")
+    };
+    let plain = geometry(0.);
+    let spaced = geometry(3.);
+    let caret = |layout: &RichLayout, index: usize| {
+        layout.position_for_index(index).unwrap().x - layout.bounds().origin.x
+    };
+    // Every character but the last is followed by 3 px, so each caret moves by 3 px per
+    // preceding character and the end of the line by 3 px less than one per character.
+    for index in 0..=TEXT.len() {
+        let shift = 3. * index.min(TEXT.len() - 1) as f32;
+        let moved = caret(&spaced, index) - caret(&plain, index);
+        assert!((moved - px(shift)).abs() < px(0.01), "{index}: {moved:?}");
+    }
+    // The selection rectangle of "rem i" grows by the five spacings inside it.
+    let width = |layout: &RichLayout| layout.range_rects(2..7, px(0.), px(0.))[0].size.width;
+    assert!((width(&spaced) - width(&plain) - px(15.)).abs() < px(0.01));
 }

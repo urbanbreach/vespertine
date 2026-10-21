@@ -203,6 +203,14 @@ fn shaping_key_ignores_paint_only_attributes() {
         a.shaping_key(px(14.), Some(px(100.)), None),
         a.shaping_key(px(15.), Some(px(100.)), None)
     );
+    let mut spaced = plain_run(11, &base_font(), color(0xeeeeee));
+    spaced.letter_spacing = px(2.);
+    let d = RichSpans::new("hello world", vec![spaced]).unwrap();
+    assert_ne!(
+        key(&a),
+        key(&d),
+        "letter spacing moves glyphs and line breaks"
+    );
 }
 
 #[test]

@@ -82,8 +82,9 @@ impl RichSpans {
         vespertine::StyledText::new(self.text.clone()).with_runs(self.runs.clone())
     }
 
-    /// Key of everything that influences shaping and line breaking: the text, each run's length
-    /// and font (family, weight, style, features), the size, the wrap width and the overflow mode.
+    /// Key of everything that influences shaping and line breaking: the text, each run's length,
+    /// font (family, weight, style, features) and letter spacing, the size, the wrap width and
+    /// the overflow mode.
     /// Colors, backgrounds, underlines and strikethroughs are paint-only and never part of it
     /// (R3).
     pub fn shaping_key(
@@ -109,6 +110,7 @@ pub fn shaping_key(
     for run in runs {
         run.len.hash(&mut hasher);
         run.font.hash(&mut hasher);
+        f32::from(run.letter_spacing).to_bits().hash(&mut hasher);
     }
     f32::from(font_size).to_bits().hash(&mut hasher);
     wrap_width
@@ -132,7 +134,8 @@ pub fn floor_char_boundary(text: &str, index: usize) -> usize {
     index
 }
 
-/// A plain-style run of `len` bytes with the given font and color and no decorations.
+/// A plain-style run of `len` bytes with the given font and color and no decorations. It has no
+/// letter spacing of its own, so [`crate::RichText`] gives it the inherited text style's.
 pub fn plain_run(len: usize, font: &Font, color: Hsla) -> TextRun {
     TextRun {
         color,

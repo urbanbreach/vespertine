@@ -643,23 +643,21 @@ fn disclosure_view(
     cx: &mut App,
 ) -> AnyView {
     let (presented, _) = crate::display_map::with_break_opportunities(destination);
-    let run = crate::runs::plain_run(
-        destination.len(),
-        &window.text_style().font(),
-        rgb(0xffffff).into(),
-    );
+    // The card inherits the text style, so its letter spacing resolves against the card's text
+    // size and follows every cluster of the presented text, break opportunities included.
+    let style = window.text_style();
+    let mut run = crate::runs::plain_run(presented.len(), &style.font(), rgb(0xffffff).into());
+    run.letter_spacing = style
+        .letter_spacing
+        .to_pixels(px(DISCLOSURE_TEXT_SIZE).into(), window.rem_size());
+    let presented = SharedString::from(presented);
     let natural = window
         .text_system()
-        .shape_line(
-            SharedString::from(destination.to_string()),
-            px(DISCLOSURE_TEXT_SIZE),
-            &[run],
-            None,
-        )
+        .shape_line(presented.clone(), px(DISCLOSURE_TEXT_SIZE), &[run], None)
         .width;
     let size = DisclosureSize::compute(viewport, f32::from(natural));
     cx.new(|_| DisclosureCard {
-        text: SharedString::from(presented),
+        text: presented,
         size,
     })
     .into()

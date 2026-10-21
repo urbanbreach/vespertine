@@ -92,6 +92,7 @@ impl RichText {
     }
 
     /// Run list covering the displayed text exactly (otherwise the inherited text style is used).
+    /// Runs without letter spacing of their own take the inherited text style's.
     pub fn runs(mut self, runs: Vec<TextRun>) -> Self {
         self.runs = Some(runs);
         self
@@ -262,7 +263,21 @@ impl Element for RichText {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut styled = StyledText::new(SharedString::from(self.original.displayed().to_string()));
-        if let Some(runs) = self.runs.take() {
+        if let Some(mut runs) = self.runs.take() {
+            // Runs carry fonts and colors; letter spacing belongs to the inherited text style
+            // (TXT-010), which is live here, so the caret, selection, search and link geometry
+            // derived from the shaped layout follow the spaced glyphs.
+            let spacing = window
+                .text_style()
+                .letter_spacing_in_pixels(window.rem_size());
+            if spacing != Pixels::ZERO {
+                for run in runs
+                    .iter_mut()
+                    .filter(|run| run.letter_spacing == Pixels::ZERO)
+                {
+                    run.letter_spacing = spacing;
+                }
+            }
             styled = styled.with_runs(runs);
         }
         let (layout_id, ()) = styled.request_layout(global_id, inspector_id, window, cx);
