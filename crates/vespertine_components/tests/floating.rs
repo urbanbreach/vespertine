@@ -465,6 +465,19 @@ fn a4_pressing_a_second_trigger_switches_in_one_click() {
 // ---- A8 -------------------------------------------------------------------------------------
 
 #[test]
+fn tab_reaches_the_menu_trigger_and_enter_opens_the_menu() {
+    require_backend!();
+    let mut f = a5_fixture();
+    f.host.flush();
+    f.host.focus_next().unwrap();
+    f.host.flush();
+    assert!(f.focused_is(0, false), "the trigger is a tab stop");
+    f.host.key_down("enter", false, None).unwrap();
+    f.host.flush();
+    assert!(f.is_open(0));
+}
+
+#[test]
 fn a8_exit_phase_paints_swallows_clicks_and_lets_keys_fall_through() {
     require_backend!();
     let mut f = a5_fixture();

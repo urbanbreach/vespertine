@@ -113,7 +113,8 @@ impl PopupMenu {
             selected: None,
             trigger: TriggerBounds::new(),
             exempt: Vec::new(),
-            trigger_focus: cx.focus_handle(),
+            // The trigger is a keyboard tab stop; Enter or Down on it opens the menu.
+            trigger_focus: cx.focus_handle().tab_stop(true),
             layer_focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             popup: Popup::new(),
