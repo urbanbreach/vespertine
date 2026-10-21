@@ -20,6 +20,8 @@ use vespertine_components::text::{TextArea, area::CHROME_PADDING_Y};
 use vespertine_richtext::text_root;
 use vespertine_test_host::{DEFAULT_SCALE_FACTOR, HostOptions, TestHost};
 
+mod controls_support;
+
 type Sink = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 fn sink() -> Sink {
@@ -463,6 +465,45 @@ fn notice_copy_and_retry_are_tab_stops_activated_by_enter_and_space() {
     host.key_up("space", None).expect("key");
     host.flush();
     assert_eq!(retried.get(), 1);
+}
+
+#[test]
+fn the_keyboard_focus_ring_leaves_an_auto_width_action_the_same_size() {
+    if !vespertine_test_host::is_available() {
+        return;
+    }
+    let tokens = BadgeTokens::neutral();
+    let mut host = TestHost::with_element(options(400.0, 300.0), move |_, _| {
+        let chip = notice_chip(
+            "notice",
+            &tokens,
+            Severity::Warning,
+            "Slow",
+            "Lorem ipsum",
+            NoticeVariant::Tile,
+            Some(NoticeAction::new("Retry", |_, _, _| {})),
+        )
+        .w(px(300.));
+        text_root(div().p(px(20.)).child(chip)).into_any_element()
+    })
+    .expect("host");
+    host.flush();
+    let before = controls_support::node(&mut host, "button", Some("Retry")).bounds();
+    // A key press puts the window in keyboard modality, so the focus ring shows.
+    host.key_down("shift", false, None).expect("key");
+    host.focus_next().expect("focus");
+    host.focus_next().expect("focus");
+    host.flush();
+    let window = host.window();
+    let keyboard = host
+        .app()
+        .update_window(window, |_, window, cx| {
+            window.focused(cx).is_some() && window.last_input_was_keyboard()
+        })
+        .unwrap();
+    assert!(keyboard, "the retry action has keyboard focus");
+    let focused = controls_support::node(&mut host, "button", Some("Retry")).bounds();
+    assert_eq!(focused, before, "the ring takes no layout space");
 }
 
 // --- A6, A7, A9: review cards ------------------------------------------------------------------

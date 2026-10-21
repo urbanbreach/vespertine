@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use vespertine::{
-    AnyView, App, AppContext as _, Div, ElementId, Hsla, InteractiveElement, IntoElement,
+    AnyView, App, AppContext as _, Div, ElementId, Hsla, InteractiveElement, IntoElement, Outline,
     ParentElement, Render, Role, SharedString, Stateful, StatefulInteractiveElement, Styled,
     Window, div, px,
 };
@@ -55,7 +55,9 @@ pub fn button(
         .focusable()
         .tab_stop(true)
         .cursor_pointer()
-        .focus_visible(move |style| style.border_color(focus_ring).border_1())
+        // An inset outline: the ring covers the button's edge pixels without taking layout
+        // space or moving the content.
+        .focus_visible(move |style| style.outline(Outline::new(px(1.), focus_ring, px(-1.))))
         .on_click(move |_, window, cx| on_press(window, cx));
     if let Some((text, background, color)) = tooltip {
         element = element

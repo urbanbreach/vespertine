@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use vespertine::{
     AnyView, App, ClickEvent, Context, ElementId, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, Role, SharedString, Stateful,
+    IntoElement, MouseButton, Outline, ParentElement, Render, Role, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Window, div, px, svg,
 };
 
@@ -96,7 +96,9 @@ fn focusable_button(
         .focusable()
         .tab_stop(true)
         .cursor_pointer()
-        .focus_visible(move |style| style.border_1().border_color(focus_ring))
+        // An inset outline: the ring covers the button's edge pixels without taking layout
+        // space, so an auto-width button keeps its size while focused.
+        .focus_visible(move |style| style.outline(Outline::new(px(1.), focus_ring, px(-1.))))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |event, window, cx| {
             cx.stop_propagation();
