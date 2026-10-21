@@ -87,7 +87,6 @@ pub struct CodeBlock {
     key_owner: Option<u64>,
     gutter: Option<GutterFn>,
     overlays: Vec<(usize, OverlayFn)>,
-    rows_after: Vec<(usize, OverlayFn)>,
     on_line_click: Option<ClickFn>,
     on_line_bounds: Option<BoundsFn>,
     on_bounds: Option<Rc<dyn Fn(Bounds<Pixels>)>>,
@@ -114,7 +113,6 @@ impl CodeBlock {
             key_owner: None,
             gutter: None,
             overlays: Vec::new(),
-            rows_after: Vec::new(),
             on_line_click: None,
             on_line_bounds: None,
             on_bounds: None,
@@ -199,16 +197,6 @@ impl CodeBlock {
         overlay: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
         self.overlays.push((line, Rc::new(overlay)));
-        self
-    }
-
-    /// Inserts an additional row after line `line` (a review card). The row spans the block.
-    pub fn row_after(
-        mut self,
-        line: usize,
-        row: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-    ) -> Self {
-        self.rows_after.push((line, Rc::new(row)));
         self
     }
 
@@ -377,15 +365,6 @@ impl RenderOnce for CodeBlock {
                 row = row.child(anchored.child(overlay(window, cx)));
             }
             rows.push(row.into_any_element());
-            for (_, extra) in self.rows_after.iter().filter(|(line, _)| *line == index) {
-                rows.push(
-                    div()
-                        .flex_none()
-                        .w_full()
-                        .child(extra(window, cx))
-                        .into_any_element(),
-                );
-            }
 
             if self.show_line_numbers {
                 let label: SharedString = source.to_string().into();
@@ -429,10 +408,6 @@ impl RenderOnce for CodeBlock {
                     cell = cell.on_click(move |_, window, cx| handler(&click, window, cx));
                 }
                 gutter_cells.push(cell.into_any_element());
-                for (_, _) in self.rows_after.iter().filter(|(line, _)| *line == index) {
-                    // Keep the gutter aligned with the inserted rows.
-                    gutter_cells.push(div().flex_none().into_any_element());
-                }
             }
         }
 
