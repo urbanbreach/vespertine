@@ -70,6 +70,10 @@ pub struct HostFrame {
     key: u64,
     groups: RefCell<Vec<GroupInput>>,
     pieces: RefCell<HashMap<RunKey, (u64, usize)>>,
+    /// Native (generated) runs noted in prepaint, with the strings they paint.
+    natives: RefCell<HashMap<RunKey, Arc<str>>>,
+    /// Query matches in native text per specification, which explicit ranges number after.
+    native_matches: RefCell<Vec<usize>>,
     resolution: RefCell<Option<Arc<Resolution>>>,
 }
 
@@ -116,6 +120,15 @@ impl HostFrame {
         self.pieces.borrow().get(&run).map(|(_, piece)| *piece)
     }
 
+    /// Notes a native run's string in prepaint so explicit ranges can number after its query
+    /// matches (R7); the run's own washes are still matched when it paints.
+    pub fn register_native(&self, run: RunKey, text: &str) {
+        self.natives
+            .borrow_mut()
+            .entry(run)
+            .or_insert_with(|| Arc::from(text));
+    }
+
     fn color(&self, spec: &HighlightSpec, active: bool, accent: Hsla) -> Hsla {
         if active {
             spec.active_color.unwrap_or(Hsla {
@@ -151,9 +164,18 @@ impl HostFrame {
                 for (match_index, segment) in resolution.segments_for(group, piece) {
                     let resolved = &resolution.matches[match_index];
                     let spec = &specs[resolved.spec_index];
-                    let ordinal = self
-                        .numbering
-                        .retained_ordinal(self.key, match_index, resolved);
+                    let native_matches = self
+                        .native_matches
+                        .borrow()
+                        .get(resolved.spec_index)
+                        .copied()
+                        .unwrap_or(0);
+                    let ordinal = self.numbering.retained_ordinal(
+                        self.key,
+                        match_index,
+                        resolved,
+                        native_matches,
+                    );
                     let number = Numbering::display_number(spec, ordinal);
                     let active = Numbering::is_active(spec, number);
                     washes.push(Wash {
@@ -355,6 +377,8 @@ impl Element for Highlight {
                     key,
                     groups: RefCell::default(),
                     pieces: RefCell::default(),
+                    natives: RefCell::default(),
+                    native_matches: RefCell::default(),
                     resolution: RefCell::default(),
                 });
                 *slot.borrow_mut() = Some(frame.clone());
@@ -436,6 +460,23 @@ fn begin_painting(
             resolution.total
         });
         *frame.resolution.borrow_mut() = Some(resolution);
+        // Explicit ranges number after every query match of the frame, native ones included.
+        let natives = frame.natives.borrow();
+        *frame.native_matches.borrow_mut() = frame
+            .declaration
+            .specs()
+            .iter()
+            .map(|spec| {
+                if spec.ranges.is_empty() {
+                    return 0;
+                }
+                natives
+                    .values()
+                    .map(|text| state.numbering.match_native_text(spec, text).len())
+                    .sum()
+            })
+            .collect();
+        drop(natives);
         drop(state);
         if let (Some(total), Some(callback)) = (fire, on_count.cloned()) {
             window.defer(cx, move |window, cx| callback(total, window, cx));

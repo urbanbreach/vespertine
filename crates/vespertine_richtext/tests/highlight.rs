@@ -216,6 +216,39 @@ fn native_text_and_retained_text_number_in_paint_order() {
 }
 
 #[test]
+fn explicit_ranges_number_after_every_query_match_including_native_ones() {
+    // Query "a" matches native "a" (0) and retained "a" (1); the range [1, 2) covers the
+    // retained "b" and numbers after both query matches (2).
+    let spec = spec("a").with_ranges([1..2]).with_active_index(Some(1));
+    let build: Build = Rc::new(move |_, _| {
+        page(highlight(
+            "h",
+            HighlightDeclaration::from_spec(spec.clone()),
+            div()
+                .child(RichText::new("native", "a").native())
+                .child(RichText::new("retained", "ab")),
+        ))
+    });
+    let mut harness = Harness::new(WIDTH, 120., build);
+    harness.settle();
+    let mut washes: Vec<_> = harness
+        .service()
+        .painted_highlights()
+        .iter()
+        .map(|w| (w.text.clone(), w.start, w.active))
+        .collect();
+    washes.sort();
+    assert_eq!(
+        washes,
+        vec![
+            ("a".to_owned(), 0, false),
+            ("ab".to_owned(), 0, true),
+            ("ab".to_owned(), 1, false),
+        ]
+    );
+}
+
+#[test]
 fn a_cursor_above_the_mounted_window_marks_nothing() {
     let spec = spec("red")
         .with_match_index_offset(10)

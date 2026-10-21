@@ -111,17 +111,20 @@ impl Numbering {
     }
 
     /// The ordinal of a retained match (index `match_index` of its resolution, identified by
-    /// `resolution_key`): paint order for query matches, the resolution's static ordinal (query
-    /// total plus supplied order) for explicit-range matches.
+    /// `resolution_key`): paint order for query matches; for explicit-range matches the
+    /// resolution's static ordinal (retained query total plus supplied order) shifted past the
+    /// `native_matches` query matches of native text, so every range numbers after every query
+    /// match.
     pub fn retained_ordinal(
         &self,
         resolution_key: u64,
         match_index: usize,
         resolved: &ResolvedMatch,
+        native_matches: usize,
     ) -> usize {
         match resolved.kind {
             MatchKind::Query => self.ordinal_for(resolved.spec_index, resolution_key, match_index),
-            MatchKind::Range => resolved.ordinal,
+            MatchKind::Range => resolved.ordinal + native_matches,
         }
     }
 
@@ -226,8 +229,12 @@ mod tests {
         let mut painted = Vec::new();
         let paint_retained = |group_id: u64, painted: &mut Vec<(String, usize)>| {
             for (match_index, _) in resolution.segments_for(group_id, 0) {
-                let ordinal =
-                    numbering.retained_ordinal(key, match_index, &resolution.matches[match_index]);
+                let ordinal = numbering.retained_ordinal(
+                    key,
+                    match_index,
+                    &resolution.matches[match_index],
+                    0,
+                );
                 painted.push((format!("retained{group_id}"), ordinal));
             }
         };
@@ -286,6 +293,7 @@ mod tests {
                     9,
                     match_index,
                     &resolution.matches[match_index],
+                    0,
                 ));
             }
         }
@@ -300,9 +308,9 @@ mod tests {
         let resolution = Resolver::new().resolve(&HighlightDeclaration::from_spec(spec), &groups);
         let numbering = Numbering::new();
         // The range group paints first, then the query matches in reverse of document order.
-        let range_ordinal = numbering.retained_ordinal(5, 2, &resolution.matches[2]);
-        let second = numbering.retained_ordinal(5, 1, &resolution.matches[1]);
-        let first = numbering.retained_ordinal(5, 0, &resolution.matches[0]);
+        let range_ordinal = numbering.retained_ordinal(5, 2, &resolution.matches[2], 0);
+        let second = numbering.retained_ordinal(5, 1, &resolution.matches[1], 0);
+        let first = numbering.retained_ordinal(5, 0, &resolution.matches[0], 0);
         assert_eq!((range_ordinal, second, first), (2, 0, 1));
     }
 
@@ -365,7 +373,7 @@ mod tests {
         let resolution: std::sync::Arc<Resolution> = Resolver::new().resolve(&declaration, &groups);
         let before = resolution.identity;
         let numbering = Numbering::new();
-        numbering.retained_ordinal(1, 1, &resolution.matches[1]);
+        numbering.retained_ordinal(1, 1, &resolution.matches[1], 0);
         assert_eq!(resolution.identity, before);
     }
 }

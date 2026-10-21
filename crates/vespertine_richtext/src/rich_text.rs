@@ -302,17 +302,23 @@ impl Element for RichText {
         });
         let group_id = group_id(self.group, key);
         // Retained text registers with the nearest declaring ancestor's highlight; native
-        // (generated) text is matched at paint against the exact string it paints.
-        if !self.native && !self.chrome {
+        // (generated) text is matched at paint against the exact string it paints, and only
+        // notes that string so explicit ranges can number after its matches.
+        if !self.chrome {
             let service = TextService::current();
             let text: Arc<str> = Arc::from(self.original.displayed());
+            let native = self.native;
             window.prepaint_effect(
                 cx,
                 Rc::new(move |_, _| {
                     if let Some(host) = service.as_ref().and_then(TextService::highlight)
                         && !host.is_empty()
                     {
-                        host.register(key, group_id, &text);
+                        if native {
+                            host.register_native(key, &text);
+                        } else {
+                            host.register(key, group_id, &text);
+                        }
                     }
                 }),
             );
