@@ -504,6 +504,51 @@ fn overlay_window_has_the_attributes_the_spec_lists_and_an_empty_input_shape() {
 }
 
 #[test]
+fn overlay_window_announces_file_drop_support_like_its_owner() {
+    // Drag sources pick the top-level window under the pointer, which is the overlay window
+    // over overlay content.
+    let server = Server::new();
+    let (visual, depth) = server.argb_visual();
+    let ids = create_overlay_window(
+        &server.connection,
+        &OverlayWindowSpec {
+            root: server.screen().root,
+            visual,
+            depth,
+            owner: server.parent,
+            geometry: Geometry {
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 64,
+            },
+            atoms: &server.atoms,
+        },
+    )
+    .unwrap();
+    server.settle();
+    let version = server
+        .inspector
+        .get_property(
+            false,
+            ids.window,
+            server.atoms.XdndAware,
+            xproto::AtomEnum::ATOM,
+            0,
+            1,
+        )
+        .unwrap()
+        .reply()
+        .unwrap()
+        .value32()
+        .map(|values| values.collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert_eq!(version, [5], "XDND protocol version 5");
+    destroy_overlay_window(&server.connection, ids);
+    server.settle();
+}
+
+#[test]
 fn restacking_the_overlay_above_a_reparented_owner_is_harmless() {
     // The owner of a managed window sits inside a window manager frame: the restack above it
     // fails with BadMatch, which must not fail the frame.

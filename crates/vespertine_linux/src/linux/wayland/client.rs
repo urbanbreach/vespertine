@@ -430,7 +430,11 @@ pub(crate) struct WaylandClientState {
 struct DragState<DataOffer = wl_data_offer::WlDataOffer, Window = WaylandWindowStatePtr> {
     data_offer: Option<DataOffer>,
     window: Option<Window>,
+    /// The drag position in window-content coordinates.
     position: Point<Pixels>,
+    /// Where the entered surface's origin lies in window-content coordinates: drag
+    /// coordinates are local to the surface the drag entered.
+    surface_origin: Point<Pixels>,
     uri_read_generation: u64,
 }
 
@@ -495,12 +499,15 @@ where
         ))
     }
 
+    /// Delivers the drag that entered a surface of `window` at `surface_origin` once its paths
+    /// are read; `local_position` is relative to that surface.
     fn complete_uri_read(
         &mut self,
         generation: u64,
         data_offer: DataOffer,
         window: Window,
-        position: Point<Pixels>,
+        surface_origin: Point<Pixels>,
+        local_position: Point<Pixels>,
         paths: vespertine::ExternalPaths,
     ) -> Option<(Window, PlatformInput)> {
         if !self.is_uri_read_current(generation) {
@@ -510,10 +517,23 @@ where
 
         self.data_offer = Some(data_offer);
         self.window = Some(window.clone());
+        self.surface_origin = surface_origin;
+        let position = surface_origin + local_position;
         self.position = position;
         Some((
             window,
             PlatformInput::FileDrop(FileDropEvent::Entered { position, paths }),
+        ))
+    }
+
+    /// Moves the drag to `local_position`, relative to the entered surface.
+    fn handle_motion(&mut self, local_position: Point<Pixels>) -> Option<(Window, PlatformInput)> {
+        let window = self.window.clone()?;
+        let position = self.surface_origin + local_position;
+        self.position = position;
+        Some((
+            window,
+            PlatformInput::FileDrop(FileDropEvent::Pending { position }),
         ))
     }
 }
@@ -1200,6 +1220,7 @@ impl WaylandConnection {
                 data_offer: None,
                 window: None,
                 position: Point::default(),
+                surface_origin: Point::default(),
                 uri_read_generation: 0,
             },
             external_drag: None,
@@ -3097,7 +3118,9 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
             } => {
                 state.serial_tracker.update(SerialKind::DataDevice, serial);
                 if let Some(data_offer) = data_offer {
-                    let Some(drag_window) = get_window(&mut state, &surface.id()) else {
+                    // A drag entering a composition subsurface belongs to its owning window.
+                    let (Some(drag_window), surface_origin) = pointer_target(&state, &surface.id())
+                    else {
                         return;
                     };
                     let uri_read_generation = state.drag.begin_uri_read();
@@ -3144,7 +3167,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                     }
                                 })
                                 .collect();
-                            let position = Point::new(x.into(), y.into());
+                            let local_position = Point::new(x.into(), y.into());
 
                             // Prevent dropping text from other programs.
                             if paths.is_empty() {
@@ -3160,7 +3183,8 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                 uri_read_generation,
                                 data_offer,
                                 drag_window,
-                                position,
+                                surface_origin,
+                                local_position,
                                 vespertine::ExternalPaths(paths),
                             );
 
@@ -3173,15 +3197,11 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                 }
             }
             wl_data_device::Event::Motion { x, y, .. } => {
-                let Some(drag_window) = state.drag.window.clone() else {
-                    return;
-                };
-                let position = Point::new(x.into(), y.into());
-                state.drag.position = position;
-
-                let input = PlatformInput::FileDrop(FileDropEvent::Pending { position });
+                let input = state.drag.handle_motion(Point::new(x.into(), y.into()));
                 drop(state);
-                drag_window.handle_input(input);
+                if let Some((drag_window, input)) = input {
+                    drag_window.handle_input(input);
+                }
             }
             wl_data_device::Event::Leave => {
                 let input = state.drag.handle_leave();
@@ -3506,6 +3526,7 @@ mod tests {
             data_offer: None,
             window: None,
             position: Point::default(),
+            surface_origin: Point::default(),
             uri_read_generation: 0,
         }
     }
@@ -3521,6 +3542,7 @@ mod tests {
             data_offer,
             window,
             Point::default(),
+            Point::default(),
             vespertine::ExternalPaths(SmallVec::from_vec(vec![PathBuf::from("/tmp/file")])),
         )
     }
@@ -3532,6 +3554,43 @@ mod tests {
         if let Some((window, PlatformInput::FileDrop(FileDropEvent::Entered { .. }))) = input {
             entered_windows.push(window);
         }
+    }
+
+    fn file_drop_position(input: Option<(&'static str, PlatformInput)>) -> Point<Pixels> {
+        match input {
+            Some((
+                "window A",
+                PlatformInput::FileDrop(
+                    FileDropEvent::Entered { position, .. }
+                    | FileDropEvent::Pending { position }
+                    | FileDropEvent::Submit { position },
+                ),
+            )) => position,
+            _ => panic!("expected a file drop event for window A"),
+        }
+    }
+
+    #[test]
+    fn a_drag_over_a_composition_subsurface_reaches_its_window_in_window_coordinates() {
+        let mut drag = drag_state();
+        let generation = drag.begin_uri_read();
+        let entered = drag.complete_uri_read(
+            generation,
+            FakeDataOffer::new("A"),
+            "window A",
+            point(px(40.0), px(25.0)),
+            point(px(5.0), px(7.0)),
+            vespertine::ExternalPaths(SmallVec::from_vec(vec![PathBuf::from("src/lib.rs")])),
+        );
+        assert_eq!(file_drop_position(entered), point(px(45.0), px(32.0)));
+        assert_eq!(
+            file_drop_position(drag.handle_motion(point(px(10.0), px(10.0)))),
+            point(px(50.0), px(35.0))
+        );
+        assert_eq!(
+            file_drop_position(drag.handle_drop()),
+            point(px(50.0), px(35.0))
+        );
     }
 
     #[test]

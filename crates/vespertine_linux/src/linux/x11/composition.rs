@@ -397,8 +397,9 @@ pub(crate) struct OverlayWindowIds {
 
 /// Creates the transparent overlay window (PLT-001 R22): override-redirect, the parent's ARGB
 /// visual with a colormap created for it, transient for the owner, a dropdown-menu type window
-/// that does not accept input focus, with pointer motion, button and enter/leave device events
-/// selected and an empty input shape until content sets one. The window is not mapped.
+/// that does not accept input focus, XDND aware like its owner, with pointer motion, button and
+/// enter/leave device events selected and an empty input shape until content sets one. The
+/// window is not mapped.
 pub(crate) fn create_overlay_window<C: Connection>(
     connection: &C,
     spec: &OverlayWindowSpec<'_>,
@@ -454,6 +455,15 @@ pub(crate) fn create_overlay_window<C: Connection>(
             spec.atoms._NET_WM_WINDOW_TYPE,
             xproto::AtomEnum::ATOM,
             &[spec.atoms._NET_WM_WINDOW_TYPE_DROPDOWN_MENU],
+        )?;
+        // Drag sources address the top-level window under the pointer, which is this window
+        // over overlay content; the client routes its XDND messages to the owner.
+        connection.change_property32(
+            xproto::PropMode::REPLACE,
+            window,
+            spec.atoms.XdndAware,
+            xproto::AtomEnum::ATOM,
+            &[5],
         )?;
         // The window never takes input focus, so a compositor does not focus it, deactivate
         // the parent (closing framework menus and popovers) or raise a floating parent

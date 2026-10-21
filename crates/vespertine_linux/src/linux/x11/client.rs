@@ -1028,6 +1028,24 @@ impl X11Client {
             .map(|window| (window.window.clone(), offset))
     }
 
+    /// The framework window that XDND messages and dropped data addressed to `x_window` belong
+    /// to: the window itself, or the owner of an overlay window. The overlay window lies at
+    /// its owner's content origin, so positions relative to it need no offset.
+    fn drop_target_window(&self, x_window: xproto::Window) -> Option<X11WindowStatePtr> {
+        let state = self.0.borrow();
+        let owner = match state.aux_windows.get(&x_window) {
+            Some(AuxWindow {
+                owner,
+                kind: AuxWindowKind::Overlay,
+            }) => *owner,
+            _ => x_window,
+        };
+        state
+            .windows
+            .get(&owner)
+            .map(|window| window.window.clone())
+    }
+
     /// Whether a pointer `Leave` on `x_window` only moved the pointer between a framework window
     /// and its overlay window, which are separate X windows but one surface for the framework.
     fn leave_stays_inside(&self, x_window: xproto::Window) -> bool {
@@ -1102,7 +1120,7 @@ impl X11Client {
                 handle_visibility_changed(state, event.window);
             }
             Event::ClientMessage(event) => {
-                let window = self.get_window(event.window)?;
+                let window = self.drop_target_window(event.window)?;
                 let [atom, arg1, arg2, arg3, arg4] = event.data.as_data32();
                 let delete_window_atom = self.0.borrow().atoms.WM_DELETE_WINDOW;
 
@@ -1194,7 +1212,7 @@ impl X11Client {
                 }
             }
             Event::SelectionNotify(event) => {
-                let window = self.get_window(event.requestor)?;
+                let window = self.drop_target_window(event.requestor)?;
                 let state = self.0.borrow_mut();
                 let reply = get_reply(
                     || "Failed to get XDND_DATA",
