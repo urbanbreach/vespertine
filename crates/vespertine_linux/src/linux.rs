@@ -12,6 +12,7 @@ mod settings_notify;
 mod system_notifications;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod text_system;
+mod timers;
 #[cfg(feature = "wayland")]
 mod wayland;
 #[cfg(feature = "x11")]

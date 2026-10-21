@@ -18,6 +18,7 @@ Every dependency must be available under Apache-2.0, MIT, BSD-2-Clause, BSD-3-Cl
 | Crate | Version | License | Change from the published crate |
 | --- | --- | --- | --- |
 | taffy | 0.13.0 | MIT | modified measurement cache and added subtree-layout method for persistent layout nodes (LAY-001) |
+| polling | 3.11.0 | Apache-2.0 OR MIT | epoll backend arms its timerfd and re-arms its notifier only when a wait needs it (idle wakeups, PERF-IDLE) |
 
 ## Bundled fonts
 
@@ -545,7 +546,7 @@ First-party npm packages (all Apache-2.0): `@vespertine/dev`, `@vespertine/examp
 | plotters-svg | 0.3.7 | MIT | MIT | crates.io |
 | png | 0.17.16 | MIT OR Apache-2.0 | MIT | crates.io |
 | png | 0.18.0 | MIT OR Apache-2.0 | MIT | crates.io |
-| polling | 3.11.0 | Apache-2.0 OR MIT | MIT | crates.io |
+| polling | 3.11.0 | Apache-2.0 OR MIT | MIT | vendored |
 | pollster | 0.2.5 | Apache-2.0/MIT | MIT | crates.io |
 | pollster | 0.4.0 | Apache-2.0/MIT | MIT | crates.io |
 | polycool | 0.4.0 | MIT OR Apache-2.0 | MIT | crates.io |

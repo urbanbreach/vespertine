@@ -1,25 +1,14 @@
-use calloop::{
-    EventLoop, PostAction,
-    channel::{self, Sender},
-    timer::TimeoutAction,
-};
-use vespertine_util::ResultExt;
-
 use std::{mem::MaybeUninit, thread, time::Duration};
 
+use crate::linux::timers::Timers;
 use vespertine::{
     PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
     profiler,
 };
 
-struct TimerAfter {
-    duration: Duration,
-    runnable: RunnableVariant,
-}
-
 pub(crate) struct LinuxDispatcher {
     main_sender: PriorityQueueCalloopSender<RunnableVariant>,
-    timer_sender: Sender<TimerAfter>,
+    timers: Timers,
     background_sender: PriorityQueueSender<RunnableVariant>,
     _background_threads: Vec<thread::JoinHandle<()>>,
     main_thread_id: thread::ThreadId,
@@ -51,53 +40,12 @@ impl LinuxDispatcher {
             })
             .collect::<Vec<_>>();
 
-        let (timer_sender, timer_channel) = calloop::channel::channel::<TimerAfter>();
-        let timer_thread = std::thread::Builder::new()
-            .name("Timer".to_owned())
-            .spawn(move || {
-                let mut event_loop: EventLoop<()> =
-                    EventLoop::try_new().expect("Failed to initialize timer loop!");
-
-                let handle = event_loop.handle();
-                let timer_handle = event_loop.handle();
-                let signal = event_loop.get_signal();
-                handle
-                    .insert_source(timer_channel, move |e, _, _| {
-                        // The dispatcher owning the sender is gone; timers already
-                        // scheduled would run tasks nothing can observe.
-                        if let channel::Event::Closed = e {
-                            signal.stop();
-                        }
-                        if let channel::Event::Msg(timer) = e {
-                            let mut runnable = Some(timer.runnable);
-                            timer_handle
-                                .insert_source(
-                                    calloop::timer::Timer::from_duration(timer.duration),
-                                    move |_, _, _| {
-                                        if let Some(runnable) = runnable.take() {
-                                            let location = runnable.metadata().location;
-                                            let spawned = runnable.metadata().spawned;
-                                            profiler::update_running_task(spawned, location);
-                                            runnable.run();
-                                            profiler::save_task_timing();
-                                        }
-                                        TimeoutAction::Drop
-                                    },
-                                )
-                                .expect("Failed to start timer");
-                        }
-                    })
-                    .expect("Failed to start timer thread");
-
-                event_loop.run(None, &mut (), |_| {}).log_err();
-            })
-            .unwrap();
-
+        let (timers, timer_thread) = Timers::start();
         background_threads.push(timer_thread);
 
         Self {
             main_sender,
-            timer_sender,
+            timers,
             background_sender,
             _background_threads: background_threads,
             main_thread_id: thread::current().id(),
@@ -133,11 +81,11 @@ impl PlatformDispatcher for LinuxDispatcher {
     }
 
     fn dispatch_after(&self, duration: Duration, runnable: RunnableVariant) {
-        if let Err(err) = self.timer_sender.send(TimerAfter { duration, runnable }) {
+        if let Err(runnable) = self.timers.arm(duration, runnable) {
             // The timer thread has shut down. Dropping a scheduled runnable cancels its task
             // and makes the next poll of any awaiter panic. Leaking leaves the task pending,
             // which is acceptable during shutdown.
-            std::mem::forget(err);
+            std::mem::forget(runnable);
         }
     }
 
@@ -278,13 +226,13 @@ impl<T> calloop::EventSource for PriorityQueueCalloopReceiver<T> {
             .map_err(ChannelError)?;
 
         if disconnected {
-            Ok(PostAction::Remove)
+            Ok(calloop::PostAction::Remove)
         } else if clear_readiness {
             Ok(action)
         } else {
             // Re-notify the ping source so we can try again.
             self.ping.ping();
-            Ok(PostAction::Continue)
+            Ok(calloop::PostAction::Continue)
         }
     }
 
@@ -312,6 +260,48 @@ impl<T> calloop::EventSource for PriorityQueueCalloopReceiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::Arc, time::Instant};
+
+    fn background_executor() -> vespertine::BackgroundExecutor {
+        let (sender, _receiver) = PriorityQueueCalloopReceiver::new();
+        vespertine::BackgroundExecutor::new(Arc::new(LinuxDispatcher::new(sender)))
+    }
+
+    #[test]
+    fn timers_fire_in_deadline_order_without_waiting_for_each_other() {
+        let executor = background_executor();
+        let start = Instant::now();
+        let long = executor.timer(Duration::from_millis(150));
+        let short = executor.timer(Duration::from_millis(30));
+
+        futures::executor::block_on(short);
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert!(!long.is_ready(), "the long timer fired with the short one");
+
+        futures::executor::block_on(long);
+        assert!(start.elapsed() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn a_dropped_timer_does_not_disturb_the_others() {
+        let executor = background_executor();
+        drop(executor.timer(Duration::from_millis(10)));
+        let kept = executor.timer(Duration::from_millis(40));
+        futures::executor::block_on(kept);
+    }
+
+    #[test]
+    fn an_idle_dispatcher_stops_its_timer_thread_when_dropped() {
+        let (sender, _receiver) = PriorityQueueCalloopReceiver::new();
+        let dispatcher = LinuxDispatcher::new(sender);
+        let thread = dispatcher.timers.watch();
+        drop(dispatcher);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while thread.upgrade().is_some() {
+            assert!(Instant::now() < deadline, "the timer thread did not stop");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn calloop_works() {

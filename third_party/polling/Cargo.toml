@@ -1,0 +1,97 @@
+# Vendored copy of polling 3.11.0 (Apache-2.0 OR MIT, https://github.com/smol-rs/polling) whose
+# epoll backend arms its timerfd and re-arms its notifier only when a wait needs it (see
+# src/epoll.rs, `wait_deadline`), so a window that sits idle pays four fewer system calls per wakeup.
+
+[package]
+edition = "2021"
+rust-version = "1.71"
+name = "polling"
+version = "3.11.0"
+authors = [
+    "Stjepan Glavina <stjepang@gmail.com>",
+    "John Nunley <dev@notgull.net>",
+]
+build = false
+exclude = ["/.*"]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Portable interface to epoll, kqueue, event ports, and IOCP"
+readme = "README.md"
+keywords = [
+    "mio",
+    "epoll",
+    "kqueue",
+    "iocp",
+]
+categories = [
+    "asynchronous",
+    "network-programming",
+    "os",
+]
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/smol-rs/polling"
+
+[package.metadata.docs.rs]
+rustdoc-args = [
+    "--cfg",
+    "docsrs",
+]
+
+[lib]
+name = "polling"
+path = "src/lib.rs"
+
+[dependencies.cfg-if]
+version = "1"
+
+[dependencies.tracing]
+version = "0.1.37"
+optional = true
+default-features = false
+
+[target.'cfg(any(unix, target_os = "fuchsia", target_os = "vxworks"))'.dependencies.rustix]
+version = "1.0.5"
+features = [
+    "event",
+    "fs",
+    "pipe",
+    "process",
+    "std",
+    "time",
+]
+default-features = false
+
+[target.'cfg(target_os = "hermit")'.dependencies.hermit-abi]
+version = "0.5.0"
+
+[target."cfg(windows)".dependencies.concurrent-queue]
+version = "2.2.0"
+
+[target."cfg(windows)".dependencies.pin-project-lite]
+version = "0.2.9"
+
+[target."cfg(windows)".dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+]
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+priority = 0
+check-cfg = [
+    "cfg(polling_test_poll_backend)",
+    "cfg(polling_test_epoll_pipe)",
+]

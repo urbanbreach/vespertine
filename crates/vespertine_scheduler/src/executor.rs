@@ -532,6 +532,32 @@ impl<T> RendezvousSender<T> {
     }
 }
 
+impl Task<()> {
+    /// A task that finishes when `timer` does, without an executor thread in between.
+    ///
+    /// Spawning the timer on a background thread costs that thread two wakeups, one to poll it
+    /// for the first time and one when it fires. This task is polled where it is created and
+    /// again by whichever thread completes the timer, so an idle process pays only for the
+    /// wakeup of that thread. It is meant for timer futures, which only register a waker.
+    #[track_caller]
+    pub fn from_timer(timer: Timer) -> Self {
+        let location = Location::caller();
+        let (runnable, task) = async_task::Builder::new()
+            .metadata(RunnableMeta {
+                location,
+                spawned: crate::SpawnTime(Instant::now()),
+            })
+            .spawn(
+                move |_| timer,
+                |runnable: Runnable<RunnableMeta>| {
+                    runnable.run();
+                },
+            );
+        runnable.run();
+        Task(TaskState::Spawned(task))
+    }
+}
+
 impl<T> Task<T> {
     /// Creates a new task that will resolve with the value
     pub fn ready(val: T) -> Self {

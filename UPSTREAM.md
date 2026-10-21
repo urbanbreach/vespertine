@@ -123,6 +123,21 @@ source pin even when resolving the Linux build.
   result per constraint kind; layout results are unchanged. `src/tree/taffy_tree.rs`: adds
   `TaffyTree::compute_subtree_layout_with_measure`, which recomputes one subtree with its own
   size fixed. Taffy 0.14 was not adopted because it changes flex/grid/block results.
+- Vendored polling 3.11.0 under `third_party/polling` (Apache-2.0 OR MIT; `[patch.crates-io]`),
+  changed in `src/epoll.rs` only. A wait arms its timerfd only for a positive timeout (and disarms
+  it once afterwards) and registers the one-shot timerfd interest only after a reported
+  notification consumed it; the notifier is drained and re-registered only when a notification
+  was reported. An event loop that wakes for another source (the compositor's ping on an idle
+  window) therefore makes four system calls fewer per wakeup; readiness, wakeup and timeout
+  behavior are unchanged. The tests and examples of the published crate are not vendored.
+- Linux dispatcher timers (`vespertine_linux/src/linux/dispatcher.rs`) are kernel timers (`timerfd`)
+  armed by the calling thread and registered with the timer thread's epoll set, instead of messages
+  to a timer thread that arms them itself; `BackgroundExecutor::timer` completes on the thread that
+  fires the timer (`Task::from_timer`) instead of on a background worker, except under the test
+  scheduler. A timer therefore wakes one thread, the timer thread when it fires, instead of the
+  timer thread twice and a worker twice.
+  The desktop HTTP client's tokio runtime (`vespertine_reqwest_client`) is created by its first
+  request instead of when the client is built.
 - Removed features `vespertine_platform/multithreaded`,
   `vespertine_scheduler/wasm-threads`, and `vespertine_ztracing/web`.
 - Removed only these browser-transport tests:

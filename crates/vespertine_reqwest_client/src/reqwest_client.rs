@@ -22,7 +22,9 @@ pub struct ReqwestClient {
     client: reqwest::Client,
     proxy: Option<Url>,
     user_agent: Option<HeaderValue>,
-    handle: tokio::runtime::Handle,
+    /// The ambient tokio runtime at construction, if any. Without one the shared runtime is
+    /// created by the first request, so an idle application never starts its worker thread.
+    handle: Option<tokio::runtime::Handle>,
 }
 
 impl ReqwestClient {
@@ -150,13 +152,9 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
 
 impl From<reqwest::Client> for ReqwestClient {
     fn from(client: reqwest::Client) -> Self {
-        let handle = tokio::runtime::Handle::try_current().unwrap_or_else(|_| {
-            log::debug!("no tokio runtime found, creating one for Reqwest...");
-            runtime().handle().clone()
-        });
         Self {
             client,
-            handle,
+            handle: tokio::runtime::Handle::try_current().ok(),
             proxy: None,
             user_agent: None,
         }
@@ -311,7 +309,10 @@ impl vespertine_http_client::HttpClient for ReqwestClient {
             }
         });
 
-        let handle = self.handle.clone();
+        let handle = self.handle.clone().unwrap_or_else(|| {
+            log::debug!("no tokio runtime found, creating one for Reqwest...");
+            runtime().handle().clone()
+        });
         async move {
             let join_handle = handle.spawn(async { request.send().await });
             let abort_handle = join_handle.abort_handle();

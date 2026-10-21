@@ -132,6 +132,9 @@ xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881
     "x11rb-client",
 ], package = "zed-xim", version = "0.4.0-zed", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["event", "std", "time"] }
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 vespertine = { workspace = true, features = ["test-support"] }
 vespertine_wgpu = { workspace = true, features = ["test-support"] }

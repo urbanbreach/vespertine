@@ -182,7 +182,13 @@ impl BackgroundExecutor {
         if duration.is_zero() {
             return Task::ready(());
         }
-        self.spawn(self.inner.scheduler().timer(duration))
+        let timer = self.inner.scheduler().timer(duration);
+        if self.inner.is_test() {
+            // The test scheduler orders every task it runs, including this one.
+            self.spawn(timer)
+        } else {
+            Task::from_timer(timer)
+        }
     }
 
     /// In tests, run an arbitrary number of tasks (determined by the SEED environment variable)

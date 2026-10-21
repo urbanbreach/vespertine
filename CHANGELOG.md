@@ -73,6 +73,11 @@ and bidirectional history; phase-aware elastic overscroll; classic and auto-hidi
   adaptive tiled scroll-content reuse, incremental virtual-list row replay, translation-invariant
   tessellation cache, batched GPU uploads and render-pass reuse, adapter-aware solid-fill
   specialization, region-bounded Gaussian processing, bounded renderer resources with idle reclamation.
+- Idle wakeups: a background timer costs no executor-thread wakeups (it is a kernel timer armed by
+  its caller and completed on the timer thread, which wakes only when it fires), an event-loop
+  wakeup for another source (a compositor ping on a parked window) skips the timerfd and notifier
+  bookkeeping of the vendored `polling` crate, and the desktop HTTP client creates its runtime on
+  its first request.
 - Carried text measurements, bounded shaping and font lookup caches, validated numeric shaping,
   size-specific shaping resource retention, compact retained state with no-op commit suppression,
   in-place image atlas updates, incremental document and media residency budgets
