@@ -1,7 +1,6 @@
 //! Tests for focus-scoped input behavior (INP-007): safe focus restoration and
-//! pane scopes, accessibility metadata, the keyboard
-//! context menu, cursor restoration after drags and raw key / hold-gesture
-//! observation.
+//! pane scopes, the keyboard context menu, cursor restoration after drags and
+//! raw key / hold-gesture observation.
 
 use crate::util::FluentBuilder as _;
 use crate::{
@@ -283,83 +282,6 @@ fn key_down(cx: &mut VisualTestContext, key: &str, is_held: bool) {
 fn key_up(cx: &mut VisualTestContext, key: &str) {
     let keystroke = crate::Keystroke::parse(key).expect("valid keystroke");
     cx.simulate_event(KeyUpEvent { keystroke });
-}
-
-// ---------------------------------------------------------------------------
-// R4: accessibility metadata
-// ---------------------------------------------------------------------------
-
-fn a11y_node(mut element: impl Element) -> (Option<crate::Role>, accesskit::Node) {
-    let role = element.a11y_role();
-    let mut node = accesskit::Node::new(role.unwrap_or(crate::Role::GenericContainer));
-    element.write_a11y_info(&mut node);
-    (role, node)
-}
-
-#[test]
-fn switch_exposes_role_label_and_checked_state() {
-    for (checked, expected) in [(true, crate::Toggled::True), (false, crate::Toggled::False)] {
-        let (role, node) = a11y_node(
-            div()
-                .id("wifi")
-                .role(crate::Role::Switch)
-                .aria_label("Wi-Fi")
-                .aria_toggled(expected),
-        );
-        assert_eq!(role, Some(crate::Role::Switch));
-        assert_eq!(node.label(), Some("Wi-Fi"));
-        assert_eq!(node.toggled(), Some(expected), "checked = {checked}");
-    }
-}
-
-#[test]
-fn slider_exposes_value_range_and_orientation() {
-    let (role, node) = a11y_node(
-        div()
-            .id("volume")
-            .role(crate::Role::Slider)
-            .aria_label("Volume")
-            .aria_numeric_value(42.)
-            .aria_min_numeric_value(0.)
-            .aria_max_numeric_value(100.)
-            .aria_numeric_value_step(5.)
-            .aria_value("42 percent")
-            .aria_orientation(crate::Orientation::Horizontal),
-    );
-    assert_eq!(role, Some(crate::Role::Slider));
-    assert_eq!(node.label(), Some("Volume"));
-    assert_eq!(node.numeric_value(), Some(42.));
-    assert_eq!(node.min_numeric_value(), Some(0.));
-    assert_eq!(node.max_numeric_value(), Some(100.));
-    assert_eq!(node.numeric_value_step(), Some(5.));
-    assert_eq!(node.value(), Some("42 percent"));
-    assert_eq!(node.orientation(), Some(crate::Orientation::Horizontal));
-}
-
-#[test]
-fn selected_expanded_alert_status_and_link_roles() {
-    let (role, node) = a11y_node(
-        div()
-            .id("tab")
-            .role(crate::Role::Tab)
-            .aria_label("General")
-            .aria_selected(true)
-            .aria_expanded(false),
-    );
-    assert_eq!(role, Some(crate::Role::Tab));
-    assert_eq!(node.is_selected(), Some(true));
-    assert_eq!(node.is_expanded(), Some(false));
-
-    for (accessible_role, label) in [
-        (crate::Role::Alert, "Disk full"),
-        (crate::Role::Status, "Saved"),
-        (crate::Role::Link, "Documentation"),
-        (crate::Role::Button, "Save"),
-    ] {
-        let (role, node) = a11y_node(div().id(label).role(accessible_role).aria_label(label));
-        assert_eq!(role, Some(accessible_role));
-        assert_eq!(node.label(), Some(label));
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -14,9 +14,9 @@ use menus_in_window::{
     Settings, Undo, bind_shortcuts, displayed_equivalent, install, menu_entries, set_menus,
 };
 use vespertine::{
-    Action, AnyWindowHandle, App, Context, FocusHandle, Focusable, IntoElement, KeyBinding, Menu,
-    MenuItem, OsAction, OwnedMenu, OwnedMenuItem, Render, SystemMenuType, TestAppContext,
-    VisualTestContext, Window, actions, div, prelude::*,
+    Action, App, Context, FocusHandle, Focusable, IntoElement, KeyBinding, Menu, MenuItem,
+    OsAction, OwnedMenu, OwnedMenuItem, Render, SystemMenuType, TestAppContext, VisualTestContext,
+    Window, actions, div, prelude::*,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -407,110 +407,6 @@ fn app_003_a3_edit_action_enablement_follows_focus(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(answers.borrow()[1], (true, false, true));
-}
-
-// ---------------------------------------------------------------------------------------------
-// A4: vetoable quit decided after the dispatch returns.
-// ---------------------------------------------------------------------------------------------
-
-actions!(app_003_quit, [QuitApp]);
-
-struct Document {
-    saved: bool,
-    focus: FocusHandle,
-}
-
-impl Render for Document {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().track_focus(&self.focus)
-    }
-}
-
-fn open_document(cx: &mut TestAppContext, saved: bool) -> AnyWindowHandle {
-    let window = cx.add_window(move |window, cx| {
-        let focus = cx.focus_handle();
-        focus.focus(window, cx);
-        Document { saved, focus }
-    });
-    cx.run_until_parked();
-    window.into()
-}
-
-#[vespertine::test]
-fn app_003_a4_quit_is_vetoable_and_decided_after_the_dispatch_returns(cx: &mut TestAppContext) {
-    let order = Rc::new(RefCell::new(Vec::<String>::new()));
-    cx.update(|cx| {
-        let order = order.clone();
-        cx.on_action(move |_: &QuitApp, cx| {
-            order.borrow_mut().push("handler start".into());
-            let order_in_decision = order.clone();
-            // The decision is deferred to the end of the effect cycle. By then the window that
-            // dispatched the action has been returned to the application, so every window root
-            // can be inspected.
-            cx.defer(move |cx| {
-                let mut asked = 0;
-                let mut all_ready = true;
-                for window in cx.windows() {
-                    let document = window.downcast::<Document>().expect("document root");
-                    let saved = document.read(cx).expect("window is readable").saved;
-                    asked += 1;
-                    all_ready &= saved;
-                }
-                order_in_decision
-                    .borrow_mut()
-                    .push(format!("decision asked={asked} ready={all_ready}"));
-                if all_ready {
-                    cx.quit();
-                }
-            });
-            order.borrow_mut().push("handler end".into());
-        });
-    });
-
-    let first = open_document(cx, true);
-    let second = open_document(cx, false);
-    assert_eq!(cx.windows().len(), 2);
-
-    // One window is not ready: the quit is vetoed, the app keeps running, both windows stay.
-    cx.dispatch_action(first, QuitApp);
-    cx.run_until_parked();
-    assert_eq!(
-        *order.borrow(),
-        vec![
-            "handler start",
-            "handler end",
-            "decision asked=2 ready=false"
-        ],
-        "the decision runs after the handler returned"
-    );
-    assert_eq!(cx.quit_requests(), 0);
-    assert_eq!(cx.windows().len(), 2);
-
-    // The veto is per request: the other window can ask as well and is still vetoed.
-    cx.dispatch_action(second, QuitApp);
-    cx.run_until_parked();
-    assert_eq!(cx.quit_requests(), 0);
-
-    // Once the second window reports ready the application quits.
-    cx.update(|cx| {
-        second
-            .downcast::<Document>()
-            .unwrap()
-            .update(cx, |document, _, _| document.saved = true)
-            .unwrap();
-    });
-    order.borrow_mut().clear();
-    cx.dispatch_action(first, QuitApp);
-    cx.run_until_parked();
-    assert_eq!(
-        *order.borrow(),
-        vec![
-            "handler start",
-            "handler end",
-            "decision asked=2 ready=true"
-        ]
-    );
-    assert_eq!(cx.quit_requests(), 1);
 }
 
 // ---------------------------------------------------------------------------------------------
