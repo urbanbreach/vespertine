@@ -752,9 +752,17 @@ fn split_half(
         _ => colors.plain_number,
     };
     let tag = if right { 1 } else { 0 };
-    let mut half = half;
+    let mut half = half.id(eid(
+        if right { "diff-half-r" } else { "diff-half-l" },
+        ix,
+        sub,
+    ));
     if let Some(tint) = colors.tint {
         half = half.bg(tint);
+    }
+    // A click reports the line of the half it lands on (old text on the left, new on the right).
+    if let Some(handler) = line_click_handler(frame, file, line) {
+        half = half.on_click(handler);
     }
     let text = code_text(
         frame,
@@ -868,13 +876,6 @@ fn split_row(
                 .bg(frame.palette.ink_alpha(0.06)),
         )
         .child(split_half(frame, ix, sub, file, hunk, right, true, hscroll));
-    // Click reports the right (new) line, or the left one when only it exists.
-    let clicked = right.or(left).map(|i| &lines[i]);
-    if let Some(line) = clicked
-        && let Some(handler) = line_click_handler(frame, file, line)
-    {
-        row = row.on_click(handler);
-    }
     // The affordance lives in the right column only; the left column is inert (R28).
     if annotation_enabled(frame)
         && sub == 0

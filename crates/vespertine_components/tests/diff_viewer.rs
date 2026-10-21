@@ -763,6 +763,25 @@ fn a8_a4_split_halves_are_equal_with_a_divider_and_fillers_where_a_side_is_empty
     )));
 }
 
+#[test]
+fn r19_split_line_clicks_report_the_line_of_the_clicked_half() {
+    require_backend!();
+    let mut config = Config::new(SAMPLE, 401., 300.);
+    config.scroll = false;
+    config.mode = vespertine_components::diff::rows::DiffMode::Split;
+    let mut rig = Rig::new(config, (401., 300.));
+    // The paired row (-old line, +new line) spans y 85-106; the divider sits at x = 200.
+    rig.host.click(100., 95., 0, "").unwrap();
+    rig.host.click(300., 95., 0, "").unwrap();
+    assert_eq!(
+        rig.events(),
+        [
+            "line old line Some(2) None Some(SourceRef { side: Old, line: 2 })",
+            "line new line None Some(2) Some(SourceRef { side: New, line: 2 })",
+        ]
+    );
+}
+
 fn blend_white(alpha: f32, background: u8) -> [u8; 3] {
     let value = (255. * alpha + f32::from(background) * (1. - alpha)).round() as u8;
     [value; 3]
