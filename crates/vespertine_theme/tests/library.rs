@@ -656,6 +656,29 @@ fn duplicate_as_snapshot_rekeys_and_names_the_copy() {
 }
 
 #[test]
+fn duplicate_as_editable_never_reuses_the_file_of_a_removed_copy() {
+    let (_source, data, _path, mut library, id) =
+        linked_file_library(good_dark_colors(), InstallMode::Snapshot);
+    let first = library.duplicate_as_editable(&id, data.path()).unwrap();
+    let first_file = data
+        .path()
+        .join(EDITABLE_DIR)
+        .join(format!("{first}.theme.json"));
+    std::fs::write(&first_file, "Lorem ipsum").unwrap();
+    // Removing the entry leaves its file; the next copy must pick another name.
+    library.remove(&first).unwrap();
+    let second = library.duplicate_as_editable(&id, data.path()).unwrap();
+    assert_ne!(second, first);
+    assert_eq!(std::fs::read_to_string(&first_file).unwrap(), "Lorem ipsum");
+    assert!(
+        data.path()
+            .join(EDITABLE_DIR)
+            .join(format!("{second}.theme.json"))
+            .exists()
+    );
+}
+
+#[test]
 fn duplicate_as_editable_writes_a_native_file_that_reloads_with_validation() {
     let (_source, data, _path, mut library, id) =
         linked_file_library(good_dark_colors(), InstallMode::Snapshot);

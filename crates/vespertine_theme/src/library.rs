@@ -869,10 +869,16 @@ impl Library {
         Ok(())
     }
 
-    fn duplicate_entry(&self, id: &str) -> Result<LibraryEntry, LibraryError> {
+    /// A copy of entry `id` under the first `<id>-copy[-N]` identifier that no entry uses and
+    /// `occupied` does not reject.
+    fn duplicate_entry(
+        &self,
+        id: &str,
+        occupied: impl Fn(&str) -> bool,
+    ) -> Result<LibraryEntry, LibraryError> {
         let original = &self.entries[self.position(id)?];
         let new_id = unique_id(&format!("{id}-copy"), |candidate| {
-            self.entry(candidate).is_some()
+            self.entry(candidate).is_some() || occupied(candidate)
         });
         let mut family = original.family.clone();
         let mut reports = original.reports.clone();
@@ -896,7 +902,7 @@ impl Library {
 
     /// Duplicates an entry as an immutable snapshot named `<id>-copy` / `<name> Copy`.
     pub fn duplicate_as_snapshot(&mut self, id: &str) -> Result<String, LibraryError> {
-        let entry = self.duplicate_entry(id)?;
+        let entry = self.duplicate_entry(id, |_| false)?;
         let new_id = entry.id.clone();
         let mut entries = self.entries.clone();
         entries.push(entry);
@@ -909,15 +915,19 @@ impl Library {
     }
 
     /// Duplicates an entry as an editable native resolved-family file
-    /// `<new id>.theme.json` in the `custom-themes` directory under `data_dir`.
+    /// `<new id>.theme.json` in the `custom-themes` directory under `data_dir`. An identifier
+    /// whose file already exists (left by a removed entry, say) is skipped, so no file is
+    /// overwritten.
     pub fn duplicate_as_editable(
         &mut self,
         id: &str,
         data_dir: &Path,
     ) -> Result<String, LibraryError> {
-        let mut entry = self.duplicate_entry(id)?;
         let directory = data_dir.join(EDITABLE_DIR);
-        let path = directory.join(format!("{}.theme.json", entry.id));
+        let file_of = |id: &str| directory.join(format!("{id}.theme.json"));
+        let mut entry =
+            self.duplicate_entry(id, |candidate| self.fs.exists(&file_of(candidate)))?;
+        let path = file_of(&entry.id);
         let bytes = serde_json::to_vec_pretty(&entry.family)
             .map_err(|error| LibraryError(format!("serializing the family failed: {error}")))?;
         self.fs.create_dir_all(&directory).map_err(|error| {
