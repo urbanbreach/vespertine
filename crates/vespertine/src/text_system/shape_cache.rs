@@ -1,11 +1,12 @@
-//! Bounded recent shaping store (PRF-012).
+//! Bounded recent shaping store (PRF-012), validated numeric shaping (PRF-013) and validated
+//! shaping of appended text.
 //!
-//! The state belongs to one [`TextSystem`](crate::TextSystem) and is shared by every window
-//! text system built on it, so it is guarded by a lock. The lock is never held while the
+//! Both pieces of state belong to one [`TextSystem`](crate::TextSystem) and are shared by every
+//! window text system built on it, so they are guarded by locks. A lock is never held while the
 //! platform shapes text.
 
-use super::{FontRun, LineLayout};
-use crate::{Pixels, PlatformTextSystem, SharedString};
+use super::{FontId, FontRun, GlyphId, LineLayout, ShapedGlyph, ShapedRun};
+use crate::{Pixels, PlatformTextSystem, SharedString, point, px};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::{
@@ -17,16 +18,57 @@ use vespertine_collections::{FxHashMap, FxHasher};
 /// Glyph units one generation of recent shapes may hold before the generations rotate.
 pub(crate) const RECENT_GENERATION_GLYPH_UNITS: usize = 16_384;
 
+/// Longest line, in bytes, that numeric shaping assembles.
+pub(crate) const NUMERIC_MAX_LEN: usize = 64;
+
+/// Lines compared with full platform shaping before sampling starts.
+pub(crate) const NUMERIC_INITIAL_CHECKS: u64 = 32;
+
+/// After the initial checks, every n-th synthesized line is compared.
+pub(crate) const NUMERIC_CHECK_INTERVAL: u64 = 256;
+
+/// Agreement tolerance between synthesized and platform lines, in logical pixels.
+pub(crate) const NUMERIC_TOLERANCE: f32 = 0.001;
+
+const NUMERIC_ALPHABET: &[u8; 20] = b"0123456789.,+-%$KMBT";
+
+/// Shortest line, in bytes, whose growth is shaped incrementally.
+pub(crate) const APPEND_MIN_LEN: usize = 48;
+
+/// Longest line, in bytes, kept for incremental shaping.
+pub(crate) const APPEND_MAX_LEN: usize = 16 * 1024;
+
+/// Growing lines tracked at once.
+pub(crate) const APPEND_TAILS: usize = 4;
+
+/// Longest chain of lines that each extend the previous one's layout before the next line is
+/// shaped in full again. Every link adds the rounding error of one addition to the positions
+/// of the words it shapes; the full shaping anchors the chain.
+pub(crate) const APPEND_MAX_CHAIN: u32 = 32;
+
+/// Incrementally shaped lines compared with full platform shaping before sampling starts.
+pub(crate) const APPEND_INITIAL_CHECKS: u64 = 16;
+
+/// After the initial checks, every n-th incrementally shaped line is compared.
+pub(crate) const APPEND_CHECK_INTERVAL: u64 = 128;
+
 /// Counters describing shaping work. Compiled always (relaxed atomics), read only by tests and
 /// diagnostics.
 #[derive(Default)]
 pub(crate) struct ShapeCounters {
     pub(crate) platform_line_shapes: AtomicU64,
+    pub(crate) numeric_unit_shapes: AtomicU64,
     pub(crate) recent_hits: AtomicU64,
     pub(crate) recent_rotations: AtomicU64,
     pub(crate) lock_acquisitions: AtomicU64,
-    /// Lines that missed the frame cache and the recent-shape store and were shaped by the
-    /// platform. Feeds `FrameStats::lines_shaped` (DEV-003).
+    pub(crate) synthesized_lines: AtomicU64,
+    pub(crate) validation_checks: AtomicU64,
+    pub(crate) disabled_font_sizes: AtomicU64,
+    pub(crate) appended_lines: AtomicU64,
+    pub(crate) append_checks: AtomicU64,
+    pub(crate) append_disabled: AtomicU64,
+    /// Lines that missed the frame cache and the recent-shape store and were shaped (platform
+    /// or numeric assembly), whichever way. Feeds `FrameStats::lines_shaped` (DEV-003).
     pub(crate) shaped_lines: AtomicU64,
     /// Wall time spent shaping those lines, recorded only while shaping timing is enabled.
     pub(crate) shaping_nanos: AtomicU64,
@@ -43,16 +85,30 @@ impl ShapeCounters {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShapeStats {
-    /// Full lines handed to the platform text system.
+    /// Full lines handed to the platform text system (including validation shapes).
     pub platform_line_shapes: u64,
+    /// One- and two-character measurements made for numeric shaping.
+    pub numeric_unit_shapes: u64,
     /// Lines served by the recent-shape store.
     pub recent_hits: u64,
     /// Generation rotations of the recent-shape store.
     pub recent_rotations: u64,
-    /// Acquisitions of the recent-shape lock.
+    /// Acquisitions of the recent-shape and numeric-state locks.
     pub lock_acquisitions: u64,
+    /// Lines assembled from characters and pairs.
+    pub synthesized_lines: u64,
+    /// Synthesized lines compared with platform shaping.
+    pub validation_checks: u64,
+    /// Font and size pairs whose numeric shaping was permanently disabled.
+    pub disabled_font_sizes: u64,
     /// Glyph units currently retained by both recent generations.
     pub retained_glyph_units: usize,
+    /// Lines assembled from the layout of a shorter line they extend and a platform-shaped tail.
+    pub appended_lines: u64,
+    /// Appended lines compared with full platform shaping.
+    pub append_checks: u64,
+    /// Whether appended-line shaping was permanently disabled by a failed comparison.
+    pub append_disabled: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -197,12 +253,182 @@ impl RecentShapes {
     }
 }
 
-/// Shaping state shared by every window text system of one text system.
+#[derive(Clone, Copy)]
+struct CharUnit {
+    glyph: GlyphId,
+    advance: Pixels,
+    ascent: Pixels,
+    descent: Pixels,
+    is_emoji: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CharState {
+    Unknown,
+    Unsupported,
+    Known(CharUnit),
+}
+
+#[derive(Clone, Copy)]
+enum PairState {
+    Unknown,
+    Unsupported,
+    Known(Pixels),
+}
+
+struct NumericFont {
+    chars: [CharState; 20],
+    pairs: Box<[[PairState; 20]; 20]>,
+    synthesized: u64,
+    disabled: bool,
+}
+
+impl NumericFont {
+    fn new() -> Self {
+        Self {
+            chars: [CharState::Unknown; 20],
+            pairs: Box::new([[PairState::Unknown; 20]; 20]),
+            synthesized: 0,
+            disabled: false,
+        }
+    }
+}
+
 #[derive(Default)]
+struct NumericState {
+    font_generation: usize,
+    fonts: FxHashMap<(FontId, u32), NumericFont>,
+}
+
+impl NumericState {
+    fn sync(&mut self, font_generation: usize) -> bool {
+        if font_generation > self.font_generation {
+            self.fonts.clear();
+            self.font_generation = font_generation;
+            true
+        } else {
+            font_generation == self.font_generation
+        }
+    }
+}
+
+fn alphabet_index(byte: u8) -> Option<usize> {
+    NUMERIC_ALPHABET.iter().position(|&b| b == byte)
+}
+
+/// The outcome of asking numeric shaping for a line.
+pub(crate) enum NumericOutcome {
+    /// The line is not eligible, or a unit is unsupported: shape it on the platform.
+    Platform,
+    /// The line was assembled or validated; the layout is ready.
+    Layout(LineLayout),
+}
+
+/// A recently shaped line that a longer line may continue.
+struct Tail {
+    text: SharedString,
+    size_bits: u32,
+    font_id: FontId,
+    layout: LineLayout,
+    /// Lines assembled since the layout was shaped in full.
+    chain: u32,
+}
+
+/// The growing lines tracked for incremental shaping.
+#[derive(Default)]
+struct AppendState {
+    font_generation: usize,
+    tails: SmallVec<[Tail; APPEND_TAILS]>,
+    /// The tail replaced next when a new line starts while every slot is taken.
+    victim: usize,
+    /// Lines assembled so far, counting the sampled comparisons.
+    assembled: u64,
+    /// Set when an assembled line disagreed with full shaping: no line is assembled any more.
+    disabled: bool,
+}
+
+impl AppendState {
+    fn sync(&mut self, font_generation: usize) -> bool {
+        if font_generation > self.font_generation {
+            self.tails.clear();
+            self.font_generation = font_generation;
+            true
+        } else {
+            font_generation == self.font_generation
+        }
+    }
+
+    fn remember(&mut self, tail: Tail) {
+        if self.tails.len() < APPEND_TAILS {
+            self.tails.push(tail);
+        } else {
+            self.victim %= APPEND_TAILS;
+            self.tails[self.victim] = tail;
+            self.victim += 1;
+        }
+    }
+}
+
+/// Whether `bytes` holds only printable ASCII: a single left-to-right script run whose words
+/// the platform shapes independently of their neighbours.
+fn is_printable_ascii(bytes: &[u8]) -> bool {
+    bytes.iter().all(|byte| (0x20..0x7F).contains(byte))
+}
+
+/// The one font of a line that is a single run of `text`.
+fn single_run_font(text: &str, runs: &[FontRun]) -> Option<FontId> {
+    match runs {
+        [run] if run.len == text.len() => Some(run.font_id),
+        _ => None,
+    }
+}
+
+/// The largest split position `p <= limit` at which `text` can be cut into two independently
+/// shaped parts: a single space between two ASCII alphanumerics, with `text[p]` the first
+/// character of the second part. Such a position is a line-break opportunity whatever precedes
+/// it, so the platform shapes the words on both sides separately.
+fn split_position(text: &[u8], limit: usize) -> Option<usize> {
+    let limit = limit.min(text.len().checked_sub(1)?);
+    (2..=limit).rev().find(|&p| {
+        text[p - 1] == b' '
+            && text[p - 2].is_ascii_alphanumeric()
+            && text[p].is_ascii_alphanumeric()
+    })
+}
+
+/// A tail shaped in place of a full line; see [`ShapeCaches::append_layout`].
+struct Continuation {
+    tail: usize,
+    chain: u32,
+    split: usize,
+    offset: Pixels,
+    glyphs: Vec<ShapedGlyph>,
+    ascent: Pixels,
+    descent: Pixels,
+    font_id: FontId,
+}
+
+/// Shaping state shared by every window text system of one text system.
 pub(crate) struct ShapeCaches {
     recent: Mutex<RecentShapes>,
+    numeric: Mutex<NumericState>,
+    append: Mutex<AppendState>,
     pub(crate) counters: ShapeCounters,
+    numeric_enabled: std::sync::atomic::AtomicBool,
     timing_enabled: std::sync::atomic::AtomicBool,
+}
+
+impl Default for ShapeCaches {
+    fn default() -> Self {
+        Self {
+            recent: Mutex::default(),
+            numeric: Mutex::default(),
+            append: Mutex::default(),
+            counters: ShapeCounters::default(),
+            numeric_enabled: std::sync::atomic::AtomicBool::new(true),
+            timing_enabled: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
 }
 
 impl ShapeCaches {
@@ -273,6 +499,12 @@ impl ShapeCaches {
         recent.insert(text, size_bits, runs, layout, &self.counters);
     }
 
+    /// Enables or disables numeric synthesis (diagnostic configuration of the workload).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_numeric_enabled(&self, enabled: bool) {
+        self.numeric_enabled.store(enabled, Ordering::Relaxed);
+    }
+
     /// Shapes one line on the platform, counting it.
     pub(crate) fn platform_shape(
         &self,
@@ -285,16 +517,419 @@ impl ShapeCaches {
         platform.layout_line(text, font_size, runs)
     }
 
+    /// Remembers a line shaped in full so that a longer line extending it can be shaped
+    /// incrementally. It replaces the tracked line it extends, if any.
+    pub(crate) fn append_track(
+        &self,
+        font_generation: usize,
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+        layout: &LineLayout,
+    ) {
+        let Some(tail) = Self::tail_of(text, font_size, runs, layout, 0) else {
+            return;
+        };
+        let mut append = self.append.lock();
+        ShapeCounters::bump(&self.counters.lock_acquisitions);
+        if append.disabled || !append.sync(font_generation) {
+            return;
+        }
+        let bytes = text.as_bytes();
+        match append.tails.iter_mut().find(|known| {
+            known.size_bits == tail.size_bits
+                && known.font_id == tail.font_id
+                && known.text.len() <= text.len()
+                && bytes.starts_with(known.text.as_bytes())
+        }) {
+            Some(known) => *known = tail,
+            None => append.remember(tail),
+        }
+    }
+
+    /// The tail record of a line eligible for incremental shaping.
+    fn tail_of(
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+        layout: &LineLayout,
+        chain: u32,
+    ) -> Option<Tail> {
+        let font_id = single_run_font(text, runs)?;
+        let eligible = (APPEND_MIN_LEN..=APPEND_MAX_LEN).contains(&text.len())
+            && is_printable_ascii(text.as_bytes())
+            && layout.len == text.len()
+            && matches!(layout.runs.as_slice(), [run]
+                if run.font_id == font_id
+                    && !run.glyphs.is_empty()
+                    && run.glyphs.iter().all(|glyph| glyph.id != GlyphId(0)));
+        eligible.then(|| Tail {
+            text: text.clone(),
+            size_bits: font_size.0.to_bits(),
+            font_id,
+            layout: layout.clone(),
+            chain,
+        })
+    }
+
+    /// Shapes `text` as the layout of a shorter, recently shaped line it extends plus the
+    /// platform shaping of only the words after the last shared word boundary.
+    ///
+    /// Only printable ASCII in a single font run qualifies: every word then is shaped by itself,
+    /// so the shared prefix keeps its glyphs and positions and the shaped remainder is moved
+    /// right by the width of that prefix. The first lines and then every
+    /// [`APPEND_CHECK_INTERVAL`]-th line are compared with full platform shaping; a
+    /// disagreement (a platform that shapes across spaces) permanently disables the method and
+    /// the full layout is used.
+    pub(crate) fn append_layout(
+        &self,
+        platform: &dyn PlatformTextSystem,
+        font_generation: usize,
+        text: &SharedString,
+        font_size: Pixels,
+        runs: &[FontRun],
+    ) -> Option<LineLayout> {
+        let font_id = single_run_font(text, runs)?;
+        if !(APPEND_MIN_LEN..=APPEND_MAX_LEN).contains(&text.len()) {
+            return None;
+        }
+        let size_bits = font_size.0.to_bits();
+        let bytes = text.as_bytes();
+
+        let found = {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            if append.disabled || !append.sync(font_generation) {
+                return None;
+            }
+            append.tails.iter().enumerate().find_map(|(index, tail)| {
+                if tail.size_bits != size_bits
+                    || tail.font_id != font_id
+                    || tail.chain >= APPEND_MAX_CHAIN
+                    || tail.text.len() >= text.len()
+                    || !bytes.starts_with(tail.text.as_bytes())
+                {
+                    return None;
+                }
+                let split = split_position(bytes, tail.text.len())?;
+                let [run] = tail.layout.runs.as_slice() else {
+                    return None;
+                };
+                let kept = run.glyphs.partition_point(|glyph| glyph.index < split);
+                let offset = match run.glyphs.get(kept) {
+                    Some(glyph) if glyph.index == split => glyph.position.x,
+                    None if split == tail.text.len() => tail.layout.width,
+                    _ => return None,
+                };
+                Some(Continuation {
+                    tail: index,
+                    chain: tail.chain + 1,
+                    split,
+                    offset,
+                    glyphs: run.glyphs[..kept].to_vec(),
+                    ascent: tail.layout.ascent,
+                    descent: tail.layout.descent,
+                    font_id,
+                })
+            })
+        }?;
+        if !is_printable_ascii(&bytes[found.split..]) {
+            return None;
+        }
+
+        let rest = &text[found.split..];
+        let rest_layout = self.platform_shape(
+            platform,
+            rest,
+            font_size,
+            &[FontRun {
+                len: rest.len(),
+                font_id,
+            }],
+        );
+        let [rest_run] = rest_layout.runs.as_slice() else {
+            return None;
+        };
+        if rest_run.font_id != found.font_id
+            || rest_layout.len != rest.len()
+            || rest_layout.ascent != found.ascent
+            || rest_layout.descent != found.descent
+            || rest_run.glyphs.is_empty()
+            || rest_run.glyphs.iter().any(|glyph| glyph.id == GlyphId(0))
+        {
+            return None;
+        }
+
+        let mut glyphs = found.glyphs;
+        glyphs.extend(rest_run.glyphs.iter().map(|glyph| ShapedGlyph {
+            id: glyph.id,
+            position: point(glyph.position.x + found.offset, glyph.position.y),
+            index: glyph.index + found.split,
+            is_emoji: glyph.is_emoji,
+        }));
+        let layout = LineLayout {
+            font_size,
+            width: found.offset + rest_layout.width,
+            ascent: found.ascent,
+            descent: found.descent,
+            runs: vec![ShapedRun {
+                font_id: found.font_id,
+                glyphs,
+            }],
+            len: text.len(),
+        };
+        ShapeCounters::bump(&self.counters.appended_lines);
+
+        let (layout, validate) = {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            append.assembled += 1;
+            let validate = append.assembled <= APPEND_INITIAL_CHECKS
+                || append.assembled.is_multiple_of(APPEND_CHECK_INTERVAL);
+            (layout, validate)
+        };
+        let layout = if validate {
+            ShapeCounters::bump(&self.counters.append_checks);
+            let platform_layout = self.platform_shape(platform, text, font_size, runs);
+            if layouts_agree_within(
+                &layout,
+                &platform_layout,
+                append_tolerance(&layout, found.chain),
+            ) {
+                layout
+            } else {
+                let mut append = self.append.lock();
+                ShapeCounters::bump(&self.counters.lock_acquisitions);
+                if !append.disabled {
+                    append.disabled = true;
+                    append.tails.clear();
+                    ShapeCounters::bump(&self.counters.append_disabled);
+                }
+                return Some(platform_layout);
+            }
+        } else {
+            layout
+        };
+
+        // The extended line replaces the line it extends as the tail of the lineage.
+        if let Some(tail) = Self::tail_of(text, font_size, runs, &layout, found.chain) {
+            let mut append = self.append.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            if !append.disabled && append.sync(font_generation) {
+                match append.tails.get_mut(found.tail) {
+                    Some(slot) if bytes.starts_with(slot.text.as_bytes()) => *slot = tail,
+                    _ => append.remember(tail),
+                }
+            }
+        }
+        Some(layout)
+    }
+
+    fn unit_shape(
+        &self,
+        platform: &dyn PlatformTextSystem,
+        text: &str,
+        font_size: Pixels,
+        font_id: FontId,
+    ) -> LineLayout {
+        ShapeCounters::bump(&self.counters.numeric_unit_shapes);
+        platform.layout_line(
+            text,
+            font_size,
+            &[FontRun {
+                len: text.len(),
+                font_id,
+            }],
+        )
+    }
+
+    /// Assembles `text` from per-character glyphs and pair kerning when it is eligible,
+    /// validating against full platform shaping as PRF-013 requires.
+    pub(crate) fn numeric_layout(
+        &self,
+        platform: &dyn PlatformTextSystem,
+        font_generation: usize,
+        text: &str,
+        font_size: Pixels,
+        runs: &[FontRun],
+    ) -> NumericOutcome {
+        if !self.numeric_enabled.load(Ordering::Relaxed)
+            || text.is_empty()
+            || text.len() > NUMERIC_MAX_LEN
+            || runs.len() != 1
+            || runs[0].len != text.len()
+        {
+            return NumericOutcome::Platform;
+        }
+        let bytes = text.as_bytes();
+        let mut indices = [0u8; NUMERIC_MAX_LEN];
+        for (slot, &byte) in indices.iter_mut().zip(bytes) {
+            match alphabet_index(byte) {
+                Some(ix) => *slot = ix as u8,
+                None => return NumericOutcome::Platform,
+            }
+        }
+        let indices = &indices[..bytes.len()];
+        let font_id = runs[0].font_id;
+        let key = (font_id, font_size.0.to_bits());
+
+        // Each pass either assembles the line or learns the characters and pairs it lacks.
+        for _ in 0..4 {
+            let mut missing_chars = SmallVec::<[u8; 20]>::new();
+            let mut missing_pairs = SmallVec::<[(u8, u8); 16]>::new();
+            let (layout, validate) = {
+                let mut numeric = self.numeric.lock();
+                ShapeCounters::bump(&self.counters.lock_acquisitions);
+                if !numeric.sync(font_generation) {
+                    return NumericOutcome::Platform;
+                }
+                let font = numeric.fonts.entry(key).or_insert_with(NumericFont::new);
+                if font.disabled {
+                    return NumericOutcome::Platform;
+                }
+
+                let mut unsupported = false;
+                for (position, &ix) in indices.iter().enumerate() {
+                    match font.chars[ix as usize] {
+                        CharState::Unknown => {
+                            if !missing_chars.contains(&ix) {
+                                missing_chars.push(ix);
+                            }
+                        }
+                        CharState::Unsupported => unsupported = true,
+                        CharState::Known(_) => {}
+                    }
+                    if position > 0 {
+                        let previous = indices[position - 1];
+                        match font.pairs[previous as usize][ix as usize] {
+                            PairState::Unknown => {
+                                if !missing_pairs.contains(&(previous, ix)) {
+                                    missing_pairs.push((previous, ix));
+                                }
+                            }
+                            PairState::Unsupported => unsupported = true,
+                            PairState::Known(_) => {}
+                        }
+                    }
+                }
+                if unsupported {
+                    return NumericOutcome::Platform;
+                }
+                if missing_chars.is_empty() && missing_pairs.is_empty() {
+                    let layout = assemble(font, indices, font_id, font_size);
+                    font.synthesized += 1;
+                    let count = font.synthesized;
+                    let validate = count <= NUMERIC_INITIAL_CHECKS
+                        || count.is_multiple_of(NUMERIC_CHECK_INTERVAL);
+                    (layout, validate)
+                } else {
+                    (LineLayout::default(), false)
+                }
+            };
+
+            if missing_chars.is_empty() && missing_pairs.is_empty() {
+                ShapeCounters::bump(&self.counters.synthesized_lines);
+                if !validate {
+                    return NumericOutcome::Layout(layout);
+                }
+                ShapeCounters::bump(&self.counters.validation_checks);
+                let platform_layout = self.platform_shape(platform, text, font_size, runs);
+                if layouts_agree(&layout, &platform_layout) {
+                    return NumericOutcome::Layout(layout);
+                }
+                let mut numeric = self.numeric.lock();
+                ShapeCounters::bump(&self.counters.lock_acquisitions);
+                if numeric.sync(font_generation)
+                    && let Some(font) = numeric.fonts.get_mut(&key)
+                    && !font.disabled
+                {
+                    font.disabled = true;
+                    ShapeCounters::bump(&self.counters.disabled_font_sizes);
+                }
+                return NumericOutcome::Layout(platform_layout);
+            }
+
+            // Measure outside the lock.
+            let mut char_results = SmallVec::<[(u8, CharState); 20]>::new();
+            for &ix in &missing_chars {
+                let character = NUMERIC_ALPHABET[ix as usize] as char;
+                let mut buffer = [0u8; 4];
+                let isolated = self.unit_shape(
+                    platform,
+                    character.encode_utf8(&mut buffer),
+                    font_size,
+                    font_id,
+                );
+                char_results.push((ix, measure_char(&isolated, font_id)));
+            }
+            let mut pair_results = SmallVec::<[(u8, u8, PairState); 16]>::new();
+            if !missing_pairs.is_empty() {
+                // Pair measurements need the isolated units of both characters.
+                let units = {
+                    let numeric = self.numeric.lock();
+                    ShapeCounters::bump(&self.counters.lock_acquisitions);
+                    let Some(font) = numeric.fonts.get(&key) else {
+                        return NumericOutcome::Platform;
+                    };
+                    font.chars
+                };
+                let unit_of = |ix: u8| -> CharState {
+                    char_results
+                        .iter()
+                        .find(|(char_ix, _)| *char_ix == ix)
+                        .map(|(_, state)| *state)
+                        .unwrap_or(units[ix as usize])
+                };
+                for &(first, second) in &missing_pairs {
+                    let state = match (unit_of(first), unit_of(second)) {
+                        (CharState::Known(first_unit), CharState::Known(second_unit)) => {
+                            let pair = [
+                                NUMERIC_ALPHABET[first as usize],
+                                NUMERIC_ALPHABET[second as usize],
+                            ];
+                            let text = std::str::from_utf8(&pair).unwrap_or("");
+                            let shaped = self.unit_shape(platform, text, font_size, font_id);
+                            measure_pair(&shaped, font_id, &first_unit, &second_unit)
+                        }
+                        _ => PairState::Unsupported,
+                    };
+                    pair_results.push((first, second, state));
+                }
+            }
+
+            let mut numeric = self.numeric.lock();
+            ShapeCounters::bump(&self.counters.lock_acquisitions);
+            if !numeric.sync(font_generation) {
+                return NumericOutcome::Platform;
+            }
+            let font = numeric.fonts.entry(key).or_insert_with(NumericFont::new);
+            for (ix, state) in char_results {
+                font.chars[ix as usize] = state;
+            }
+            for (first, second, state) in pair_results {
+                font.pairs[first as usize][second as usize] = state;
+            }
+        }
+        NumericOutcome::Platform
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn stats(&self) -> ShapeStats {
         let counters = &self.counters;
         let recent = self.recent.lock();
         ShapeStats {
             platform_line_shapes: counters.platform_line_shapes.load(Ordering::Relaxed),
+            numeric_unit_shapes: counters.numeric_unit_shapes.load(Ordering::Relaxed),
             recent_hits: counters.recent_hits.load(Ordering::Relaxed),
             recent_rotations: counters.recent_rotations.load(Ordering::Relaxed),
             lock_acquisitions: counters.lock_acquisitions.load(Ordering::Relaxed),
+            synthesized_lines: counters.synthesized_lines.load(Ordering::Relaxed),
+            validation_checks: counters.validation_checks.load(Ordering::Relaxed),
+            disabled_font_sizes: counters.disabled_font_sizes.load(Ordering::Relaxed),
             retained_glyph_units: recent.current.units + recent.old.units,
+            appended_lines: counters.appended_lines.load(Ordering::Relaxed),
+            append_checks: counters.append_checks.load(Ordering::Relaxed),
+            append_disabled: counters.append_disabled.load(Ordering::Relaxed) != 0,
         }
     }
 
@@ -308,13 +943,159 @@ impl ShapeCaches {
         let recent = self.recent.lock();
         (recent.current.units, recent.old.units)
     }
+
+    #[cfg(test)]
+    pub(crate) fn numeric_is_disabled(&self, font_id: FontId, font_size: Pixels) -> bool {
+        self.numeric
+            .lock()
+            .fonts
+            .get(&(font_id, font_size.0.to_bits()))
+            .is_some_and(|font| font.disabled)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn numeric_has_state(&self) -> bool {
+        !self.numeric.lock().fonts.is_empty()
+    }
+}
+
+fn measure_char(isolated: &LineLayout, font_id: FontId) -> CharState {
+    let [run] = isolated.runs.as_slice() else {
+        return CharState::Unsupported;
+    };
+    let [glyph] = run.glyphs.as_slice() else {
+        return CharState::Unsupported;
+    };
+    if run.font_id != font_id
+        || glyph.position != point(px(0.), px(0.))
+        || glyph.index != 0
+        || isolated.len != 1
+    {
+        return CharState::Unsupported;
+    }
+    CharState::Known(CharUnit {
+        glyph: glyph.id,
+        advance: isolated.width,
+        ascent: isolated.ascent,
+        descent: isolated.descent,
+        is_emoji: glyph.is_emoji,
+    })
+}
+
+fn measure_pair(
+    shaped: &LineLayout,
+    font_id: FontId,
+    first: &CharUnit,
+    second: &CharUnit,
+) -> PairState {
+    let [run] = shaped.runs.as_slice() else {
+        return PairState::Unsupported;
+    };
+    let [first_glyph, second_glyph] = run.glyphs.as_slice() else {
+        return PairState::Unsupported;
+    };
+    if run.font_id != font_id
+        || first_glyph.id != first.glyph
+        || second_glyph.id != second.glyph
+        || first_glyph.index != 0
+        || second_glyph.index != 1
+        || first_glyph.position != point(px(0.), px(0.))
+        || second_glyph.position.y != px(0.)
+    {
+        return PairState::Unsupported;
+    }
+    let expected_width = second_glyph.position.x + second.advance;
+    if (shaped.width - expected_width).0.abs() > NUMERIC_TOLERANCE {
+        return PairState::Unsupported;
+    }
+    PairState::Known(second_glyph.position.x - first.advance)
+}
+
+fn assemble(font: &NumericFont, indices: &[u8], font_id: FontId, font_size: Pixels) -> LineLayout {
+    let mut glyphs = Vec::with_capacity(indices.len());
+    let mut x = px(0.);
+    let mut previous: Option<(u8, CharUnit)> = None;
+    let mut first_unit = None;
+    for (position, &ix) in indices.iter().enumerate() {
+        let CharState::Known(unit) = font.chars[ix as usize] else {
+            unreachable!("assembled only when every character is known");
+        };
+        if let Some((previous_ix, previous_unit)) = previous {
+            let PairState::Known(kerning) = font.pairs[previous_ix as usize][ix as usize] else {
+                unreachable!("assembled only when every pair is known");
+            };
+            x = x + previous_unit.advance + kerning;
+        }
+        glyphs.push(ShapedGlyph {
+            id: unit.glyph,
+            position: point(x, px(0.)),
+            index: position,
+            is_emoji: unit.is_emoji,
+        });
+        first_unit.get_or_insert(unit);
+        previous = Some((ix, unit));
+    }
+    let last = previous
+        .map(|(_, unit)| unit)
+        .unwrap_or_else(|| unreachable!());
+    let first = first_unit.unwrap_or(last);
+    LineLayout {
+        font_size,
+        width: x + last.advance,
+        ascent: first.ascent,
+        descent: first.descent,
+        runs: vec![ShapedRun { font_id, glyphs }],
+        len: indices.len(),
+    }
+}
+
+/// Whether two layouts agree under the PRF-013 validation rule.
+pub(crate) fn layouts_agree(synthesized: &LineLayout, platform: &LineLayout) -> bool {
+    layouts_agree_within(synthesized, platform, NUMERIC_TOLERANCE)
+}
+
+/// The agreement tolerance for a line assembled at link `chain` of a chain:
+/// [`NUMERIC_TOLERANCE`], or the units in the last place of the line's width that a sum in a
+/// different order can differ by when that is larger. The platform accumulates one advance per
+/// glyph, so its own width is off by about the square root of the glyph count in such units; the
+/// chain adds one rounding per link.
+fn append_tolerance(layout: &LineLayout, chain: u32) -> f32 {
+    let units = 8.0 + 2.0 * (layout.len as f32).sqrt() + chain as f32;
+    NUMERIC_TOLERANCE.max(layout.width.0.abs() * units * f32::EPSILON)
+}
+
+/// [`layouts_agree`] with an explicit position tolerance in logical pixels.
+pub(crate) fn layouts_agree_within(
+    synthesized: &LineLayout,
+    platform: &LineLayout,
+    tolerance: f32,
+) -> bool {
+    let close = |a: Pixels, b: Pixels| (a - b).0.abs() <= tolerance;
+    if synthesized.len != platform.len
+        || synthesized.font_size != platform.font_size
+        || !close(synthesized.width, platform.width)
+        || synthesized.ascent != platform.ascent
+        || synthesized.descent != platform.descent
+        || synthesized.runs.len() != platform.runs.len()
+    {
+        return false;
+    }
+    synthesized.runs.iter().zip(&platform.runs).all(|(a, b)| {
+        a.font_id == b.font_id
+            && a.glyphs.len() == b.glyphs.len()
+            && a.glyphs.iter().zip(&b.glyphs).all(|(x, y)| {
+                x.id == y.id
+                    && x.index == y.index
+                    && x.is_emoji == y.is_emoji
+                    && close(x.position.x, y.position.x)
+                    && close(x.position.y, y.position.y)
+            })
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text_system::{FontId, GlyphId, ShapedGlyph, ShapedRun};
-    use crate::{point, px};
 
     fn layout_of(glyphs: usize) -> LineLayout {
         LineLayout {
