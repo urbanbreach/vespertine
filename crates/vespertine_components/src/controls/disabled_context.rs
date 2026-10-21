@@ -24,6 +24,9 @@ struct DisabledDepth(usize);
 
 impl vespertine::Global for DisabledDepth {}
 
+/// The retention context token of the subtree of a disabled group.
+const DISABLED_CONTEXT: u64 = 0x6469_7361_626c_6564;
+
 /// Whether the subtree being laid out sits inside a disabled control group.
 pub fn group_disabled(cx: &App) -> bool {
     cx.try_global::<DisabledDepth>()
@@ -79,13 +82,17 @@ impl Element for DisabledGroup {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        if self.disabled {
-            cx.default_global::<DisabledDepth>().0 += 1;
+        if !self.disabled {
+            return (self.child.request_layout(window, cx), ());
         }
-        let layout_id = self.child.request_layout(window, cx);
-        if self.disabled {
-            cx.default_global::<DisabledDepth>().0 -= 1;
-        }
+        // Views nested in the group read the context while they render. They are built together
+        // with the group, never on their own around it, and replayed only inside a disabled group.
+        window.require_whole_view_rebuild();
+        cx.default_global::<DisabledDepth>().0 += 1;
+        let layout_id = window.with_retention_context(DISABLED_CONTEXT, |window| {
+            self.child.request_layout(window, cx)
+        });
+        cx.default_global::<DisabledDepth>().0 -= 1;
         (layout_id, ())
     }
 

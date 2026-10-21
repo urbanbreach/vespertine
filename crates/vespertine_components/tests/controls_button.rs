@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc};
 
 use controls_support::*;
 use vespertine::{IntoElement, ParentElement, Styled, div, px, rgb};
-use vespertine_components::controls::{Button, disabled_group};
+use vespertine_components::controls::{Button, disabled_group, effective_disabled};
 use vespertine_test_host::require_backend;
 
 /// A button column: [0] `a`, [1] `b`, each 120 x 36 logical px at x = 20.
@@ -217,6 +217,100 @@ fn controls_a4_disabled_group_disables_enabled_looking_children() {
     host.key_down("space", false, None).unwrap();
     host.key_up("space", None).unwrap();
     assert_eq!(clicks[0].get(), 0);
+}
+
+/// A button in its own view, recording the disabled state it resolved when it was last rendered.
+struct GroupedButton {
+    resolved: Rc<Cell<Option<bool>>>,
+    label: &'static str,
+}
+
+impl vespertine::Render for GroupedButton {
+    fn render(
+        &mut self,
+        _: &mut vespertine::Window,
+        cx: &mut vespertine::Context<Self>,
+    ) -> impl IntoElement {
+        self.resolved.set(Some(effective_disabled(false, cx)));
+        Button::new("grouped").label(self.label).w(px(120.))
+    }
+}
+
+struct DisabledForm {
+    disabled: bool,
+    button: vespertine::Entity<GroupedButton>,
+}
+
+impl vespertine::Render for DisabledForm {
+    fn render(
+        &mut self,
+        _: &mut vespertine::Window,
+        _: &mut vespertine::Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .p(px(20.))
+            .child(disabled_group(self.disabled, self.button.clone()))
+    }
+}
+
+/// The disabled context reaches a control in a nested view that is built again on its own, and
+/// a nested view that did not change itself follows its group.
+#[test]
+fn controls_a4_disabled_group_reaches_a_nested_view_built_on_its_own() {
+    use vespertine::AppContext as _;
+    require_backend!();
+    let resolved = Rc::new(Cell::new(None));
+    let views = Rc::new(std::cell::RefCell::new(None));
+    let mut host = vespertine_test_host::TestHost::with_view(
+        vespertine_test_host::HostOptions {
+            complete_frames: false,
+            ..vespertine_test_host::HostOptions::with_size(300.0, 120.0)
+        },
+        {
+            let (resolved, views) = (resolved.clone(), views.clone());
+            move |_, cx| {
+                let button = cx.new(|_| GroupedButton {
+                    resolved,
+                    label: "Alpha",
+                });
+                let form = cx.new(|_| DisabledForm {
+                    disabled: true,
+                    button: button.clone(),
+                });
+                *views.borrow_mut() = Some((form.clone(), button));
+                form
+            }
+        },
+    )
+    .unwrap();
+    let (form, button) = views.borrow_mut().take().unwrap();
+    assert_eq!(resolved.get(), Some(true));
+
+    // Only the button's view changes.
+    resolved.set(None);
+    host.app().update(|cx| {
+        button.update(cx, |button, cx| {
+            button.label = "Beta";
+            cx.notify();
+        })
+    });
+    host.flush();
+    assert_eq!(resolved.get(), Some(true), "the rebuilt button is disabled");
+
+    // Only the group changes.
+    resolved.set(None);
+    host.app().update(|cx| {
+        form.update(cx, |form, cx| {
+            form.disabled = false;
+            cx.notify();
+        })
+    });
+    host.flush();
+    assert_eq!(
+        resolved.get(),
+        Some(false),
+        "the button is rendered again, enabled with its group"
+    );
 }
 
 #[test]
