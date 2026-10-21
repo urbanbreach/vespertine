@@ -1,6 +1,11 @@
 # Vendored copy of taffy 0.13.0 (MIT, https://github.com/DioxusLabs/taffy) with a
 # key-matched sixteen-entry measurement cache (LAY-001 R4) and a subtree layout method. See
 # src/tree/cache.rs and src/tree/taffy_tree.rs.
+#
+# An empty [workspace] makes this crate its own workspace root, so Cargo's search for a workspace
+# stops here even when the checkout is nested inside another workspace (a git worktree under
+# .worktrees/, or a project that vendors this repository).
+[workspace]
 
 [package]
 edition = "2021"

@@ -123,7 +123,9 @@ source pin even when resolving the Linux build.
   nine, LAY-001 R4) found by key and replaced with a second-chance policy, instead of one
   result per constraint kind; layout results are unchanged. `src/tree/taffy_tree.rs`: adds
   `TaffyTree::compute_subtree_layout_with_measure`, which recomputes one subtree with its own
-  size fixed. Taffy 0.14 was not adopted because it changes flex/grid/block results.
+  size fixed. Its `Cargo.toml` also declares an empty `[workspace]`, so the crate is its own
+  workspace root even when this checkout sits inside another workspace. Taffy 0.14 was not
+  adopted because it changes flex/grid/block results.
 - Linux dispatcher timers (`vespertine_linux/src/linux/dispatcher.rs`) are kernel timers (`timerfd`)
   armed by the calling thread and registered with the timer thread's epoll set, instead of messages
   to a timer thread that arms them itself; `BackgroundExecutor::timer` completes on the thread that
