@@ -2695,7 +2695,9 @@ impl Interactivity {
         if let Some(focus_handle) = self.tracked_focus_handle.as_ref() {
             window.set_focus_handle(focus_handle, cx);
 
-            if window.a11y.is_active() {
+            // An inert subtree registers no focus handle, so assistive technology cannot
+            // focus it either.
+            if window.a11y.is_active() && window.inert_depth == 0 {
                 if let Some(global_id) = global_id {
                     let node_id = global_id.accesskit_node_id();
                     let focused = focus_handle.is_focused(window);

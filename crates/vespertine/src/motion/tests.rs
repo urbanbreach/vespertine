@@ -1959,6 +1959,69 @@ mod element_tests {
         assert!(bounds_of(&window, cx, "closable").is_none());
     }
 
+    #[vespertine::test]
+    fn an_accessible_focus_request_does_not_reach_an_element_that_became_inert(
+        cx: &mut TestAppContext,
+    ) {
+        let inert = Rc::new(Cell::new(false));
+        let target = cx.update(|cx| cx.focus_handle());
+        let window = open(cx, {
+            let (inert, target) = (inert.clone(), target.clone());
+            move |_, _| {
+                let button = div()
+                    .id("alpha")
+                    .role(accesskit::Role::Button)
+                    .track_focus(&target)
+                    .w(px(100.0))
+                    .h(px(40.0));
+                div()
+                    .size_full()
+                    .child(PaintScope::new(button).inert(inert.get()))
+                    .into_any_element()
+            }
+        });
+        window
+            .update(cx, |_, window, _| window.a11y.set_active_for_test(true))
+            .unwrap();
+        redraw(&window, cx);
+        // The node id an assistive technology learned while the element was active.
+        let node_id = window
+            .update(cx, |_, window, _| {
+                window
+                    .a11y
+                    .focus_ids
+                    .iter()
+                    .find(|(_, focus_id)| **focus_id == target.id)
+                    .map(|(node_id, _)| *node_id)
+            })
+            .unwrap()
+            .expect("the active element is focusable through accessibility");
+        let request_focus = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |_, window, cx| {
+                    window.handle_a11y_action(
+                        accesskit::ActionRequest {
+                            action: accesskit::Action::Focus,
+                            target_tree: accesskit::TreeId::ROOT,
+                            target_node: node_id,
+                            data: None,
+                        },
+                        cx,
+                    );
+                    target.is_focused(window)
+                })
+                .unwrap()
+        };
+
+        inert.set(true);
+        redraw(&window, cx);
+        assert!(!request_focus(cx), "an inert element takes no focus");
+
+        inert.set(false);
+        redraw(&window, cx);
+        assert!(request_focus(cx), "the active element takes focus");
+    }
+
     /// A route-glide scene: a pane position and a route key; the travelling input lives in an
     /// absolutely positioned container at `left`.
     struct TravelScene {
