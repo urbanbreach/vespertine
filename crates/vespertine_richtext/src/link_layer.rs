@@ -110,6 +110,8 @@ struct Runtime {
     /// The pressed link's index with the press.
     press: Option<(usize, LinkPress)>,
     menu: Option<OpenMenu>,
+    /// The keyboard-focused link the dismissal below applies to.
+    disclosed: Option<usize>,
     disclosure_dismissed: bool,
     signature: Vec<[f32; 4]>,
 }
@@ -197,6 +199,7 @@ impl LinkLayer {
         let runtime = self.runtime.clone();
         let mut signature = Vec::new();
         let window_size = window.viewport_size();
+        let mut any_focused = false;
 
         for (index, link) in links.iter().enumerate() {
             let rects = layout.range_rects(link.range.clone(), px(0.), px(0.));
@@ -349,11 +352,19 @@ impl LinkLayer {
                 self.overlays.push(overlay);
             }
 
-            // The focused link shows its complete destination below the first hit rectangle.
+            // The focused link shows its complete destination below the first hit rectangle,
+            // until it is dismissed; focusing another link discloses again.
             let focused = handle.is_focused(window) && window.last_input_was_keyboard();
-            if !focused {
-                runtime.borrow_mut().disclosure_dismissed = false;
-            } else if !runtime.borrow().disclosure_dismissed {
+            let disclose = focused && {
+                let mut state = runtime.borrow_mut();
+                if state.disclosed != Some(index) {
+                    state.disclosed = Some(index);
+                    state.disclosure_dismissed = false;
+                }
+                !state.disclosure_dismissed
+            };
+            any_focused |= focused;
+            if disclose {
                 let card = disclosure_view(&link.destination, window_size, window, cx);
                 let mut popup = deferred(
                     anchored()
@@ -379,6 +390,9 @@ impl LinkLayer {
 
         {
             let mut state = runtime.borrow_mut();
+            if !any_focused {
+                state.disclosed = None;
+            }
             if state.signature != signature {
                 // Any change of a link's bounds dismisses the disclosure and the menu.
                 if !state.signature.is_empty() {

@@ -435,3 +435,33 @@ fn a_release_on_an_adjacent_link_activates_neither() {
     assert_eq!(log.borrow().len(), 1);
     assert_eq!(log.borrow()[0].destination, "https://example.com/beta");
 }
+
+#[test]
+fn escape_dismisses_the_disclosure_of_a_later_focused_link() {
+    let log = new_log();
+    let mut harness = Harness::new(
+        WIDTH,
+        200.,
+        two_links(
+            "alpha beta",
+            [(0..5, "https://example.com/alpha"), (6..10, URL)],
+            &log,
+        ),
+    );
+    let before = harness.screenshot();
+    harness.focus_next();
+    harness.focus_next();
+    harness.key("shift");
+    let card = |image: &image::RgbaImage| support::rgb_at(image, WIDTH, 100., 33.);
+    assert_ne!(
+        card(&before),
+        card(&harness.screenshot()),
+        "the second link's card is shown"
+    );
+    harness.key("escape");
+    assert_eq!(
+        card(&before),
+        card(&harness.screenshot()),
+        "Escape dismisses it"
+    );
+}
