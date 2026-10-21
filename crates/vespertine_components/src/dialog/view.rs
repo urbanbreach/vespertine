@@ -12,7 +12,7 @@
 //!   policy forbids it, the popup carries the modal key scope
 //!   ([`MODAL_SCOPE_CONTEXT`](vespertine::MODAL_SCOPE_CONTEXT): window-level shortcuts of the
 //!   page beneath are not dispatched while focus is inside) and Tab cycles inside the popup
-//!   (first to last and back, [`next_tab_stop`](super::model::next_tab_stop) semantics).
+//!   (first to last and back).
 //! * **Nonmodal**: the portal has no occluding surface, so the page stays interactive around the
 //!   popup, and Tab is not trapped. An outside press is still a dismissal by policy but is never
 //!   consumed.

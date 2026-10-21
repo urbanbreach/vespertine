@@ -21,7 +21,6 @@ pub use chip::{
 };
 pub use model::{
     CloseDecision, ClosePolicy, Slide, SlideSet, TabId, VisitHistory, active_after_close,
-    active_after_reorder, cycle_target, drop_index, ease_out, edge_hidden, reorder, reveal_offset,
-    slide_offset,
+    cycle_target, drop_index, ease_out, edge_hidden, reorder, reveal_offset, slide_offset,
 };
 pub use strip::{NextTab, PreviousTab, TabDrag, TabStrip, bind_keys, cycle_on};

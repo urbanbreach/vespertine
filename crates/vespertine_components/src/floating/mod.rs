@@ -8,7 +8,6 @@
 //! * [`rank`]: search match rank and filter-and-rank returning original indices (R25).
 //! * [`hover_intent`]: submenu hover intent with the pointer corridor (R26, R27).
 //! * [`placement`]: contained placement inside caller-supplied bounds (R18, R19).
-//! * [`controlled`]: the controlled-state helper (R12).
 //!
 //! and the parts that touch the framework:
 //!
@@ -19,7 +18,6 @@
 //! * [`trigger`]: trigger bounds and the outside-press probe (R13, R14).
 //! * [`menu`]: anchored and contained menu surfaces (R1, R2, R5, R16, R18-R21).
 
-pub mod controlled;
 pub mod dismiss;
 pub mod focus;
 pub mod hover_intent;
@@ -33,7 +31,6 @@ pub mod rank;
 pub mod stepping;
 pub mod trigger;
 
-pub use controlled::ControlledState;
 pub use hover_intent::{
     CORRIDOR_TOLERANCE, HOVER_GRACE, HoverIntent, IntentAnswer, OpenSubmenu, RENEW_THRESHOLD,
     TURN_AWAY_THRESHOLD, in_corridor,

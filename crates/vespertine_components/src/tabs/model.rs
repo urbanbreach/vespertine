@@ -132,19 +132,6 @@ pub fn slide_offset(ix: usize, from: usize, over: usize) -> i32 {
     }
 }
 
-/// The index of a selection stored as an index after the tab at `from` moved to `to`.
-pub fn active_after_reorder(active: usize, from: usize, to: usize) -> usize {
-    if active == from {
-        to
-    } else if from < active && active <= to {
-        active - 1
-    } else if to <= active && active < from {
-        active + 1
-    } else {
-        active
-    }
-}
-
 /// The selected index after closing the tab at `closed` when `active` was selected and
 /// `len_after` tabs remain (NearestIndex, R5). `None` when no tab is left.
 pub fn active_after_close(active: usize, closed: usize, len_after: usize) -> Option<usize> {
@@ -424,15 +411,6 @@ mod tests {
         assert_eq!(offsets, [0, 1, 1, 0]);
         // Hovering the origin moves nothing.
         assert!((0..4).all(|ix| slide_offset(ix, 2, 2) == 0));
-    }
-
-    #[test]
-    fn active_after_reorder_examples() {
-        assert_eq!(active_after_reorder(2, 0, 3), 1);
-        assert_eq!(active_after_reorder(1, 3, 0), 2);
-        assert_eq!(active_after_reorder(1, 1, 3), 3);
-        assert_eq!(active_after_reorder(4, 0, 3), 4);
-        assert_eq!(active_after_reorder(0, 1, 3), 0);
     }
 
     #[test]

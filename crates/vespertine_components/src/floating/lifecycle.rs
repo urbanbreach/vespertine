@@ -153,14 +153,6 @@ impl<T> Popup<T> {
         }
     }
 
-    /// Drops the mounted state immediately (no exit phase), returning the payload.
-    pub fn finish_close(&mut self) -> Option<T> {
-        match std::mem::replace(&mut self.phase, Phase::Unmounted) {
-            Phase::Open { payload, .. } | Phase::Closing { payload, .. } => Some(payload),
-            Phase::Unmounted => None,
-        }
-    }
-
     /// The reap that belongs to the close begun at `begun_at`: drops the state and returns true
     /// only when the popup is still in exactly that close. A popup reopened or re-closed since
     /// is left alone.
@@ -177,13 +169,6 @@ impl<T> Popup<T> {
     /// phase). Call it for presses on the trigger that owns this popup.
     pub fn note_trigger_press(&mut self) {
         self.press_was_open = self.is_mounted();
-    }
-
-    /// Owner-matching [`Popup::note_trigger_press`]: the press counts only when the mounted
-    /// payload belongs to the pressed trigger (`owns` answers for the payload). A press on a
-    /// trigger that does not own the popup clears the note.
-    pub fn note_trigger_press_for(&mut self, owns: impl FnOnce(&T) -> bool) {
-        self.press_was_open = self.get().is_some_and(owns);
     }
 
     /// Consumes the press note. The click that follows a press that found its popup mounted
@@ -299,28 +284,5 @@ mod tests {
         popup.begin_close(1.);
         popup.note_trigger_press();
         assert!(popup.take_press_was_open());
-    }
-
-    #[test]
-    fn owner_matching_press_ignores_other_triggers() {
-        let mut popup = Popup::new();
-        popup.open(1, 0.);
-        popup.note_trigger_press_for(|owner| *owner == 2);
-        assert!(!popup.take_press_was_open());
-        popup.note_trigger_press_for(|owner| *owner == 1);
-        assert!(popup.take_press_was_open());
-        // A later press on a non-owner clears a stale note.
-        popup.note_trigger_press_for(|owner| *owner == 1);
-        popup.note_trigger_press_for(|owner| *owner == 2);
-        assert!(!popup.take_press_was_open());
-    }
-
-    #[test]
-    fn finish_close_drops_immediately() {
-        let mut popup = Popup::new();
-        popup.open(9, 0.);
-        assert_eq!(popup.finish_close(), Some(9));
-        assert!(!popup.is_mounted());
-        assert_eq!(popup.finish_close(), None);
     }
 }

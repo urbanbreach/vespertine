@@ -200,22 +200,6 @@ impl DialogModel {
     }
 }
 
-/// Tab inside a modal popup: the next index among `count` focusable descendants, wrapping from
-/// the last to the first, and from the first to the last for Shift-Tab (R7). With no current
-/// index forward enters at the first and reverse at the last; `None` when there is nothing to
-/// focus.
-pub fn next_tab_stop(count: usize, current: Option<usize>, reverse: bool) -> Option<usize> {
-    if count == 0 {
-        return None;
-    }
-    Some(match (current.filter(|ix| *ix < count), reverse) {
-        (Some(ix), false) => (ix + 1) % count,
-        (Some(ix), true) => (ix + count - 1) % count,
-        (None, false) => 0,
-        (None, true) => count - 1,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,16 +265,5 @@ mod tests {
             model.activate("cancel").is_some(),
             "the explicit buttons still work"
         );
-    }
-
-    #[test]
-    fn tab_stops_wrap_in_both_directions() {
-        assert_eq!(next_tab_stop(3, Some(2), false), Some(0));
-        assert_eq!(next_tab_stop(3, Some(0), true), Some(2));
-        assert_eq!(next_tab_stop(3, Some(1), false), Some(2));
-        assert_eq!(next_tab_stop(3, None, false), Some(0));
-        assert_eq!(next_tab_stop(3, None, true), Some(2));
-        assert_eq!(next_tab_stop(0, None, false), None);
-        assert_eq!(next_tab_stop(1, Some(0), false), Some(0));
     }
 }
