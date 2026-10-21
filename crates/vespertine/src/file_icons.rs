@@ -391,35 +391,36 @@ pub const DARK_PALETTE_REMAP: [(&str, &str); 7] = [
 /// [`DARK_PALETTE_REMAP`] pairs. Geometry, bright colors, transparency and gradients are
 /// untouched.
 pub fn remap_dark_palette(svg: &str) -> Cow<'_, str> {
-    let lower = svg.to_ascii_lowercase();
-    if !DARK_PALETTE_REMAP
-        .iter()
-        .any(|(from, _)| lower.contains(&from.to_ascii_lowercase()))
-    {
-        return Cow::Borrowed(svg);
-    }
-    // ASCII lowercasing preserves byte offsets, so matches in `lower` index into `svg`.
-    let mut out = String::with_capacity(svg.len());
+    let bytes = svg.as_bytes();
+    let mut out: Option<String> = None;
+    // `svg[copied..]` has not been written to `out` yet.
+    let mut copied = 0;
     let mut index = 0;
-    'scan: while index < svg.len() {
-        if svg.as_bytes()[index] == b'#' {
-            for (from, to) in DARK_PALETTE_REMAP {
-                let end = index + from.len();
-                if end <= lower.len() && lower[index..end] == from.to_ascii_lowercase() {
-                    out.push_str(to);
-                    index = end;
-                    continue 'scan;
-                }
-            }
-        }
-        let ch = svg[index..]
-            .chars()
-            .next()
-            .expect("index is a char boundary");
-        out.push(ch);
-        index += ch.len_utf8();
+    while let Some(offset) = bytes[index..].iter().position(|&byte| byte == b'#') {
+        let start = index + offset;
+        let pair = DARK_PALETTE_REMAP.iter().find(|(from, _)| {
+            bytes
+                .get(start..start + from.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(from.as_bytes()))
+        });
+        let Some((from, to)) = pair else {
+            index = start + 1;
+            continue;
+        };
+        // The match is ASCII and starts at `#`, so both ends are char boundaries.
+        let out = out.get_or_insert_with(|| String::with_capacity(svg.len()));
+        out.push_str(&svg[copied..start]);
+        out.push_str(to);
+        index = start + from.len();
+        copied = index;
     }
-    Cow::Owned(out)
+    match out {
+        Some(mut out) => {
+            out.push_str(&svg[copied..]);
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(svg),
+    }
 }
 
 /// The SVG artwork of `asset_path` for `appearance` (dark palette remap applied for dark).
@@ -699,8 +700,12 @@ mod tests {
         assert!(dark.contains("url(#g)"));
         assert_eq!(remap_dark_palette("<svg/>"), "<svg/>");
         assert!(matches!(remap_dark_palette("<svg/>"), Cow::Borrowed(_)));
-        // Non-ASCII text survives.
+        // Non-ASCII text survives, also right after a `#` that starts no palette color.
         assert_eq!(remap_dark_palette("é #2563EB ü"), "é #60A5FA ü");
+        assert_eq!(
+            remap_dark_palette("<title>#abcdeé</title><path fill=\"#16A34A\"/>"),
+            "<title>#abcdeé</title><path fill=\"#4ADE80\"/>"
+        );
     }
 
     struct MemoryAssets(Vec<(&'static str, &'static str)>);
