@@ -270,6 +270,50 @@ fn focus_memory_keeps_its_origin_and_yields_to_a_mounted_dialog(cx: &mut TestApp
     assert_eq!(focused_id(cx), Some(dialog.id()));
 }
 
+#[crate::test]
+fn focus_memory_yields_to_a_dialog_focused_before_the_restoration_runs(cx: &mut TestAppContext) {
+    use crate::focus_restore::FocusMemory;
+    let (view, cx) = restore_view(cx);
+    let (root, editor, dialog) = view.read_with(cx, |view, _| {
+        (view.root.clone(), view.editor.clone(), view.dialog.clone())
+    });
+    let mut memory = FocusMemory::new(&root);
+    focus_and_draw(cx, &editor);
+    cx.update(|window, cx| memory.remember(window, cx));
+
+    // A mounted dialog takes focus after the request and before the next frame.
+    view.update(cx, |view, cx| {
+        view.dialog_mounted = true;
+        cx.notify();
+    });
+    focus_and_draw(cx, &root);
+    cx.update(|window, cx| {
+        memory.restore(window, cx);
+        window.focus(&dialog, cx);
+    });
+    next_frame(cx);
+    assert_eq!(focused_id(cx), Some(dialog.id()), "mounted dialog");
+
+    // A dialog focused before its first frame (not mounted yet) takes precedence as well.
+    view.update(cx, |view, cx| {
+        view.dialog_mounted = false;
+        cx.notify();
+    });
+    focus_and_draw(cx, &root);
+    cx.update(|window, cx| {
+        memory.restore(window, cx);
+        window.focus(&dialog, cx);
+    });
+    next_frame(cx);
+    assert_eq!(focused_id(cx), Some(dialog.id()), "dialog not yet mounted");
+
+    // Without a later focus change the restoration still applies.
+    focus_and_draw(cx, &root);
+    cx.update(|window, cx| memory.restore(window, cx));
+    next_frame(cx);
+    assert_eq!(focused_id(cx), Some(editor.id()));
+}
+
 fn key_down(cx: &mut VisualTestContext, key: &str, is_held: bool) {
     let keystroke = crate::Keystroke::parse(key).expect("valid keystroke");
     cx.simulate_event(KeyDownEvent {

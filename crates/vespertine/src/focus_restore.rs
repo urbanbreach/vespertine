@@ -21,15 +21,24 @@ impl Window {
     pub fn restore_focus(&self, target: &WeakFocusHandle, fallback: &WeakFocusHandle) {
         let target = target.clone();
         let fallback = fallback.clone();
-        self.on_next_frame(move |window, cx| {
-            let mounted = |weak: &WeakFocusHandle| {
-                weak.upgrade()
-                    .filter(|handle| window.is_focus_mounted(handle))
-            };
-            if let Some(handle) = mounted(&target).or_else(|| mounted(&fallback)) {
-                window.focus(&handle, cx);
-            }
-        });
+        self.on_next_frame(move |window, cx| window.focus_first_mounted(&target, &fallback, cx));
+    }
+
+    /// Focuses `target` when its element is mounted in the rendered frame, otherwise
+    /// `fallback` when that one is, otherwise leaves the focus unchanged.
+    fn focus_first_mounted(
+        &mut self,
+        target: &WeakFocusHandle,
+        fallback: &WeakFocusHandle,
+        cx: &mut App,
+    ) {
+        let mounted = |weak: &WeakFocusHandle| {
+            weak.upgrade()
+                .filter(|handle| self.is_focus_mounted(handle))
+        };
+        if let Some(handle) = mounted(target).or_else(|| mounted(fallback)) {
+            self.focus(&handle, cx);
+        }
     }
 
     /// Whether the element tracking `handle` is present in the rendered frame.
@@ -115,7 +124,10 @@ impl FocusMemory {
     /// Restores focus to the remembered origin, unless a mounted focus
     /// elsewhere (for example in a dialog) takes precedence. When the origin is
     /// gone or unmounted the pane's scope handle receives focus instead, as
-    /// with [`Window::restore_focus`]. Takes effect on the next frame.
+    /// with [`Window::restore_focus`]. Takes effect on the next frame, and not
+    /// at all when focus moves to another element than the scope in between:
+    /// that later focus (a dialog opened meanwhile, say) takes precedence even
+    /// before its element is mounted.
     pub fn restore(&self, window: &mut Window, cx: &App) {
         let Some(scope) = self.scope.upgrade() else {
             return;
@@ -128,6 +140,17 @@ impl FocusMemory {
             return;
         }
         let origin = self.origin.clone().unwrap_or_else(|| scope.downgrade());
-        window.restore_focus(&origin, &scope.downgrade());
+        let scope = scope.downgrade();
+        let requested_at = window.focus_generation;
+        window.on_next_frame(move |window, cx| {
+            if window.focus_generation != requested_at
+                && window
+                    .focused(cx)
+                    .is_some_and(|focused| scope.upgrade().is_none_or(|scope| focused != scope))
+            {
+                return;
+            }
+            window.focus_first_mounted(&origin, &scope, cx);
+        });
     }
 }
