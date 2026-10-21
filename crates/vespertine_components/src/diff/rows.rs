@@ -934,28 +934,6 @@ pub fn mean_row_height(flat: &Flat, metrics: &RowMetrics, annotations: &[Annotat
     sum / flat.rows.len() as f32
 }
 
-/// The analytic height of a file's expanded body: everything after the header row (R26).
-pub fn analytic_body_height(files: &[DiffFile], file: usize, options: &FlattenOptions<'_>) -> f32 {
-    let mut collapsed = options.collapsed.clone();
-    collapsed.remove(&files[file].path);
-    let folding: HashSet<usize> = HashSet::from([file]);
-    let single = std::slice::from_ref(&files[file]);
-    let local = FlattenOptions {
-        metrics: options.metrics,
-        max_lines: None,
-        collapsed: &collapsed,
-        mode: options.mode,
-        annotations: options.annotations,
-        draft: options.draft,
-        folding: &folding,
-    };
-    // `single` is flattened as file 0, so its annotations are matched by path as usual.
-    let flat = flatten_rows(single, &local);
-    flat.stand_ins
-        .first()
-        .map_or(0., |stand_in| stand_in.body_height)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1650,25 +1628,6 @@ mod tests {
             assert!(36. + push <= top.max(36.).max(0.) + 0.001 || push == 0.);
             assert!(push + 36. <= top || push == 0.);
         }
-    }
-
-    #[test]
-    fn analytic_body_height_matches_the_flattened_rows() {
-        let files = files(TWO);
-        let collapsed = HashSet::new();
-        let folding = HashSet::new();
-        let options = opts(&collapsed, &folding, None, DiffMode::Unified);
-        // file a: 2 hunk headers, 5 lines, bottom pad.
-        assert_eq!(
-            analytic_body_height(&files, 0, &options),
-            2. * 28. + 5. * 21. + 8.
-        );
-        let split = opts(&collapsed, &folding, None, DiffMode::Split);
-        // split rows of a: ctx, pair(-b,+c), meta row, ctx x = 4 rows.
-        assert_eq!(
-            analytic_body_height(&files, 0, &split),
-            2. * 28. + 4. * 21. + 8.
-        );
     }
 
     #[test]

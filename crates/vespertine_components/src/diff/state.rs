@@ -288,11 +288,6 @@ impl DiffViewState {
         files
     }
 
-    /// The width the viewer was last painted at.
-    pub fn viewer_width(&self) -> f32 {
-        self.width
-    }
-
     /// The focus handle of the draft editor (the viewer focuses it when a draft opens).
     pub fn draft_focus_handle(&self) -> &FocusHandle {
         &self.draft_focus
@@ -370,18 +365,6 @@ impl DiffViewState {
             self.hscroll.insert(file, next);
             self.changed(cx);
         }
-    }
-
-    /// Sets a file's horizontal offset (clamped to the content).
-    pub fn set_horizontal_offset(
-        &mut self,
-        file: usize,
-        offset: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let current = self.horizontal_offset(file);
-        self.pan(file, offset - current, window, cx);
     }
 
     /// Toggles a file's collapsed state in the viewer's own tracking (R26). In a controlled

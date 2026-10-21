@@ -4,13 +4,13 @@
 use super::highlight::FileDocuments;
 use super::render::{self, Palette};
 use super::rows::{Annotation, DiffMode, RowMetrics, Side, SourceRef, scaled_text_metrics};
-use super::state::{DiffViewState, Layout, Model, OVERDRAW, SyncInput};
+use super::state::{DiffViewState, Layout, Model, SyncInput};
 use std::rc::Rc;
 use std::sync::Arc;
 use vespertine::{
-    AnyElement, App, ClickEvent, ElementId, Entity, ExternalPaths, FocusHandle, Hsla,
-    InteractiveElement, IntoElement, ListState, ParentElement, Refineable, RenderOnce,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, canvas, div, font, list, px,
+    AnyElement, App, ClickEvent, ElementId, Entity, ExternalPaths, FocusHandle, InteractiveElement,
+    IntoElement, ListState, ParentElement, Refineable, RenderOnce, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, canvas, div, font, list, px,
 };
 use vespertine_richtext::syntax::{HighlightCache, SyntaxColors};
 use vespertine_theme::document::DocumentTheme;
@@ -588,13 +588,4 @@ impl RenderOnce for DiffView {
         }
         root.into_any_element()
     }
-}
-
-/// The overdraw of the virtualized list, in px (R17).
-pub const LIST_OVERDRAW: f32 = OVERDRAW;
-
-/// The ink color of a theme: white when the background lightness is below 0.5, black otherwise
-/// (Parameters).
-pub fn ink_for(theme: &DocumentTheme) -> Hsla {
-    Palette::new(theme).ink
 }
