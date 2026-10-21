@@ -6,6 +6,9 @@ See LICENSE-APACHE for the full license text.
 Bundled test/example fonts retain their separate SIL Open Font License 1.1:
 - Lilex: Copyright 2019 The Lilex Project Authors; assets/fonts/lilex/OFL.txt.
 - IBM Plex Sans: Copyright 2017 IBM Corp.; assets/fonts/ibm-plex-sans/license.txt.
+- Vespertine Test Sans Var: a modified version of IBM Plex Sans Var (Roman) 3.000, Copyright
+  2017 IBM Corp. with Reserved Font Name "Plex"; subset to printable ASCII and renamed as the
+  license requires of modified versions; assets/fonts/test-sans-var/license.txt.
 
 Vendored third-party code:
 - third_party/taffy is a copy of taffy 0.13.0 (https://github.com/DioxusLabs/taffy), licensed
