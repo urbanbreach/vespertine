@@ -705,6 +705,34 @@ fn second_lookup_returns_the_same_shared_document() {
 }
 
 #[test]
+fn a_cached_document_is_never_served_past_a_stricter_span_limit() {
+    let strict = Limits {
+        max_raw_spans: 0,
+        ..Limits::default()
+    };
+    // A fresh request with no span budget renders plain.
+    assert!(
+        HighlightCache::new()
+            .highlight_as(Language::Json, "[1]", strict)
+            .is_none()
+    );
+    // So does the same request after a laxer one cached the document.
+    let cache = HighlightCache::new();
+    assert!(
+        cache
+            .highlight_as(Language::Json, "[1]", Limits::default())
+            .is_some()
+    );
+    assert!(cache.highlight_as(Language::Json, "[1]", strict).is_none());
+    assert!(
+        cache
+            .highlight_as(Language::Json, "[1]", Limits::default())
+            .is_some(),
+        "the cached document still serves requests within its budget"
+    );
+}
+
+#[test]
 fn different_sources_languages_and_generations_do_not_share_entries() {
     let cache = HighlightCache::new();
     let a = cache

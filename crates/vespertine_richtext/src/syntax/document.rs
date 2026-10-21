@@ -79,6 +79,8 @@ pub struct Span {
 pub struct HighlightedDocument {
     language: Language,
     lines: Vec<Vec<Span>>,
+    /// Raw spans the tokenizer produced, which the span limit is checked against.
+    raw_spans: usize,
 }
 
 /// Fixed header cost in the estimated weight (TXT-007 R16).
@@ -126,7 +128,11 @@ impl HighlightedDocument {
             index += 1;
         }
         let lines = lines.into_iter().map(normalize_line).collect();
-        Ok(Self { language, lines })
+        Ok(Self {
+            language,
+            lines,
+            raw_spans: count,
+        })
     }
 
     /// A document with `line_count` lines and no spans (a source highlighted without any
@@ -135,6 +141,7 @@ impl HighlightedDocument {
         Self {
             language,
             lines: vec![Vec::new(); line_starts(source).len()],
+            raw_spans: 0,
         }
     }
 
@@ -156,6 +163,12 @@ impl HighlightedDocument {
     /// Total number of spans over all lines.
     pub fn span_count(&self) -> usize {
         self.lines.iter().map(Vec::len).sum()
+    }
+
+    /// Number of raw spans the document was built from, before line splitting and merging:
+    /// what [`Limits::max_raw_spans`] bounds.
+    pub fn raw_span_count(&self) -> usize {
+        self.raw_spans
     }
 
     /// Estimated retained weight: 32 + 24 per line + 24 per span, in bytes (TXT-007 R16).

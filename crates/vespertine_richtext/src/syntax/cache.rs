@@ -192,8 +192,8 @@ impl HighlightCache {
     /// Looks `(language, source)` up and, on a miss, builds the document with `build` (a
     /// third-party tokenizer through [`HighlightedDocument::from_absolute_spans`], for example).
     /// A failing build yields `None` and is not cached; a source over `limits` is rejected
-    /// before hashing. A built document that is too heavy for the cache is returned but not
-    /// retained.
+    /// before hashing, and a cached document with more raw spans than `limits` allows is not
+    /// served. A built document that is too heavy for the cache is returned but not retained.
     pub fn get_or_build(
         &self,
         language: Language,
@@ -212,6 +212,12 @@ impl HighlightCache {
             inner.tick += 1;
             let tick = inner.tick;
             if let Some(entry) = inner.entries.get_mut(&key) {
+                // A document built under a laxer span limit is plain for this request, exactly as
+                // a fresh build would be.
+                if entry.document.raw_span_count() > limits.max_raw_spans {
+                    inner.misses += 1;
+                    return None;
+                }
                 entry.last_used = tick;
                 let document = entry.document.clone();
                 inner.hits += 1;
