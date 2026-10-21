@@ -196,3 +196,85 @@ fn a_view_that_stops_blocking_the_pointer_gives_the_hover_back(cx: &mut TestAppC
         .unwrap();
     assert_eq!(after.views_built, 0, "{after:?}");
 }
+
+/// A view styled by the hover state of a group declared around it, outside the view.
+struct GroupMember {
+    value: u32,
+}
+
+impl Render for GroupMember {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(200.))
+            .h(px(20.))
+            .bg(rgb(0xffffff))
+            .group_hover("row", |style| style.bg(rgb(0xd0e0ff)))
+            .child(format!("value {}", self.value))
+    }
+}
+
+struct GroupRow {
+    member: Entity<GroupMember>,
+}
+
+impl Render for GroupRow {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            div()
+                .group("row")
+                .w(px(200.))
+                .h(px(40.))
+                .child(self.member.clone()),
+        )
+    }
+}
+
+/// A view nested in a group is built again on its own while the pointer is over the group; its
+/// group hover still follows the pointer out of the group.
+#[crate::test]
+fn a_view_rebuilt_inside_a_group_keeps_following_the_group_hover(cx: &mut TestAppContext) {
+    let mut members = Vec::new();
+    let mut windows = Vec::new();
+    for retained in [true, false] {
+        let member = cx.new(|_| GroupMember { value: 0 });
+        let handle = cx.add_window({
+            let member = member.clone();
+            move |_, _| GroupRow { member }
+        });
+        let window: AnyWindowHandle = handle.into();
+        cx.update_window(window, |_, window, _| {
+            window.set_retention_enabled(retained)
+        })
+        .unwrap();
+        members.push(member);
+        windows.push(window);
+    }
+    let windows = [windows[0], windows[1]];
+    settle(cx, windows);
+    for window in windows {
+        move_pointer(cx, window, 10., 30.);
+    }
+    settle(cx, windows);
+    assert_eq!(signature(cx, windows[0]), signature(cx, windows[1]));
+    assert_eq!(hovered_quads(cx, windows[0]), 1, "the group is hovered");
+
+    for member in &members {
+        member.update(cx, |member, cx| {
+            member.value += 1;
+            cx.notify();
+        });
+    }
+    settle(cx, windows);
+    assert_eq!(signature(cx, windows[0]), signature(cx, windows[1]));
+
+    for window in windows {
+        move_pointer(cx, window, 10., 100.);
+    }
+    settle(cx, windows);
+    assert_eq!(
+        signature(cx, windows[0]),
+        signature(cx, windows[1]),
+        "the retained window shows the group hover the full window shows"
+    );
+    assert_eq!(hovered_quads(cx, windows[0]), 0, "the group is not hovered");
+}

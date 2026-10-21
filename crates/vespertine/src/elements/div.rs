@@ -2986,6 +2986,11 @@ impl Interactivity {
 
                                             if let Some(group) = self.group.clone() {
                                                 GroupHitboxes::push(group, hitbox.id, cx);
+                                                // Views nested here look the group up while
+                                                // they paint: one built again on its own,
+                                                // with this element replayed, would not find
+                                                // it (PRF-001 R6).
+                                                window.require_whole_view_rebuild();
                                             }
 
                                             if let Some(area) = self.window_control {
