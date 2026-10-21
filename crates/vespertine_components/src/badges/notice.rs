@@ -133,12 +133,14 @@ pub fn notice_chip(
     let copied = message.clone();
     let copy = icon_button(
         SharedString::from(format!("{key}-copy")),
+        "Copy message".into(),
         ICON_COPY,
         20.0,
         12.0,
         6.0,
         muted.opacity(0.8),
         accent.opacity(0.12),
+        accent,
         Rc::new(move |_, _, cx: &mut App| {
             cx.write_to_clipboard(ClipboardItem::new_string(copied.to_string()));
         }),

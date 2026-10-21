@@ -421,6 +421,50 @@ fn a_notice_action_runs_its_callback() {
     assert_eq!(retried.get(), 1);
 }
 
+#[test]
+fn notice_copy_and_retry_are_tab_stops_activated_by_enter_and_space() {
+    if !vespertine_test_host::is_available() {
+        return;
+    }
+    let retried = Rc::new(Cell::new(0));
+    let tokens = BadgeTokens::neutral();
+    let mut host = TestHost::with_element(options(400.0, 300.0), {
+        let retried = retried.clone();
+        move |_, _| {
+            let retried = retried.clone();
+            let chip = notice_chip(
+                "notice",
+                &tokens,
+                Severity::Warning,
+                "Slow",
+                "Lorem ipsum",
+                NoticeVariant::Tile,
+                Some(NoticeAction::new("Retry", move |_, _, _| {
+                    retried.set(retried.get() + 1)
+                })),
+            )
+            .w(px(300.));
+            text_root(div().p(px(20.)).child(chip)).into_any_element()
+        }
+    })
+    .expect("host");
+    host.flush();
+    // The copy button comes first in the header, the retry action below the message.
+    host.focus_next().expect("focus");
+    host.key_down("enter", false, None).expect("key");
+    host.key_up("enter", None).expect("key");
+    host.flush();
+    let copied = host
+        .app()
+        .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some("Lorem ipsum"));
+    host.focus_next().expect("focus");
+    host.key_down("space", false, None).expect("key");
+    host.key_up("space", None).expect("key");
+    host.flush();
+    assert_eq!(retried.get(), 1);
+}
+
 // --- A6, A7, A9: review cards ------------------------------------------------------------------
 
 struct Review {
@@ -714,6 +758,31 @@ fn the_cancel_button_discards_the_edits_and_a_new_draft_reads_comment() {
     h.host.flush();
     assert!(!h.read(|review| review.editing));
     assert_eq!(h.read(|review| review.body.to_string()), "kept");
+}
+
+#[test]
+fn tab_moves_from_the_draft_editor_to_cancel_and_enter_cancels() {
+    let Some(mut h) = review_harness("kept") else {
+        return;
+    };
+    let card = bounds(&h.card_sink);
+    let edit_x = f64::from(f32::from(card.right())) - 16.0 - 16.0 - 6.0 - 8.0;
+    h.host
+        .mouse_move(edit_x, header_y(card), None, "")
+        .expect("move");
+    h.host.flush();
+    h.host.click(edit_x, header_y(card), 0, "").expect("click");
+    h.host.flush();
+    assert!(h.read(|review| review.editing));
+    h.host.focus_next().expect("focus");
+    h.host.key_down("enter", false, None).expect("key");
+    h.host.key_up("enter", None).expect("key");
+    h.host.flush();
+    assert!(
+        !h.read(|review| review.editing),
+        "Cancel ran from the keyboard"
+    );
+    assert_eq!(h.read(|review| review.cancels), 1);
 }
 
 struct DialogDraft {
