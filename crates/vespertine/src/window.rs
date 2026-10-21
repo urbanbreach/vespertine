@@ -4282,7 +4282,13 @@ impl Window {
         let a11y_active = self.a11y.is_active();
         let a11y_first_frame = a11y_active && !self.retention.a11y_was_active;
         self.retention.a11y_was_active = a11y_active;
+        // Fonts added since the previous frame can change the face text resolves to: nothing
+        // recorded with the previous font set is replayed.
+        let font_generation = self.text_system.font_generation();
+        let fonts_changed = std::mem::replace(&mut self.retention.font_generation, font_generation)
+            != font_generation;
         self.refreshing
+            || fonts_changed
             || a11y_first_frame
             || retained::retained_frames_disabled()
             || self.retention.window_disabled

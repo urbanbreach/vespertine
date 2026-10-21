@@ -897,6 +897,9 @@ pub(crate) struct RetentionState {
     pub window_disabled: bool,
     /// Whether accessibility was active when the previous frame started.
     pub a11y_was_active: bool,
+    /// The text system's font generation when the previous frame started: recorded output
+    /// holds glyphs and geometry of the fonts installed then.
+    pub font_generation: usize,
     /// What caused the notifications this frame is drawn for.
     pub causes: super::read_tracker::FrameCauses,
     /// The notification counters as of the previous frame.
@@ -927,6 +930,7 @@ impl RetentionState {
             context: 0,
             window_disabled: false,
             a11y_was_active: false,
+            font_generation: 0,
             causes: Default::default(),
             causes_baseline: [0; 3],
         }

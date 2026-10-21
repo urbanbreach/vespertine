@@ -988,6 +988,23 @@ fn dev_006_text_on_screen_takes_up_a_family_registered_after_it_was_drawn() {
     );
 }
 
+#[test]
+fn dev_006_a_font_added_to_the_text_system_reaches_replayed_views() {
+    require_backend!();
+    let (mut host, root) = lilex_host(true, false);
+    host.flush();
+    host.app()
+        .update(|cx| cx.text_system().register_font(LILEX))
+        .unwrap();
+    // An unrelated change: the root is built again, the label's view is not notified.
+    host.app().update(|cx| root.update(cx, |_, cx| cx.notify()));
+    let redrawn = host.screenshot_image().unwrap();
+    assert!(
+        redrawn == lilex_reference(),
+        "the label's view is not replayed with glyphs of the previous font set"
+    );
+}
+
 fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(directory) {
