@@ -262,8 +262,7 @@ fn range_segments(
 /// changed query rescans each group once, reusing each unchanged group's lowercased copy and
 /// offset map; a changed group is rebuilt and rescanned alone.
 ///
-/// Nested declarations (R3) are the caller's business: pass only the groups the declaration owns,
-/// and let [`OwnershipStack`] pick the owner while walking the tree.
+/// Nested declarations (R3) are the caller's business: pass only the groups the declaration owns.
 #[derive(Default)]
 pub struct Resolver {
     entries: HashMap<u64, GroupEntry>,
@@ -365,48 +364,6 @@ impl Resolver {
             resolution: resolution.clone(),
         });
         resolution
-    }
-}
-
-/// Walks a tree and tells which declaration owns a text run (R3): the nearest declaring ancestor
-/// owns it, and a descendant that declares overrides the ancestor for its whole subtree even when
-/// its own declaration is empty.
-///
-/// Usage while collecting groups: `push(Some(decl))` when entering a host that declares a
-/// highlight (an empty declaration counts), `push(None)` otherwise, `pop()` when leaving; at each
-/// group, `owner()` is the declaration that resolves it. Each declaration gets only the groups it
-/// owns, so the ancestor neither resolves nor counts matches inside an overriding subtree.
-#[derive(Debug)]
-pub struct OwnershipStack<D> {
-    frames: Vec<Option<D>>,
-}
-
-impl<D> Default for OwnershipStack<D> {
-    fn default() -> Self {
-        Self { frames: Vec::new() }
-    }
-}
-
-impl<D> OwnershipStack<D> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, declaration: Option<D>) {
-        self.frames.push(declaration);
-    }
-
-    pub fn pop(&mut self) -> Option<D> {
-        self.frames.pop().flatten()
-    }
-
-    /// The nearest declaration on the stack, if any.
-    pub fn owner(&self) -> Option<&D> {
-        self.frames.iter().rev().find_map(Option::as_ref)
-    }
-
-    pub fn depth(&self) -> usize {
-        self.frames.len()
     }
 }
 
@@ -623,22 +580,8 @@ mod tests {
     }
 
     #[test]
-    fn nested_declarations_are_resolved_by_owner() {
+    fn a_declaration_counts_only_the_groups_it_is_given() {
         // outer ("a") owns groups 1 and 3; an inner declaration with an empty result owns group 2.
-        let mut stack: OwnershipStack<HighlightDeclaration> = OwnershipStack::new();
-        stack.push(Some(decl(HighlightSpec::new("a"))));
-        assert_eq!(stack.owner().map(|d| d.specs().len()), Some(1));
-        stack.push(None);
-        assert_eq!(stack.owner().map(|d| d.specs().len()), Some(1));
-        stack.push(Some(HighlightDeclaration::new()));
-        // The empty inner declaration overrides the ancestor in its subtree.
-        let inner_owner = stack.owner().unwrap();
-        assert!(inner_owner.is_empty());
-        stack.pop();
-        stack.pop();
-        assert!(!stack.owner().unwrap().is_empty());
-        assert_eq!(stack.depth(), 1);
-
         let mut resolver = Resolver::new();
         let outer_groups = [group(1, &["a"]), group(3, &["a a"])];
         let outer = resolver.resolve(&decl(HighlightSpec::new("a")), &outer_groups);
