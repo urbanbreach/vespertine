@@ -101,6 +101,8 @@ impl IntoElement for PaneGroup {
 struct PanePaint {
     child: usize,
     bounds: Bounds<Pixels>,
+    /// A closing pane stays painted but registers no input or accessibility output.
+    inert: bool,
 }
 
 /// Prepaint output of a [`PaneGroup`].
@@ -410,23 +412,26 @@ impl Element for PaneGroup {
                 ),
             };
             window.with_content_mask(mask(slot), |window| {
-                child.prepaint_as_root(
-                    content_origin,
-                    size(
-                        AvailableSpace::Definite(content_size.width),
-                        AvailableSpace::Definite(content_size.height),
-                    ),
-                    window,
-                    cx,
-                );
+                window.with_inert(placement.closing, |window| {
+                    child.prepaint_as_root(
+                        content_origin,
+                        size(
+                            AvailableSpace::Definite(content_size.width),
+                            AvailableSpace::Definite(content_size.height),
+                        ),
+                        window,
+                        cx,
+                    );
+                });
                 if placement.closing {
-                    // A closing pane stays painted but inert.
+                    // The pointer does not reach what lies beneath a closing pane either.
                     window.insert_hitbox(slot, HitboxBehavior::BlockMouse);
                 }
             });
             pane_paints.push(PanePaint {
                 child: child_index,
                 bounds: slot,
+                inert: placement.closing,
             });
         }
 
@@ -505,7 +510,9 @@ impl Element for PaneGroup {
         }
         for pane in &prepaint.panes {
             let child = &mut self.panes[pane.child].1;
-            window.with_content_mask(mask(pane.bounds), |window| child.paint(window, cx));
+            window.with_content_mask(mask(pane.bounds), |window| {
+                window.with_inert(pane.inert, |window| child.paint(window, cx))
+            });
         }
         for seam in &mut prepaint.seams {
             seam.paint(window, cx);

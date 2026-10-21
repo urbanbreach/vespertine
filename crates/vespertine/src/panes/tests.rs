@@ -208,6 +208,8 @@ fn bottom_height_limits() {
 struct Probe {
     hitbox: RefCell<Option<Hitbox>>,
     downs: Cell<usize>,
+    keys: Cell<usize>,
+    focus: RefCell<Option<FocusHandle>>,
     prepaint: Cell<Bounds<Pixels>>,
     paint: Cell<Bounds<Pixels>>,
 }
@@ -219,24 +221,28 @@ impl Probe {
 }
 
 fn probe_element(probe: &Rc<Probe>) -> impl IntoElement + use<> {
-    let (down, pre, paint) = (probe.clone(), probe.clone(), probe.clone());
-    div()
+    let (down, key, pre, paint) = (probe.clone(), probe.clone(), probe.clone(), probe.clone());
+    let mut element = div()
         .size_full()
         .on_mouse_down(MouseButton::Left, move |_, _, _| {
             down.downs.set(down.downs.get() + 1)
         })
-        .child(
-            canvas(
-                move |bounds, window, _| {
-                    pre.prepaint.set(bounds);
-                    let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-                    *pre.hitbox.borrow_mut() = Some(hitbox.clone());
-                    hitbox
-                },
-                move |bounds, _, _, _| paint.paint.set(bounds),
-            )
-            .size_full(),
+        .on_key_down(move |_, _, _| key.keys.set(key.keys.get() + 1));
+    if let Some(focus) = probe.focus.borrow().as_ref() {
+        element = element.track_focus(focus);
+    }
+    element.child(
+        canvas(
+            move |bounds, window, _| {
+                pre.prepaint.set(bounds);
+                let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                *pre.hitbox.borrow_mut() = Some(hitbox.clone());
+                hitbox
+            },
+            move |bounds, _, _, _| paint.paint.set(bounds),
         )
+        .size_full(),
+    )
 }
 
 struct SurfaceSetup {
@@ -771,6 +777,36 @@ fn closing_pane_stays_painted_but_inert() {
     h.advance(300);
     h.draw();
     assert_eq!(h.slot("leading").size.width, px(0.));
+}
+
+#[test]
+fn closing_pane_takes_no_keyboard_input() {
+    let mut h = Harness::new(size(px(1000.), px(700.)), leading_trailing());
+    let focus = h.vcx.update(|_, cx| cx.focus_handle());
+    h.probe(|r| *r.leading.focus.borrow_mut() = Some(focus.clone()));
+    h.vcx.update(|window, cx| {
+        window.focus(&focus, cx);
+        window.refresh();
+    });
+    h.draw();
+    h.vcx.simulate_keystrokes("a");
+    assert_eq!(
+        h.probe(|r| r.leading.keys.get()),
+        1,
+        "an open pane is typed into"
+    );
+
+    h.set_collapsed("leading", true);
+    h.draw();
+    h.advance(50);
+    h.draw();
+    assert!(h.placement("leading").closing);
+    h.vcx.simulate_keystrokes("a");
+    assert_eq!(
+        h.probe(|r| r.leading.keys.get()),
+        1,
+        "a closing pane is inert"
+    );
 }
 
 // ---------------------------------------------------------------------------
