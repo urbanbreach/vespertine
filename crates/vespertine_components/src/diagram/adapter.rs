@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 use vespertine_theme::color::Color;
-use vespertine_theme::document::{Appearance, DocumentTheme};
+use vespertine_theme::document::DocumentTheme;
+use vespertine_theme::theme::Appearance;
 
 /// Source limit in bytes.
 pub const MAX_SOURCE_BYTES: usize = 16 * 1024;

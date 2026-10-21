@@ -32,15 +32,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use serde_json::{Map, Value};
 use vespertine::{Hsla, ListState, Rgba, SharedString, css_color_to_rgba, oklch_to_rgba, rgb};
 
-/// Which built-in base a [`DocumentTheme`] starts from.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Appearance {
-    /// The dark base (the default).
-    #[default]
-    Dark,
-    /// The light base, selected by `appearance: "light"`.
-    Light,
-}
+use crate::theme::Appearance;
 
 /// Default sans-serif family on Linux.
 pub const DEFAULT_FONT_SANS: &str = "DejaVu Sans";

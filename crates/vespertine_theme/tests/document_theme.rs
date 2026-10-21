@@ -6,8 +6,9 @@ use vespertine::{
     AppContext as _, Context, Element as _, IntoElement, ListAlignment, ListState, Render, Rgba,
     Styled as _, TestAppContext, Window, div, list, point, px, size,
 };
-use vespertine_theme::document::{
-    Appearance, DocumentMetrics, DocumentTheme, LayoutIdentity, SyntaxCategory,
+use vespertine_theme::{
+    document::{DocumentMetrics, DocumentTheme, LayoutIdentity, SyntaxCategory},
+    theme::Appearance,
 };
 
 fn bytes(color: Rgba) -> [u8; 3] {

@@ -49,16 +49,9 @@ fn hex(text: &str) -> Color {
     Color::parse(text).expect("built-in color literal is valid")
 }
 
-fn document_theme(appearance: Appearance) -> DocumentTheme {
-    match appearance {
-        Appearance::Dark => DocumentTheme::dark(),
-        Appearance::Light => DocumentTheme::light(),
-    }
-}
-
 /// The THM-002 token defaults for `appearance`.
 pub fn neutral_tokens(appearance: Appearance) -> NeutralTokens {
-    let document = document_theme(appearance);
+    let document = DocumentTheme::for_appearance(appearance);
     NeutralTokens {
         bg: Color::from_rgba(document.bg),
         border: Color::from_rgba(document.border),
@@ -88,7 +81,7 @@ pub fn neutral_syntax_color(appearance: Appearance, category: SyntaxCategory) ->
     };
     let key =
         DocumentCategory::from_key(core.name()).expect("every core category is a THM-002 category");
-    Color::from_rgba(document_theme(appearance).syntax.get(key))
+    Color::from_rgba(DocumentTheme::for_appearance(appearance).syntax.get(key))
 }
 
 /// The neutral ANSI palette of an appearance (0-7 normal, 8-15 bright).
