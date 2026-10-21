@@ -212,11 +212,6 @@ impl EditCore {
         self.marked.clone()
     }
 
-    /// Whether the editor is multiline.
-    pub fn is_multiline(&self) -> bool {
-        self.multiline
-    }
-
     /// Whether every mutation is rejected (CMP-007 R2).
     pub fn is_read_only(&self) -> bool {
         self.read_only

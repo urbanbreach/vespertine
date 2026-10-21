@@ -61,8 +61,6 @@ pub const SLIDER_WIDTH: Pixels = px(240.);
 pub const SLIDER_HEIGHT: Pixels = px(28.);
 /// Default thumb width (and height) of the continuous slider.
 pub const THUMB_WIDTH: Pixels = px(14.);
-/// Thumb width of the wide-thumb preset.
-pub const WIDE_THUMB_WIDTH: Pixels = px(44.);
 /// Height of the rail.
 pub const RAIL_HEIGHT: Pixels = px(4.);
 /// Distance of the rail's top edge from the top of the surface.
@@ -127,11 +125,6 @@ impl SliderRange {
     /// Whether the slider has an explicit stop list (possibly empty).
     pub fn has_stops(&self) -> bool {
         self.stops.is_some()
-    }
-
-    /// The number of stops (0 without a stop list).
-    pub fn stop_count(&self) -> usize {
-        self.stops.as_ref().map_or(0, Vec::len)
     }
 
     fn clamp(&self, value: f64) -> f64 {
@@ -562,11 +555,6 @@ impl Slider {
     pub fn thumb_width(mut self, width: Pixels) -> Self {
         self.thumb_width = width;
         self
-    }
-
-    /// The wide-thumb preset: a 44 px thumb with a 22 px inset.
-    pub fn wide_thumb(self) -> Self {
-        self.thumb_width(WIDE_THUMB_WIDTH)
     }
 
     /// The duration of the discrete thumb's glide between stops (default 180 ms).

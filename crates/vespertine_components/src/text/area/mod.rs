@@ -809,33 +809,6 @@ impl TextArea {
         changed
     }
 
-    /// Replaces a source range without history and without a `Changed` event: a baseline sync
-    /// of text the owner already knows about. `Edited` still fires so highlights can shift.
-    pub fn replace_range_baseline(
-        &mut self,
-        range: Range<usize>,
-        text: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        self.cancel_external(cx);
-        let changed = self.core.replace_unrecorded(range, text);
-        self.text_changed(cx);
-        if let Some((range, inserted)) = self.core.take_edit() {
-            cx.emit(TextAreaEvent::Edited {
-                range,
-                inserted,
-                epoch: self.core.edit_epoch(),
-            });
-        }
-        self.follow = true;
-        self.preferred_x = None;
-        self.blink.reset(cx);
-        window.notify_text_input_changed(&self.focus_handle);
-        cx.notify();
-        changed
-    }
-
     /// Undo; a no-op when read-only or when there is nothing to undo.
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let changed = self.core.undo();

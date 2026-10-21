@@ -299,17 +299,6 @@ impl Picker {
         self
     }
 
-    /// The texts of the empty state (R15).
-    pub fn empty_state(
-        mut self,
-        title: impl Into<SharedString>,
-        hint: impl Into<SharedString>,
-    ) -> Self {
-        self.empty_title = title.into();
-        self.empty_hint = hint.into();
-        self
-    }
-
     /// Sets the placeholder of the query field.
     pub fn set_placeholder(
         &mut self,
@@ -319,12 +308,6 @@ impl Picker {
         let placeholder = placeholder.into();
         self.field
             .update(cx, |field, cx| field.set_placeholder(placeholder, cx));
-    }
-
-    /// What reopening does with the previous session (R17).
-    pub fn reopen_policy(mut self, policy: ReopenPolicy) -> Self {
-        self.reopen = policy;
-        self
     }
 
     /// The compact preset: the select's compact card width.
