@@ -467,6 +467,28 @@ fn a4_insertion_is_rejected_while_composing_or_read_only_and_leaves_the_marked_t
 }
 
 #[test]
+fn a_composition_completing_a_reference_keeps_the_typed_prefix() {
+    require_backend!();
+    let mut fx = editor(400.0, 200.0);
+    fx.focus();
+    let prefix = format!("{OPEN}file:");
+    fx.set_value(&prefix);
+    fx.select(prefix.len()..prefix.len());
+    let composed = |text: &str| format!("{text}{CLOSE}");
+    fx.with(|area, window, cx| {
+        area.replace_and_mark_text_in_range(None, &composed("a"), None, window, cx)
+    });
+    fx.with(|area, window, cx| {
+        area.replace_and_mark_text_in_range(None, &composed("ab"), None, window, cx)
+    });
+    assert_eq!(fx.text(), file("ab"));
+    assert!(chip_ranges(&mut fx).is_empty(), "no chip while composing");
+    fx.with(|area, window, cx| area.replace_text_in_range(None, &composed("ab"), window, cx));
+    assert_eq!(fx.text(), file("ab"));
+    assert_eq!(chip_ranges(&mut fx), vec![0..file("ab").len()]);
+}
+
+#[test]
 fn r10_replacing_a_completed_token_uses_the_trailing_rule_without_a_leading_separator() {
     require_backend!();
     let mut fx = editor(400.0, 200.0);

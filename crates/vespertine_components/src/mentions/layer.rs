@@ -168,7 +168,7 @@ impl AreaLayer for MentionsLayer {
         &self,
         source: &str,
         _active: Range<usize>,
-        _marked: Option<Range<usize>>,
+        marked: Option<Range<usize>>,
     ) -> Vec<Replacement> {
         let mut state = self.state.borrow_mut();
         if state.grammars.is_empty() {
@@ -178,7 +178,17 @@ impl AreaLayer for MentionsLayer {
         let projected = project_references(source, &state.grammars, state.live.as_ref());
         let mut replacements = Vec::with_capacity(projected.len());
         let mut chips = Vec::new();
+        // A reference that the composition touches is not projected until it ends: as an atomic
+        // chip it would widen the input method's next replacement over the whole reference.
+        let composing = |range: &Range<usize>| {
+            marked
+                .as_ref()
+                .is_some_and(|marked| range.start < marked.end && marked.start < range.end)
+        };
         for item in projected {
+            if composing(&item.replacement.range) {
+                continue;
+            }
             replacements.push(Replacement {
                 range: item.replacement.range.clone(),
                 display: item.replacement.display.clone(),
