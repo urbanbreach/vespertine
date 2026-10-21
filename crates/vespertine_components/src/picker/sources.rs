@@ -371,11 +371,11 @@ impl<R> SourceSet<R> {
                 slot.send(source, &mut effects);
             }
             if slot.refresh_due.is_some_and(|due| due <= now) {
-                // A refresh is a new request of the same query: a new generation, the partial
-                // rows stay displayed until the answer arrives (R10, R11).
+                // A refresh is a new request of the same query: a new generation that drops any
+                // outstanding page request; the partial rows stay displayed until the answer
+                // arrives and the indexing backoff continues (R10, R11, R15).
                 let refreshes = slot.refreshes;
-                slot.refresh_due = None;
-                slot.generation += 1;
+                slot.supersede(source, &mut effects);
                 slot.send(source, &mut effects);
                 slot.refreshes = refreshes;
             }
@@ -729,6 +729,29 @@ mod tests {
         ));
         assert_eq!(set.rows(0), ["x".to_string(), "y".to_string()]);
         assert!(set.scrolled_to_end().is_empty());
+    }
+
+    #[test]
+    fn an_indexing_refresh_during_a_page_request_lets_the_refreshed_answer_page_again() {
+        let mut set = SourceSet::<String>::new([SourcePolicy::name_like()]);
+        let sent = requests(&set.set_query(ms(0), "ab"));
+        let partial = Answer {
+            indexing: true,
+            has_more: true,
+            ..rows(&["a"])
+        };
+        set.answer(ms(0), 0, sent[0].1, Ok(partial.clone()));
+        let page = requests(&set.scrolled_to_end());
+        assert_eq!(page.len(), 1);
+        let refresh = requests(&set.tick(ms(500)));
+        assert!(!set.is_loading_more(0), "the refresh superseded the page");
+        assert!(!set.page_answer(0, page[0].1, Ok(rows(&["late"]))));
+        assert!(set.answer(ms(600), 0, refresh[0].1, Ok(partial)));
+        assert_eq!(set.next_deadline(), Some(ms(1600)), "the backoff continues");
+        let page = requests(&set.scrolled_to_end());
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].1, refresh[0].1);
+        assert_eq!(page[0].3, 1);
     }
 
     #[test]
