@@ -1873,9 +1873,12 @@ impl App {
         self.platform.read_from_clipboard_async()
     }
 
-    /// Sets the text rendering mode for the application.
+    /// Sets the text rendering mode for the application. A change redraws every window, so text
+    /// already on screen is painted again in the new mode.
     pub fn set_text_rendering_mode(&mut self, mode: TextRenderingMode) {
-        self.text_rendering_mode.set(mode);
+        if self.text_rendering_mode.replace(mode) != mode {
+            self.refresh_windows();
+        }
     }
 
     /// Returns the current text rendering mode for the application.

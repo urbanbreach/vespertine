@@ -663,3 +663,29 @@ fn rolling_label_glyphs_paint_through_the_transformed_painter() {
         "tilt, scale and blur reuse the one raster tile"
     );
 }
+
+#[test]
+fn changing_the_text_rendering_mode_repaints_text_of_unchanged_views() {
+    let probe = Arc::new(GlyphProbe::default());
+    let mut cx = new_cx(&probe);
+    let (handle, _) = open(&mut cx, |window| {
+        window.paint_glyph(point(px(10.0), px(20.0)), FONT, GLYPH, px(16.0), white())
+    });
+    cx.test_window(handle)
+        .set_subpixel_rendering_supported(true);
+    cx.update(|cx| cx.set_text_rendering_mode(TextRenderingMode::Subpixel));
+    draw(&mut cx, handle);
+    let pipelines = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, _| {
+            let scene = &window.rendered_frame.scene;
+            (scene.subpixel_sprites.len(), scene.monochrome_sprites.len())
+        })
+        .unwrap()
+    };
+    assert_eq!(pipelines(&mut cx), (1, 0), "subpixel text");
+
+    cx.update(|cx| cx.set_text_rendering_mode(TextRenderingMode::Grayscale));
+    cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+        .unwrap();
+    assert_eq!(pipelines(&mut cx), (0, 1), "grayscale text");
+}
