@@ -59,6 +59,8 @@ struct CosmicTextSystemState {
     font_ids_by_family_cache: HashMap<FontKey, SmallVec<[FontId; 4]>>,
     system_font_fallback: String,
     missing_glyph_sink: Option<Arc<dyn MissingGlyphSink>>,
+    #[cfg(any(test, feature = "test-support"))]
+    retention: RetentionCounters,
 }
 
 struct LoadedFont {
@@ -154,7 +156,33 @@ impl CosmicTextSystem {
             font_ids_by_family_cache: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
             missing_glyph_sink: None,
+            #[cfg(any(test, feature = "test-support"))]
+            retention: RetentionCounters::default(),
         }))
+    }
+}
+
+/// Test-support counters of the native resources the Linux backend retains (PRF-014).
+///
+/// Shaping on Linux is size-independent (harfrust works in font units and the line layout
+/// scales by the font size afterwards), so there is no size-specific shaping object; the
+/// counters prove that the faces are wrapped once and never again when sizes or lines vary.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionCounters {
+    /// Loaded faces wrapped into the append-only, `FontId`-indexed face table. Each face is
+    /// wrapped exactly once, on first resolution or when a fallback face first shapes a line.
+    pub face_constructions: usize,
+    /// Per-glyph scalers built from the retained scale context (one per glyph rasterization
+    /// request, a light view and not a cache miss).
+    pub scaler_builds: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl CosmicTextSystem {
+    /// Construction counters of the retained native resources.
+    pub fn retention_counters(&self) -> RetentionCounters {
+        self.0.read().retention
     }
 }
 
@@ -439,6 +467,10 @@ impl CosmicTextSystemState {
 
             let font_id = FontId(self.loaded_fonts.len());
             loaded_font_ids.push(font_id);
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.retention.face_constructions += 1;
+            }
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: cosmic_features.clone(),
@@ -528,6 +560,10 @@ impl CosmicTextSystemState {
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
         );
 
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.retention.scaler_builds += 1;
+        }
         let mut scaler = self
             .swash_scale_context
             .builder(font_ref)
@@ -588,6 +624,10 @@ impl CosmicTextSystemState {
                 .context("fallback font face not found in cosmic-text database")?;
 
             let font_id = FontId(self.loaded_fonts.len());
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                self.retention.face_constructions += 1;
+            }
             self.loaded_fonts.push(LoadedFont {
                 font,
                 features: CosmicFontFeatures::new(),
