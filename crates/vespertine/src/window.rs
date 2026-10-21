@@ -4699,7 +4699,6 @@ impl Window {
                         let stretches = crate::view::prepaint_around(
                             self,
                             cx,
-                            view_key,
                             prepaint_range.clone(),
                             &mut around,
                         );

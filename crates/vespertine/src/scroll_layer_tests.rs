@@ -109,6 +109,17 @@ impl Render for Page {
     }
 }
 
+/// A view that only nests a [`Page`], so the scroll block's owner is not the window root.
+struct Shell {
+    page: Entity<Page>,
+}
+
+impl Render for Shell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.page.clone())
+    }
+}
+
 pub(crate) struct Fixture {
     pub handle: AnyWindowHandle,
     pub log: Log,
@@ -125,23 +136,48 @@ impl Fixture {
         paths: bool,
         read_offset: bool,
     ) -> Self {
-        let log: Log = Rc::default();
-        let renders = Rc::new(Cell::new(0));
-        let model = cx.new(|_| Model { value: 0 });
-        let scroll = ScrollHandle::new();
-        let handle = cx.add_window({
-            let log = log.clone();
-            let renders = renders.clone();
-            let model = model.clone();
-            move |_, _| Page {
+        let scroll = read_offset.then(ScrollHandle::new);
+        Self::open(cx, layers, move |log, renders, model, _| Page {
+            rows,
+            model,
+            log,
+            renders,
+            handle: scroll,
+            read_offset,
+            paths,
+        })
+    }
+
+    /// Like [`Self::new`], with the page nested in a view of its own.
+    fn nested(cx: &mut TestAppContext, rows: usize, layers: bool) -> Self {
+        Self::open(cx, layers, move |log, renders, model, cx| Shell {
+            page: cx.new(|_| Page {
                 rows,
                 model,
                 log,
                 renders,
-                handle: read_offset.then_some(scroll),
-                read_offset,
-                paths,
-            }
+                handle: None,
+                read_offset: false,
+                paths: false,
+            }),
+        })
+    }
+
+    /// Opens a window on the root view `root` builds from the fixture's log, render counter and
+    /// model, and draws it twice.
+    fn open<V: Render>(
+        cx: &mut TestAppContext,
+        layers: bool,
+        root: impl FnOnce(Log, Rc<Cell<usize>>, Entity<Model>, &mut Context<V>) -> V,
+    ) -> Self {
+        let log: Log = Rc::default();
+        let renders = Rc::new(Cell::new(0));
+        let model = cx.new(|_| Model { value: 0 });
+        let handle = cx.add_window({
+            let log = log.clone();
+            let renders = renders.clone();
+            let model = model.clone();
+            move |_, cx| root(log, renders, model, cx)
         });
         let window: AnyWindowHandle = handle.into();
         cx.update_window(window, |_, window, _| {
@@ -357,6 +393,29 @@ fn composited_wheel_frames_neither_render_the_owner_nor_rebuild_the_content(
     );
     assert_eq!(stats.splice_failures, promoted.splice_failures);
     assert_eq!(stats.rows_built, promoted.rows_built);
+}
+
+/// R2, R12: a layer whose owner is nested in another view, wheeled steadily until the viewport
+/// leaves the recorded region, shows the current offset in every frame, as drawing directly
+/// does.
+#[crate::test]
+fn wheeling_a_nested_owner_past_the_recorded_region_shows_the_current_offset(
+    cx: &mut TestAppContext,
+) {
+    let layered = Fixture::nested(cx, 200, true);
+    let direct = Fixture::nested(cx, 200, false);
+    let mut history = Vec::new();
+    for step in 0..60 {
+        history.push(format!("{step}: wheel -37"));
+        layered.wheel(cx, -37.);
+        direct.wheel(cx, -37.);
+        assert_agree(cx, &direct, &layered, step, &history);
+    }
+    let stats = layered.stats(cx);
+    assert!(
+        stats.layer_composites > 10,
+        "the layer composited: {stats:?}"
+    );
 }
 
 /// R2: a read of the exact scroll offset while rendering invalidates the optimization.

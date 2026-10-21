@@ -1085,28 +1085,26 @@ fn prepaint_spliced(
     *splice = own;
     let parent = window.retention.stack.last().copied();
     window.retention.views.adopt(key, parent);
-    let (whole, stretches) = prepaint_stretches(window, cx, Some(key), old, splice);
+    let (whole, stretches) = prepaint_stretches(window, cx, old, splice);
     let rebuilt: Vec<ViewKey> = splice.iter().map(|child| child.key).collect();
     window.rebase_spliced_prepaint(key, whole, &stretches, &rebuilt);
 }
 
 /// Replays the prepaint output of `old` in stretches around the views of `splice` that were
 /// built again, and prepaints those in place. Returns the new range and the copied
-/// stretches with where each begins. `owner` is the view the output belongs to.
+/// stretches with where each begins.
 pub(crate) fn prepaint_around(
     window: &mut Window,
     cx: &mut App,
-    owner: Option<ViewKey>,
     old: Range<PrepaintStateIndex>,
     splice: &mut [SplicedChild],
 ) -> Vec<(Range<PrepaintStateIndex>, PrepaintStateIndex)> {
-    prepaint_stretches(window, cx, owner, old, splice).1
+    prepaint_stretches(window, cx, old, splice).1
 }
 
 fn prepaint_stretches(
     window: &mut Window,
     cx: &mut App,
-    owner: Option<ViewKey>,
     old: Range<PrepaintStateIndex>,
     splice: &mut [SplicedChild],
 ) -> (
@@ -1158,9 +1156,7 @@ fn prepaint_stretches(
 
         let Some(layout_id) = child.layout_id else {
             // A scroll layer: placed at the new offset of its block.
-            let placed = owner.is_some_and(|owner| {
-                window.scroll_layer_splice_prepaint(owner, child.key, &map, attachment, cx)
-            });
+            let placed = window.scroll_layer_splice_prepaint(child.key, &map, attachment, cx);
             debug_assert!(placed, "layers are checked before the owner is replayed");
             continue;
         };

@@ -1441,18 +1441,27 @@ impl Window {
         true
     }
 
-    /// Replays the layer of a block that scrolled while its owner stayed clean, in place of
-    /// the stretch of the owner's recorded output the layer occupies (the owner is replayed
+    /// Replays the layer of a block that scrolled while the views around it stayed clean, in
+    /// place of the stretch of their recorded output the layer occupies (they are replayed
     /// around it, like around a rebuilt child view).
     pub(crate) fn scroll_layer_splice_prepaint(
         &mut self,
-        owner: ViewKey,
         key: ViewKey,
         map: &SpliceMap,
         attachment: Option<crate::DispatchNodeId>,
         cx: &mut App,
     ) -> bool {
         let Some(id) = self.scroll_layer_of(key) else {
+            return false;
+        };
+        // The record stays nested in the view that owns the block, which may itself be nested
+        // in the view being replayed: a scroll the layer cannot absorb must reach that owner.
+        let Some(owner) = self
+            .retention
+            .views
+            .get(key)
+            .and_then(|record| record.parent)
+        else {
             return false;
         };
         let frame = self.scroll_layers.frame;
@@ -1489,7 +1498,6 @@ impl Window {
         if let Some(parent) = new_parent {
             self.next_frame.dispatch_tree.set_active_node(parent);
         }
-        // The layer record stays nested in the view whose output is being replayed around it.
         self.retention.stack.push(owner);
         self.scroll_layer_composite_prepaint(&id, cx);
         self.retention.stack.pop();
