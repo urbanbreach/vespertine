@@ -11,10 +11,10 @@
 //! cargo run -p vespertine --features test-support --example rounded_clip -- --out /tmp/clip
 //! ```
 
-#[path = "example_support/clip_host.rs"]
-mod clip_host;
+#[path = "example_support/headless_host.rs"]
+mod headless_host;
 
-use clip_host::{Host, compare_with_reference, output_directory, save, scope};
+use headless_host::{Host, compare_with_reference, output_directory, save, scope};
 use image::{Frame, ImageBuffer, Rgba};
 use std::{cell::Cell, rc::Rc, sync::Arc};
 use vespertine::{

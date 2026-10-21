@@ -8,10 +8,10 @@
 //! cargo run -p vespertine --features test-support --example rounded_clip_limits -- --out /tmp/limits
 //! ```
 
-#[path = "example_support/clip_host.rs"]
-mod clip_host;
+#[path = "example_support/headless_host.rs"]
+mod headless_host;
 
-use clip_host::{Host, output_directory, save, scope};
+use headless_host::{Host, output_directory, save, scope};
 use image::RgbaImage;
 use vespertine::{
     AnyElement, Bounds, BoxShadow, Corners, IntoElement, ParentElement, PathBuilder,
