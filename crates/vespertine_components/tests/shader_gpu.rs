@@ -266,25 +266,27 @@ fn uniforms_reach_the_program_mouse_time_camera_and_named_inputs() {
     near(b, 127.5);
 
     // Time inputs: the first frame has delta 0 and counter 0; the counter increments per frame.
+    // The camera's x is added to blue, so a lost camera uniform changes an asserted channel.
     let mut t = frame(
         "void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-            fragColor = vec4(iTime / 10.0, float(iFrame) / 10.0, iTimeDelta, 1.0) + vec4(iCamera.x * 0.0);
+            fragColor = vec4(iTime / 10.0, float(iFrame) / 10.0, iTimeDelta + iCamera.x, 1.0);
         }",
     );
     t.animated = true;
     t.time = 2.0;
+    t.camera = [0.25, 0.0, 1.0];
     let mut state = self::state();
     let first = state.render(&t).unwrap();
     let [db, dg, dr, _] = at(&first, 64, 5, 5);
     near(dr, 255.0 * 0.2);
     near(dg, 0.0);
-    near(db, 0.0);
+    near(db, 255.0 * 0.25);
     t.time = 3.0;
     let second = state.render(&t).unwrap();
     let [db, dg, dr, _] = at(&second, 64, 5, 5);
     near(dr, 255.0 * 0.3);
     near(dg, 255.0 * 0.1);
-    near(db, 255.0 * 1.0);
+    near(db, 255.0);
 }
 
 #[test]

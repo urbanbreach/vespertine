@@ -619,12 +619,14 @@ fn a2_removing_the_surface_discards_a_late_result_and_releases_every_image(
     ));
     assert!(handle.displayed_image().is_none());
     vcx.run_until_parked();
+    // The registry holds weak references: drop the test's own handle before asking it.
+    drop(handle);
     vcx.update(|window, app| {
         assert!(
             !window.has_image_atlas_entry(&late_image),
             "the late image was released"
         );
-        assert!(SceneSurfaces::get(app, fixture.window, &key()).is_none() || handle.is_removed());
+        assert!(SceneSurfaces::get(app, fixture.window, &key()).is_none());
     });
 }
 
