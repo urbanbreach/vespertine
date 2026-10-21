@@ -1824,6 +1824,18 @@ pub trait PlatformTextSystem: Send + Sync {
     fn shapes_ascii_words_independently(&self) -> bool {
         false
     }
+    /// Whether [`Self::layout_line`] shapes `text` in one run of `font_id` pair by pair.
+    ///
+    /// `true` promises one glyph per character, each the glyph of the character shaped alone,
+    /// with `y = 0`. Glyph 0 sits at `x = 0`. Glyph `i` sits at `x[i - 1] + a(i - 1, i)`, where
+    /// `a(i - 1, i)` is the `x` of the second glyph when the two characters are shaped as one
+    /// string. The line width is the last `x` plus the width of the last character shaped
+    /// alone. The text system then assembles such lines from one- and two-character shapes.
+    /// Backends that cannot prove this for `text` (contextual substitution or positioning,
+    /// segmentation inside the line, …) return `false`, the default.
+    fn shapes_pairwise(&self, _text: &str, _font_id: FontId) -> bool {
+        false
+    }
     /// Returns the recommended text rendering mode for the given font and size.
     fn recommended_rendering_mode(&self, _font_id: FontId, _font_size: Pixels)
     -> TextRenderingMode;

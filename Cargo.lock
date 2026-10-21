@@ -8341,6 +8341,7 @@ dependencies = [
  "smallvec",
  "swash",
  "unicode-bidi",
+ "unicode-linebreak",
  "unicode-segmentation",
  "vespertine",
  "vespertine_bench_metrics",

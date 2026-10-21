@@ -117,3 +117,44 @@ fn appended_words_land_where_full_shaping_puts_them() {
         );
     }
 }
+
+/// Ticker-style numbers over the whole numeric alphabet.
+fn number(ix: usize) -> String {
+    let n = ix * 7919 + 13;
+    match ix % 5 {
+        0 => format!("+{}.{:02}", n / 100, n % 100),
+        1 => format!("-{}.{:02}%", n / 100, n % 100),
+        2 => format!(
+            "${}.{:02}{}",
+            n / 1000,
+            n % 100,
+            ["K", "M", "B", "T"][n % 4]
+        ),
+        3 => format!(
+            "{},{:03},{:03}",
+            n / 1_000_000 + 1,
+            n / 1000 % 1000,
+            n % 1000
+        ),
+        _ => format!("{n}1717{n}"),
+    }
+}
+
+#[test]
+fn assembled_numbers_equal_full_shaping_bit_for_bit() {
+    let f = fixture();
+    for family in FAMILIES {
+        for ix in 0..400 {
+            let text = number(ix);
+            let cached = f.cached(&text, family);
+            assert_eq!(
+                format!("{:?}", *cached),
+                format!("{:?}", f.platform(&text, family)),
+                "{family}: `{text}`"
+            );
+        }
+    }
+    // The bundled sans proves its digits and punctuation pair by pair, so the comparison above
+    // covered assembled lines.
+    assert!(f.system.shape_stats().synthesized_lines > 0);
+}

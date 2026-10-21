@@ -290,6 +290,11 @@ impl PlatformTextSystem for TestShaper {
                 .any(|(a, b)| *a == ' ' || *b == ' ')
     }
 
+    /// Kerning and two-character ligatures act on pairs only; the triple-nine shift does not.
+    fn shapes_pairwise(&self, text: &str, _font_id: FontId) -> bool {
+        !(self.skew_triple_nines.load(Ordering::SeqCst) && text.contains("999"))
+    }
+
     fn recommended_rendering_mode(
         &self,
         _font_id: FontId,
@@ -917,9 +922,7 @@ mod resolved_font_cache {
 
 mod numeric {
     use super::*;
-    use crate::text_system::shape_cache::{
-        NUMERIC_CHECK_INTERVAL, NUMERIC_INITIAL_CHECKS, NUMERIC_MAX_FONT_SIZES, layouts_agree,
-    };
+    use crate::text_system::shape_cache::NUMERIC_MAX_FONT_SIZES;
 
     struct Fixture {
         shaper: Arc<TestShaper>,
@@ -978,19 +981,15 @@ mod numeric {
     }
 
     #[test]
-    fn synthesized_lines_match_platform_shaping_in_every_phase() {
+    fn synthesized_lines_equal_platform_shaping() {
         let f = fixture();
         for ix in 0..600 {
             let text = number(ix * 7919 + 13);
             let (cached, platform) = f.both(&text);
-            assert!(
-                layouts_agree(&cached, &platform),
-                "line {text} differs from platform shaping"
-            );
+            assert_same_layout(&cached, &platform);
         }
         let stats = f.system.shape_stats();
         assert!(stats.synthesized_lines > 500, "{stats:?}");
-        assert_eq!(stats.disabled_font_sizes, 0);
     }
 
     #[test]
@@ -1046,7 +1045,7 @@ mod numeric {
         f.shaper.ligatures.lock().insert(('1', '2'));
         for _ in 0..3 {
             let (cached, platform) = f.both("0120");
-            assert!(layouts_agree(&cached, &platform));
+            assert_same_layout(&cached, &platform);
             f.window.finish_frame();
             f.window.finish_frame();
         }
@@ -1058,73 +1057,35 @@ mod numeric {
     }
 
     #[test]
-    fn an_injected_mismatch_returns_the_platform_line_and_disables_that_font_and_size() {
+    fn font_addition_discards_learned_characters_and_pairs() {
         let f = fixture();
-        f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
-        // Learn characters and pairs on lines that do not trigger the skew.
-        layout(&f.window, "9.9", &f.font);
-        let skewed = "999";
-        let (cached, platform) = f.both(skewed);
-        assert!(
-            layouts_agree(&cached, &platform),
-            "the platform line is returned on mismatch"
-        );
-        let font_id = f.system.resolve_font(&f.font);
-        assert!(f.system.shape_caches.numeric_is_disabled(font_id, px(16.)));
-        assert_eq!(f.system.shape_stats().disabled_font_sizes, 1);
-
-        // Later lines of the disabled font and size are never synthesized...
-        let synthesized = f.system.shape_stats().synthesized_lines;
         layout(&f.window, "1.25", &f.font);
-        layout(&f.window, "7.50", &f.font);
-        assert_eq!(f.system.shape_stats().synthesized_lines, synthesized);
-
-        // ...while another size and another font are unaffected.
-        for text in ["1.25", "3.50", "7.75"] {
-            f.window
-                .layout_line(text, px(20.), &[run_of(text, &f.font)], None);
-        }
-        assert!(f.system.shape_stats().synthesized_lines > synthesized);
-        assert!(!f.system.shape_caches.numeric_is_disabled(font_id, px(20.)));
-    }
-
-    #[test]
-    fn font_addition_discards_learned_state_and_restarts_the_initial_checks() {
-        let f = fixture();
-        for ix in 0..(NUMERIC_INITIAL_CHECKS as usize + 4) {
-            layout(&f.window, &number(ix * 31 + 5), &f.font);
-        }
-        let checks = f.system.shape_stats().validation_checks;
-        assert_eq!(checks, NUMERIC_INITIAL_CHECKS);
-        assert!(f.system.shape_caches.numeric_has_state());
+        let learned = f.system.shape_stats().numeric_unit_shapes;
+        assert!(learned > 0);
+        layout(&f.window, "1.2", &f.font);
+        assert_eq!(f.system.shape_stats().numeric_unit_shapes, learned);
 
         f.system
             .add_fonts(vec![Cow::Borrowed(b"Another".as_slice())])
             .unwrap();
-        layout(&f.window, "1.25", &f.font);
-        // Learning restarted: the first synthesized line after the addition is checked again.
-        assert_eq!(f.system.shape_stats().validation_checks, checks + 1);
+        // A line whose characters and pairs were all known is measured again.
+        layout(&f.window, "1.2", &f.font);
+        assert!(f.system.shape_stats().numeric_unit_shapes > learned);
     }
 
     #[test]
-    fn platform_line_shapes_drop_to_about_one_in_256_after_learning() {
+    fn after_learning_eligible_lines_never_reach_the_platform() {
         let f = fixture();
-        let warm = NUMERIC_INITIAL_CHECKS as usize + 20;
-        for ix in 0..warm {
+        for ix in 0..52 {
             layout(&f.window, &number(ix * 131 + 1), &f.font);
         }
         let before = f.system.shape_stats();
-        let lines = 2048usize;
-        for ix in 0..lines {
+        for ix in 0..2048 {
             layout(&f.window, &number(ix * 7 + 100_000), &f.font);
         }
         let after = f.system.shape_stats();
-        let platform = after.platform_line_shapes - before.platform_line_shapes;
-        let expected = lines as u64 / NUMERIC_CHECK_INTERVAL;
-        assert!(
-            platform >= expected && platform <= expected + 2,
-            "{platform} platform shapes for {lines} lines"
-        );
+        assert_eq!(after.platform_line_shapes, before.platform_line_shapes);
+        assert!(after.synthesized_lines > before.synthesized_lines);
     }
 
     #[test]
@@ -1164,19 +1125,21 @@ mod numeric {
         );
     }
 
+    /// TXT-2: a shaping context wider than one pair (three 9s) is never approximated, however
+    /// many lines were assembled before.
     #[test]
-    fn a_disabled_font_size_stays_disabled_while_tables_are_dropped() {
+    fn a_context_wider_than_a_pair_is_never_assembled() {
         let f = fixture();
         f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
-        layout(&f.window, "9.9", &f.font);
-        layout(&f.window, "999", &f.font);
-        let font_id = f.system.resolve_font(&f.font);
-        assert!(f.system.shape_caches.numeric_is_disabled(font_id, px(16.)));
-
-        for ix in 0..=NUMERIC_MAX_FONT_SIZES {
-            f.numeric("1.25", 20. + ix as f32);
+        for ix in 0..40 {
+            let text = format!("{}99.{:02}", ix % 8, ix);
+            let (cached, platform) = f.both(&text);
+            assert_same_layout(&cached, &platform);
         }
-        assert!(f.system.shape_caches.numeric_is_disabled(font_id, px(16.)));
+        let (cached, platform) = f.both("999");
+        assert_same_layout(&cached, &platform);
+        // Lines the platform does prove are still assembled.
+        assert!(f.system.shape_stats().synthesized_lines > 0);
     }
 }
 

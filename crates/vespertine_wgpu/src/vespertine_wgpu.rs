@@ -4,6 +4,7 @@ mod gpu_counters;
 #[cfg(all(test, target_os = "linux"))]
 mod image_update_tests;
 pub mod memory_report;
+mod pairwise_shaping;
 mod wgpu_atlas;
 mod wgpu_blur;
 mod wgpu_context;

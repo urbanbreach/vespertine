@@ -34,6 +34,8 @@ raw-window-handle.workspace = true
 smallvec.workspace = true
 swash.workspace = true
 unicode-bidi.workspace = true
+# The break opportunities `cosmic-text` shapes between; the same crate and version it uses.
+unicode-linebreak = "0.1.5"
 unicode-segmentation.workspace = true
 vespertine_util.workspace = true
 

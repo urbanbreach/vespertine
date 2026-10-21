@@ -12,7 +12,7 @@ use vespertine::{
 use vespertine_collections::HashMap;
 
 use itertools::Itertools;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{borrow::Cow, ops::Range, sync::Arc};
 use swash::{
@@ -63,6 +63,9 @@ struct CosmicTextSystemState {
     weight_instances: HashMap<(FontId, u16), FontId>,
     system_font_fallback: String,
     missing_glyph_sink: Option<Arc<dyn MissingGlyphSink>>,
+    /// Proofs of pairwise shaping by font and set of printable ASCII characters (bit `b` set
+    /// for byte `b`). Font ids never change their face, so proofs never go stale.
+    pairwise_proofs: Mutex<HashMap<(FontId, u128), bool>>,
     #[cfg(any(test, feature = "test-support"))]
     retention: RetentionCounters,
 }
@@ -217,6 +220,7 @@ impl CosmicTextSystem {
             weight_instances: HashMap::default(),
             system_font_fallback: system_font_fallback.to_string(),
             missing_glyph_sink: None,
+            pairwise_proofs: Mutex::default(),
             #[cfg(any(test, feature = "test-support"))]
             retention: RetentionCounters::default(),
         }))
@@ -376,6 +380,20 @@ impl PlatformTextSystem for CosmicTextSystem {
         true
     }
 
+    /// Printable ASCII without spaces and without a UAX #14 break opportunity is one
+    /// left-to-right piece that `ShapeLine` shapes in one call; the font tables then decide
+    /// (see `pairwise_shaping`).
+    fn shapes_pairwise(&self, text: &str, font_id: FontId) -> bool {
+        if text.is_empty()
+            || !text.bytes().all(|byte| byte.is_ascii_graphic())
+            || unicode_linebreak::linebreaks(text).any(|(end, _)| end < text.len())
+        {
+            return false;
+        }
+        let characters = text.bytes().fold(0u128, |set, byte| set | 1 << byte);
+        self.0.read().shapes_pairwise(font_id, characters)
+    }
+
     fn recommended_rendering_mode(
         &self,
         _font_id: FontId,
@@ -388,6 +406,35 @@ impl PlatformTextSystem for CosmicTextSystem {
 impl CosmicTextSystemState {
     fn loaded_font(&self, font_id: FontId) -> &LoadedFont {
         &self.loaded_fonts[font_id.0]
+    }
+
+    fn shapes_pairwise(&self, font_id: FontId, characters: u128) -> bool {
+        if let Some(&proven) = self.pairwise_proofs.lock().get(&(font_id, characters)) {
+            return proven;
+        }
+        let proven = self.loaded_fonts.get(font_id.0).is_some_and(|loaded| {
+            let Some(face) = self.font_system.db().face(loaded.font.id()) else {
+                return false;
+            };
+            let requested: SmallVec<[([u8; 4], u32); 4]> = loaded
+                .features
+                .features
+                .iter()
+                .map(|feature| (*feature.tag.as_bytes(), feature.value))
+                .collect();
+            crate::pairwise_shaping::shapes_pairwise(
+                loaded.font.data(),
+                face.index,
+                (0u8..128)
+                    .filter(|byte| characters & (1 << byte) != 0)
+                    .map(char::from),
+                &requested,
+            )
+        });
+        self.pairwise_proofs
+            .lock()
+            .insert((font_id, characters), proven);
+        proven
     }
 
     fn font_match_properties(&self, font_id: FontId) -> Option<FontMatchProperties> {

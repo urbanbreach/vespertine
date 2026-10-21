@@ -12,10 +12,7 @@ use std::{
 };
 use vespertine_collections::FxHashMap;
 
-use super::{
-    LineWrapper,
-    shape_cache::{NumericOutcome, ShapeCaches},
-};
+use super::{LineWrapper, shape_cache::ShapeCaches};
 
 /// A laid out and styled line of text
 #[derive(Default, Debug, Clone)]
@@ -597,42 +594,21 @@ impl LineLayoutCache {
         if let Some(layout) = caches.recent_lookup(font_generation, text, font_size, runs) {
             return layout;
         }
+        let platform = self.platform_text_system.as_ref();
         let layout = caches.record_shaped(|| {
-            match caches.numeric_layout(
-                self.platform_text_system.as_ref(),
-                font_generation,
-                text,
-                font_size,
-                runs,
-            ) {
-                NumericOutcome::Layout(layout) => layout,
-                NumericOutcome::Platform => match caches.append_layout(
-                    self.platform_text_system.as_ref(),
-                    font_generation,
-                    text,
-                    font_size,
-                    runs,
-                ) {
-                    Some(layout) => layout,
-                    None => {
-                        let layout = caches.platform_shape(
-                            self.platform_text_system.as_ref(),
-                            text,
-                            font_size,
-                            runs,
-                        );
-                        caches.append_track(
-                            self.platform_text_system.as_ref(),
-                            font_generation,
-                            text,
-                            font_size,
-                            runs,
-                            &layout,
-                        );
-                        layout
-                    }
-                },
+            if let Some(layout) =
+                caches.numeric_layout(platform, font_generation, text, font_size, runs)
+            {
+                return layout;
             }
+            if let Some(layout) =
+                caches.append_layout(platform, font_generation, text, font_size, runs)
+            {
+                return layout;
+            }
+            let layout = caches.platform_shape(platform, text, font_size, runs);
+            caches.append_track(platform, font_generation, text, font_size, runs, &layout);
+            layout
         });
         caches.recent_insert(font_generation, text, font_size, runs, &layout);
         layout
