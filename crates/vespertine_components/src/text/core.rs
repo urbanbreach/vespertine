@@ -691,7 +691,9 @@ impl EditCore {
         self.selection = end..end;
         self.reversed = false;
         self.affinity = Affinity::Downstream;
+        // An ordinary splice ends any composition; a later insertion is not its commit.
         self.marked = None;
+        self.composition_base = None;
         self.emit();
     }
 
@@ -1417,6 +1419,17 @@ mod tests {
         core.replace_and_mark(None, "", None);
         assert_eq!(core.text(), "abc");
         assert_eq!(core.undo_len(), 0);
+    }
+
+    #[test]
+    fn an_edit_after_an_interrupted_composition_is_its_own_undo_step() {
+        let mut core = EditCore::new("", false);
+        core.replace_and_mark(None, "x", None);
+        core.paste("y", 0.0);
+        core.insert("z", 10_000.0);
+        assert_eq!(core.text(), "xyz");
+        core.undo();
+        assert_eq!(core.text(), "xy");
     }
 
     #[test]
