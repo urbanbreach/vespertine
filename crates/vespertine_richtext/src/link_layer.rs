@@ -16,9 +16,9 @@ use std::rc::Rc;
 use vespertine::{
     AnyElement, AnyView, App, AppContext as _, AvailableSpace, ClipboardItem, Context,
     DispatchPhase, ElementId, FocusHandle, GlobalElementId, Hsla, InteractiveElement, IntoElement,
-    LinkPolicy, LinkRoutes, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred,
-    div, point, prelude::FluentBuilder as _, px, rgb, size,
+    LinkNavigation, LinkPolicy, LinkRoutes, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    Point, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window,
+    anchored, deferred, div, point, prelude::FluentBuilder as _, px, rgb, size,
 };
 
 /// What activating a link asks the host to do.
@@ -26,6 +26,9 @@ use vespertine::{
 pub struct LinkActivation {
     /// The complete original destination (never the shortened label).
     pub destination: String,
+    /// The address the policy validated the destination to (a resolved `file://` URL for a
+    /// relative file link, for example): what navigation opens.
+    pub navigation: SharedString,
     /// The requested action.
     pub action: LinkActionKind,
     /// The destination parsed as a file with its anchors, when it is one.
@@ -36,18 +39,20 @@ pub struct LinkActivation {
 #[derive(Clone)]
 pub struct LinkOptions {
     /// Called for navigation actions (open, open externally) that the policy allows. Without a
-    /// callback the destination is handed to the platform's default handler.
+    /// callback the validated address is handed to the platform's default handler.
     pub on_activate: Option<Rc<dyn Fn(&LinkActivation, &mut Window, &mut App)>>,
-    /// Whether navigation is allowed for a destination; copying is always allowed. The default
-    /// is the framework's [`LinkPolicy`] (explicit `http`/`https` destinations only, PLT-010 R4).
-    pub navigation_allowed: Rc<dyn Fn(&str) -> bool>,
+    /// Validates a destination for navigation: the address to open, or why it is rejected;
+    /// copying is always allowed. The default is the framework's [`LinkPolicy`] (explicit
+    /// `http`/`https` destinations only, PLT-010 R4).
+    pub navigation: Rc<dyn Fn(&str) -> LinkNavigation>,
 }
 
 impl Default for LinkOptions {
     fn default() -> Self {
+        let policy = LinkPolicy::default();
         Self {
             on_activate: None,
-            navigation_allowed: policy_predicate(LinkPolicy::default()),
+            navigation: Rc::new(move |destination| policy.validate(destination)),
         }
     }
 }
@@ -62,29 +67,35 @@ impl LinkOptions {
         self
     }
 
-    /// Sets the navigation predicate directly.
-    pub fn navigation_allowed(mut self, policy: impl Fn(&str) -> bool + 'static) -> Self {
-        self.navigation_allowed = Rc::new(policy);
+    /// Allows navigation, to the destination as written, exactly where `allowed` accepts it.
+    pub fn navigation_allowed(mut self, allowed: impl Fn(&str) -> bool + 'static) -> Self {
+        self.navigation = Rc::new(move |destination| {
+            if allowed(destination) {
+                Ok(SharedString::from(destination.to_owned()))
+            } else {
+                Err(SharedString::from("navigation not allowed"))
+            }
+        });
         self
     }
 
-    /// Allows navigation exactly where `policy` accepts the original destination.
+    /// Navigates to the address `policy` validates the original destination to.
     pub fn policy(mut self, policy: LinkPolicy) -> Self {
-        self.navigation_allowed = policy_predicate(policy);
+        self.navigation = Rc::new(move |destination| policy.validate(destination));
         self
     }
 
-    /// Allows navigation exactly where `routes` accepts the original destination, so mail and
+    /// Navigates to the address `routes` classifies the original destination to, so mail and
     /// file destinations can be enabled (application policy, TXT-008 notes).
     pub fn routes(mut self, routes: LinkRoutes) -> Self {
-        self.navigation_allowed =
-            Rc::new(move |destination| routes.classify(destination).0.is_ok());
+        self.navigation = Rc::new(move |destination| routes.classify(destination).0);
         self
     }
-}
 
-fn policy_predicate(policy: LinkPolicy) -> Rc<dyn Fn(&str) -> bool> {
-    Rc::new(move |destination| policy.validate(destination).is_ok())
+    /// Whether navigation is allowed for `destination`.
+    pub fn allows(&self, destination: &str) -> bool {
+        (self.navigation)(destination).is_ok()
+    }
 }
 
 struct OpenMenu {
@@ -122,17 +133,18 @@ fn activate(
             cx.write_to_clipboard(ClipboardItem::new_string(destination.to_string()));
         }
         LinkActionKind::Open | LinkActionKind::OpenExternally => {
-            if !(options.navigation_allowed)(destination) {
+            let Ok(navigation) = (options.navigation)(destination) else {
                 return;
-            }
+            };
             let activation = LinkActivation {
                 destination: destination.to_string(),
+                navigation,
                 action,
                 file: parse_file_destination(destination),
             };
             match &options.on_activate {
                 Some(callback) => callback(&activation, window, cx),
-                None => cx.open_url(destination),
+                None => cx.open_url(&activation.navigation),
             }
         }
     }
@@ -432,7 +444,7 @@ fn open_menu(
     cx: &mut App,
 ) {
     let handle = cx.focus_handle();
-    let allowed = (options.navigation_allowed)(&link.destination);
+    let allowed = options.allows(&link.destination);
     runtime.borrow_mut().menu = Some(OpenMenu {
         link: link_index,
         menu: LinkMenu::new(allowed, origin),

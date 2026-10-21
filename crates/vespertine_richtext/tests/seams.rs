@@ -45,7 +45,7 @@ fn page(child: impl IntoElement) -> vespertine::AnyElement {
 #[test]
 fn link_options_default_to_the_framework_link_policy() {
     let options = LinkOptions::default();
-    let allowed = &options.navigation_allowed;
+    let allowed = |destination: &str| options.allows(destination);
     for accepted in [
         "https://example.com/a",
         "HTTP://EXAMPLE.COM",
@@ -88,8 +88,8 @@ fn a_caller_policy_routes_and_predicate_replace_the_default() {
             Err(SharedString::from("no"))
         }
     }));
-    assert!((only_ok.navigation_allowed)("ok"));
-    assert!(!(only_ok.navigation_allowed)("https://example.com"));
+    assert_eq!((only_ok.navigation)("ok"), Ok(SharedString::from("ok")));
+    assert!(!only_ok.allows("https://example.com"));
 
     let routes = LinkOptions::default().routes(
         LinkRoutes::new()
@@ -97,16 +97,16 @@ fn a_caller_policy_routes_and_predicate_replace_the_default() {
             .with_files(Vec::<PathBuf>::new()),
     );
     for accepted in ["mailto:a@b.com", "/abs/path", "https://example.com"] {
-        assert!((routes.navigation_allowed)(accepted), "{accepted}");
+        assert!(routes.allows(accepted), "{accepted}");
     }
     for rejected in ["javascript:alert(1)", "relative/path.rs", "MAILTO:a b@c"] {
-        assert!(!(routes.navigation_allowed)(rejected), "{rejected}");
+        assert!(!routes.allows(rejected), "{rejected}");
     }
 
     // The predicate seam stays available and wins when it is set last.
     let custom = LinkOptions::default().navigation_allowed(|d| d.starts_with("custom:"));
-    assert!((custom.navigation_allowed)("custom:thing"));
-    assert!(!(custom.navigation_allowed)("https://example.com"));
+    assert!(custom.allows("custom:thing"));
+    assert!(!custom.allows("https://example.com"));
 }
 
 fn mail_link_harness(
@@ -153,6 +153,53 @@ fn a_mail_link_navigates_only_when_the_caller_enables_the_mail_route() {
     assert_eq!(enabled_log.borrow().len(), 1);
     assert_eq!(enabled_log.borrow()[0].destination, "mailto:a@b.com");
     assert_eq!(enabled_log.borrow()[0].action, LinkActionKind::Open);
+}
+
+fn single_link(text: &'static str, options: LinkOptions) -> Harness {
+    let build: Build = Rc::new(move |_, _| {
+        page(
+            RichText::new("t", text)
+                .links(vec![Link {
+                    range: 0..text.len(),
+                    destination: text.to_string(),
+                }])
+                .link_options(options.clone()),
+        )
+    });
+    Harness::new(WIDTH, 100., build)
+}
+
+#[test]
+fn activation_navigates_to_the_address_the_policy_resolved() {
+    // Without a callback the platform opens the resolved file, not a working-directory name.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut file = single_link(
+        "Cargo.toml",
+        LinkOptions::default().routes(LinkRoutes::new().with_files([root.clone()])),
+    );
+    file.click(at(10., 12.));
+    assert_eq!(
+        file.cx.opened_urls(),
+        [format!("file://{}/Cargo.toml", root.display())]
+    );
+
+    // A callback receives the normalized address next to the destination as written.
+    let log: Rc<std::cell::RefCell<Vec<LinkActivation>>> = Rc::default();
+    let sink = log.clone();
+    let options = LinkOptions::default()
+        .policy(LinkPolicy::new(|original| {
+            Ok(SharedString::from(format!(
+                "https://example.com/{original}"
+            )))
+        }))
+        .on_activate(move |activation, _, _| sink.borrow_mut().push(activation.clone()));
+    let mut custom = single_link("alpha", options);
+    custom.click(at(10., 12.));
+    let log = log.borrow();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].destination, "alpha");
+    assert_eq!(log[0].navigation, "https://example.com/alpha");
+    assert!(custom.cx.opened_urls().is_empty());
 }
 
 // -------------------------------------------------------------------- THM adapter

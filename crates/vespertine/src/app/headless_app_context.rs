@@ -43,6 +43,7 @@ pub struct HeadlessAppContext {
     /// The foreground executor for running tasks on the main thread.
     pub foreground_executor: ForegroundExecutor,
     dispatcher: TestDispatcher,
+    platform: Rc<TestPlatform>,
     text_system: Arc<TextSystem>,
 }
 
@@ -88,7 +89,7 @@ impl HeadlessAppContext {
 
         let text_system = Arc::new(TextSystem::new(platform_text_system));
         let http_client = vespertine_http_client::FakeHttpClient::with_404_response();
-        let app = App::new_app(platform, asset_source, http_client);
+        let app = App::new_app(platform.clone(), asset_source, http_client);
         app.borrow_mut().mode = GpuiMode::headless();
 
         Self {
@@ -96,6 +97,7 @@ impl HeadlessAppContext {
             background_executor,
             foreground_executor,
             dispatcher,
+            platform,
             text_system,
         }
     }
@@ -191,6 +193,11 @@ impl HeadlessAppContext {
     /// Returns the text system.
     pub fn text_system(&self) -> &Arc<TextSystem> {
         &self.text_system
+    }
+
+    /// Every URL handed to `cx.open_url()` in this context, in order.
+    pub fn opened_urls(&self) -> Vec<String> {
+        self.platform.external.borrow().urls.clone()
     }
 
     /// Returns the background executor.
