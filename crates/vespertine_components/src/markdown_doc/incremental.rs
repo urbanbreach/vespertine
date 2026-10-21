@@ -213,9 +213,17 @@ impl IncrementalParser {
         // shifting, so build a string whose tail is the mended block.
         text.push_str(&self.source[..tail_start]);
         text.push_str(&mended);
-        let parsed = parse_slice(&text, tail_start);
+        let blocks = if self.force_full {
+            // Reference definitions act at a distance: parse the whole repaired text so links
+            // in the tail resolve, then keep the tail's blocks.
+            let mut blocks = parse_slice(&text, 0).blocks;
+            let tail = blocks.partition_point(|block| block.range.start < tail_start);
+            blocks.split_off(tail)
+        } else {
+            parse_slice(&text, tail_start).blocks
+        };
         self.mended_from = from;
-        self.mended_tail = parsed.blocks;
+        self.mended_tail = blocks;
         let source_len = self.source.len();
         for block in &mut self.mended_tail {
             clamp_ranges(block, source_len);

@@ -386,6 +386,21 @@ fn a_streaming_nested_code_fence_is_not_repaired() {
 }
 
 #[test]
+fn a_streaming_display_tree_resolves_reference_links() {
+    let mut parser = IncrementalParser::new();
+    parser.append("[r]: https://example.com\n\n[alpha][r] **open");
+    let display = parser.display_tree().to_vec();
+    let BlockKind::Paragraph(runs) = &display[0].kind else {
+        panic!("{display:?}")
+    };
+    let link = runs.iter().find(|r| r.text == "alpha").expect("link run");
+    assert_eq!(link.link.as_deref(), Some("https://example.com"));
+    assert!(runs.iter().all(|r| !r.text.contains('[')), "{runs:?}");
+    let open = runs.iter().find(|r| r.text == "open").expect("open run");
+    assert!(open.style.bold);
+}
+
+#[test]
 fn replace_resets_the_stored_source() {
     let mut parser = IncrementalParser::new();
     parser.append("abc\n\ndef");
