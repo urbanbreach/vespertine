@@ -376,6 +376,7 @@ fn measure_of(window: &mut Window, text: &str) -> TextMeasure {
         runs: RunSource::Plain,
         font_size: px(CELL_FONT_SIZE),
         line_height: px(18.),
+        font_generation: window.text_system().font_generation(),
     }
 }
 

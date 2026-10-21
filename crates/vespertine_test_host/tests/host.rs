@@ -881,6 +881,70 @@ fn dev_006_register_font_rejects_invalid_bytes_and_accepts_a_font() {
 /// A font family no host has installed before a test registers it.
 const LILEX: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
 
+struct LilexLabel;
+
+impl Render for LilexLabel {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .font_family("Lilex")
+            .text_size(px(24.0))
+            .text_color(black())
+            .child("Lorem ipsum")
+    }
+}
+
+/// A root that shows a [`LilexLabel`] in its own view, or nothing.
+struct LilexRoot {
+    label: vespertine::Entity<LilexLabel>,
+    shown: bool,
+}
+
+impl Render for LilexRoot {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let content = div().size_full().bg(rgb(0xffffff)).p(px(10.0));
+        if self.shown {
+            content.child(self.label.clone())
+        } else {
+            content
+        }
+    }
+}
+
+fn lilex_host(shown: bool, complete_frames: bool) -> (TestHost, vespertine::Entity<LilexRoot>) {
+    let root = Rc::new(RefCell::new(None));
+    let host = TestHost::with_view(
+        HostOptions {
+            complete_frames,
+            ..HostOptions::with_size(200.0, 60.0)
+        },
+        {
+            let root = root.clone();
+            move |_, cx| {
+                let label = cx.new(|_| LilexLabel);
+                let entity = cx.new(|_| LilexRoot { label, shown });
+                *root.borrow_mut() = Some(entity.clone());
+                entity
+            }
+        },
+    )
+    .unwrap();
+    let root = root.borrow_mut().take().unwrap();
+    (host, root)
+}
+
+/// The label as it looks when it is first laid out after the family was registered.
+fn lilex_reference() -> image::RgbaImage {
+    let (mut host, root) = lilex_host(false, true);
+    host.register_font(LILEX.to_vec()).unwrap();
+    host.app().update(|cx| {
+        root.update(cx, |root, cx| {
+            root.shown = true;
+            cx.notify();
+        })
+    });
+    host.screenshot_image().unwrap()
+}
+
 #[test]
 fn dev_006_registered_font_resolves_in_the_window_text_system() {
     require_backend!();
@@ -903,6 +967,24 @@ fn dev_006_registered_font_resolves_in_the_window_text_system() {
     assert!(
         resolves(&mut host),
         "the window resolves the registered family"
+    );
+}
+
+#[test]
+fn dev_006_text_on_screen_takes_up_a_family_registered_after_it_was_drawn() {
+    require_backend!();
+    let (mut host, _root) = lilex_host(true, true);
+    let fallback = host.screenshot_image().unwrap();
+    host.register_font(LILEX.to_vec()).unwrap();
+    let registered = host.screenshot_image().unwrap();
+    let reference = lilex_reference();
+    assert!(
+        fallback != reference,
+        "the registered face draws the label differently from its fallback"
+    );
+    assert!(
+        registered == reference,
+        "the label is drawn again in the registered face"
     );
 }
 

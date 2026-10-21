@@ -738,9 +738,10 @@ enum RunSource {
 /// The measuring function of a text element (PRF-011).
 ///
 /// Its inputs are the string, the ordered non-empty runs (byte length and font), the font size,
-/// the pixel-snapped line height, the whitespace policy, the line clamp and the overflow policy
-/// (with, when truncating, the inherited font). A measurement whose inputs equal those of the
-/// measurement already installed at the same layout node is carried instead of rebound.
+/// the pixel-snapped line height, the whitespace policy, the line clamp, the overflow policy
+/// (with, when truncating, the inherited font) and the text system's font generation. A
+/// measurement whose inputs equal those of the measurement already installed at the same layout
+/// node is carried instead of rebound.
 struct TextMeasure {
     layout: TextLayout,
     text: SharedString,
@@ -749,6 +750,9 @@ struct TextMeasure {
     runs: RunSource,
     font_size: Pixels,
     line_height: Pixels,
+    /// The font set the measurement resolves fonts against: fonts added later can change which
+    /// face a run resolves to.
+    font_generation: usize,
 }
 
 fn same_font_fields(a: &TextStyle, b: &TextStyle) -> bool {
@@ -791,6 +795,7 @@ impl TextMeasure {
 
     fn relate(&self, previous: &Self) -> Relation {
         if self.font_size != previous.font_size
+            || self.font_generation != previous.font_generation
             || self.line_height != previous.line_height
             || self.style.white_space != previous.style.white_space
             || self.style.line_clamp != previous.style.line_clamp
@@ -1120,6 +1125,7 @@ impl TextLayout {
             style,
             font_size,
             line_height,
+            font_generation: window.text_system().font_generation(),
         };
         window.request_measured_layout_with(Default::default(), measure, cx)
     }
