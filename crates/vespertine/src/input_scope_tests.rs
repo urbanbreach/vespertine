@@ -1,5 +1,5 @@
 //! Tests for focus-scoped input behavior (INP-007): safe focus restoration and
-//! pane scopes, keyboard activation, accessibility metadata, the keyboard
+//! pane scopes, accessibility metadata, the keyboard
 //! context menu, cursor restoration after drags and raw key / hold-gesture
 //! observation.
 
@@ -271,30 +271,6 @@ fn focus_memory_keeps_its_origin_and_yields_to_a_mounted_dialog(cx: &mut TestApp
     assert_eq!(focused_id(cx), Some(dialog.id()));
 }
 
-// ---------------------------------------------------------------------------
-// R4: keyboard activation
-// ---------------------------------------------------------------------------
-
-struct ActivationView {
-    focus: FocusHandle,
-    other: FocusHandle,
-    activation: crate::keyboard_activation::KeyboardActivation,
-    activations: Rc<RefCell<Vec<crate::keyboard_activation::ActivationKey>>>,
-}
-
-impl Render for ActivationView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let activations = self.activations.clone();
-        div()
-            .size_full()
-            .child(self.activation.bind(
-                div().id("button").size(px(20.)).track_focus(&self.focus),
-                move |key, _, _| activations.borrow_mut().push(key),
-            ))
-            .child(div().id("other").size(px(20.)).track_focus(&self.other))
-    }
-}
-
 fn key_down(cx: &mut VisualTestContext, key: &str, is_held: bool) {
     let keystroke = crate::Keystroke::parse(key).expect("valid keystroke");
     cx.simulate_event(KeyDownEvent {
@@ -307,69 +283,6 @@ fn key_down(cx: &mut VisualTestContext, key: &str, is_held: bool) {
 fn key_up(cx: &mut VisualTestContext, key: &str) {
     let keystroke = crate::Keystroke::parse(key).expect("valid keystroke");
     cx.simulate_event(KeyUpEvent { keystroke });
-}
-
-#[crate::test]
-fn enter_activates_on_key_down_and_space_on_key_up(cx: &mut TestAppContext) {
-    use crate::keyboard_activation::ActivationKey::{Enter, Space};
-    let activations = Rc::new(RefCell::new(Vec::new()));
-    let (view, cx) = cx.add_window_view({
-        let activations = activations.clone();
-        move |_, cx| ActivationView {
-            focus: cx.focus_handle(),
-            other: cx.focus_handle(),
-            activation: Default::default(),
-            activations,
-        }
-    });
-    let (focus, other) = view.read_with(cx, |view, _| (view.focus.clone(), view.other.clone()));
-    focus_and_draw(cx, &focus);
-
-    // Enter: exactly once, on key-down. Held and unflagged repeats of the
-    // same physical press never activate again; the key-up adds nothing.
-    key_down(cx, "enter", false);
-    assert_eq!(*activations.borrow(), vec![Enter]);
-    key_down(cx, "enter", true);
-    key_down(cx, "enter", false);
-    key_up(cx, "enter");
-    assert_eq!(*activations.borrow(), vec![Enter]);
-    key_down(cx, "enter", false);
-    key_up(cx, "enter");
-    assert_eq!(*activations.borrow(), vec![Enter, Enter]);
-    activations.borrow_mut().clear();
-
-    // Space: nothing on key-down, one activation on key-up.
-    key_down(cx, "space", false);
-    assert!(activations.borrow().is_empty());
-    key_up(cx, "space");
-    assert_eq!(*activations.borrow(), vec![Space]);
-    activations.borrow_mut().clear();
-
-    // Interrupted by another key: no activation.
-    key_down(cx, "space", false);
-    key_down(cx, "a", false);
-    key_up(cx, "a");
-    key_up(cx, "space");
-    assert!(activations.borrow().is_empty());
-
-    // Interrupted by a key-up of another key.
-    key_down(cx, "space", false);
-    key_up(cx, "b");
-    key_up(cx, "space");
-    assert!(activations.borrow().is_empty());
-
-    // Focus moving between press and release: no activation.
-    key_down(cx, "space", false);
-    focus_and_draw(cx, &other);
-    focus_and_draw(cx, &focus);
-    key_up(cx, "space");
-    assert!(activations.borrow().is_empty());
-
-    // Modified Space/Enter are not activations.
-    key_down(cx, "ctrl-enter", false);
-    key_down(cx, "shift-space", false);
-    key_up(cx, "shift-space");
-    assert!(activations.borrow().is_empty());
 }
 
 // ---------------------------------------------------------------------------

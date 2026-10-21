@@ -63,7 +63,6 @@ mod input_scope_tests;
 mod inspector;
 mod interactive;
 mod key_dispatch;
-pub mod keyboard_activation;
 pub mod keyboard_menu;
 mod keymap;
 mod link;
