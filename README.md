@@ -3,8 +3,11 @@
 Vespertine is a fork of [GPUI](https://github.com/zed-industries/zed), Zed's GPU-accelerated Rust UI
 framework. The framework API follows upstream GPUI under the `vespertine` crate namespace: the same
 hybrid immediate and retained model (entities, views, elements, a Tailwind-style styling API,
-actions, an integrated async executor), with the additions listed below. Nothing is published to
-crates.io or npm (`publish = false`); depend on the crates by path or git from a checkout.
+actions, an integrated async executor), with the additions listed below.
+
+Vespertine is in early alpha: the API changes between releases without deprecation, and releases
+are tagged on GitHub only. Nothing is published to crates.io or npm (`publish = false`); see
+[Using Vespertine](#using-vespertine) to depend on a release tag.
 
 Linux, on both Wayland and X11, is the verified platform. The macOS and Windows backends are
 preserved from upstream but have not been built or verified in this repository (see
@@ -205,6 +208,28 @@ JavaScript packages (an npm workspace under `packages/`):
   `libjson-glib-dev`; Fedora `webkit2gtk4.1-devel`, `json-glib-devel`). Set
   `VSP_WEBKIT_HELPER_BINARY` to embed a prebuilt helper instead of compiling `helper/*.c`.
 - For the JavaScript packages: Node 20 or later, or Bun.
+
+## Using Vespertine
+
+Depend on the crates from this repository at a release tag (see
+[Releases](https://github.com/urbanbreach/vespertine/releases)). An application needs `vespertine`
+and `vespertine_platform` with the Linux backends; `vespertine_components` is optional:
+
+```toml
+[dependencies]
+vespertine = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.1" }
+vespertine_platform = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.1", features = ["wayland", "x11"] }
+# Without `browser`, the components need no WebKitGTK.
+vespertine_components = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.1", default-features = false, features = ["diagram", "math"] }
+```
+
+Use the same tag for every Vespertine crate. The application builds with the toolchain in
+`rust-toolchain.toml` or a newer one, and needs the system packages under
+[Requirements](#requirements). `crates/vespertine/examples/hello_world.rs` is a complete
+application; its `example_support` module is not needed outside this repository.
+
+The JavaScript packages are not on npm: build them from a checkout (see [Build and test](#build-and-test)).
+`create-vespertine` downloads published packages, so it cannot create projects yet.
 
 ## Build and test
 

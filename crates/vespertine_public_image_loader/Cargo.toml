@@ -1,6 +1,6 @@
 [package]
 name = "vespertine_public_image_loader"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license = "Apache-2.0"

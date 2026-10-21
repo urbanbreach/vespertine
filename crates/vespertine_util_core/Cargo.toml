@@ -1,6 +1,6 @@
 [package]
 name = "vespertine_util_core"
-version = "0.1.0"
+version.workspace = true
 publish = false
 license = "Apache-2.0"
 description = "A collection of utility structs and functions used by Zed and VESPERTINE"

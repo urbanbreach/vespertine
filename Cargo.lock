@@ -7640,7 +7640,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vespertine"
-version = "0.2.2"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -7728,7 +7728,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_apple"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-task",
@@ -7768,7 +7768,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_bench"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "image",
@@ -7782,7 +7782,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_bench_metrics"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -7792,7 +7792,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_collections"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.1",
@@ -7801,7 +7801,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_components"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "alacritty_terminal",
@@ -7833,7 +7833,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_derive_refineable"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7842,7 +7842,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_desktop"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "ashpd",
  "futures",
@@ -7861,7 +7861,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_host_tree"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "rmp-serde",
  "rustc-hash 2.1.1",
@@ -7871,7 +7871,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_http_client"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -7894,7 +7894,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_http_client_tls"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "log",
  "rustls",
@@ -7904,7 +7904,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_js"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "async-channel 2.5.0",
  "futures",
@@ -7923,7 +7923,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_js_node"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -7939,7 +7939,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_linux"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -7983,7 +7983,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_macos"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -8024,7 +8024,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_macros"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -8035,7 +8035,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_path"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "dunce",
@@ -8046,7 +8046,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_perf"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -8055,7 +8055,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_platform"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -8070,7 +8070,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_public_image_loader"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -8085,14 +8085,14 @@ dependencies = [
 
 [[package]]
 name = "vespertine_refineable"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "vespertine_derive_refineable",
 ]
 
 [[package]]
 name = "vespertine_reqwest_client"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8108,7 +8108,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_richtext"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "image",
  "log",
@@ -8127,7 +8127,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_scenes"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "inventory",
  "libc",
@@ -8142,7 +8142,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_scheduler"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "async-task",
  "backtrace",
@@ -8155,7 +8155,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_shared_string"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "schemars",
  "serde",
@@ -8164,7 +8164,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_sum_tree"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "ctor",
  "env_logger",
@@ -8177,7 +8177,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_test_host"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -8196,7 +8196,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_theme"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "image",
@@ -8214,7 +8214,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_tokio"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "tokio",
@@ -8224,7 +8224,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_updater"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "base64",
  "blake2",
@@ -8246,7 +8246,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_util"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "log",
@@ -8255,7 +8255,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_util_core"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -8295,7 +8295,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_util_macros"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -8304,7 +8304,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_webview"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "async-channel 2.5.0",
  "futures",
@@ -8323,7 +8323,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_wgpu"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -8352,7 +8352,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_windows"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -8381,7 +8381,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_zlog"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8392,7 +8392,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_ztracing"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -8404,7 +8404,7 @@ dependencies = [
 
 [[package]]
 name = "vespertine_ztracing_macro"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "vswhom"

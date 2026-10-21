@@ -4,10 +4,12 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
-## Unreleased
+## 0.2.0-alpha.1 - 2026-10-21
 
-A cleanup release: duplicate implementations, unused API, tests that could not fail and the tooling
-of the autonomous build are removed, and the crates build in more places.
+The first public release, an early alpha: the API changes between releases without deprecation.
+Releases are tagged on GitHub and used as git dependencies (see "Using Vespertine" in the README);
+nothing is published to crates.io or npm. This release removes duplicate implementations, unused API,
+tests that could not fail and the tooling of the autonomous build, and the crates build in more places.
 
 ### Fixed
 
@@ -25,6 +27,9 @@ of the autonomous build are removed, and the crates build in more places.
 
 ### Changed
 
+- Every crate and JavaScript package carries the release version, `0.2.0-alpha.1`. The crates
+  inherit it from the workspace (`version.workspace = true`); `vespertine` was `0.2.2`, the version
+  of upstream GPUI.
 - `vespertine_components` has default-on features `browser` (Linux only; needs `vespertine_webview`),
   `diagram` (Mermaid through `merman`) and `math` (4.2 MB of math faces). Without them, Mermaid fences
   and formulas render as source.
