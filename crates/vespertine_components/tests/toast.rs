@@ -283,6 +283,32 @@ fn a_short_swipe_returns_and_a_long_swipe_dismisses(cx: &mut TestAppContext) {
 }
 
 #[vespertine::test]
+fn a_swipe_that_leaves_the_card_keeps_tracking_the_pointer_and_dismisses(cx: &mut TestAppContext) {
+    let cx = setup(cx, false);
+    resize(cx, 1000.0, 800.0);
+    publish(cx, ToastKind::Info, "swipe me");
+    settle(cx, 1000.0, 2000.0);
+    let id = card_ids(cx)[0];
+    let rest = card(cx, id).unwrap();
+    // Press 30 px inside the right edge and move 50 px right in one step: the pointer is now
+    // outside the card, but still inside the window.
+    let start = point(rest.right() - px(30.), rest.center().y);
+    press_move_release(cx, start, 50.0);
+    let swipe = cx.update(|_, app| with_queue(app, |q| q.get(id).unwrap().swipe()).unwrap());
+    assert_eq!(
+        swipe, 50.0,
+        "the move outside the card still drives the swipe"
+    );
+    cx.simulate_mouse_up(
+        start + point(px(50.), px(0.)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    redraw(cx);
+    assert!(closing(cx, id), "a 50 px swipe dismisses");
+}
+
+#[vespertine::test]
 fn moving_left_never_displaces_and_a_move_without_the_button_clears_the_press(
     cx: &mut TestAppContext,
 ) {

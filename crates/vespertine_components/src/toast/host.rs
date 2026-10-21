@@ -243,6 +243,9 @@ fn card_element(card: &CardFrame, stack_width: f32, theme: &NavTheme) -> impl In
         .border_color(theme.popup_border)
         .bg(theme.popup_surface)
         .opacity(card.opacity)
+        // A swipe keeps the pointer while the button is held, so a move that leaves the card
+        // (a fast flick) still updates the displacement and the release still counts.
+        .capture_pointer()
         .on_mouse_down(MouseButton::Left, move |event, window, cx| {
             queue_mut(cx).press(id, event.position.x.as_f32());
             window.refresh();
