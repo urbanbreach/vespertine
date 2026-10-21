@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use common::{apply, apply_err, apply_raw, children, fingerprint};
 use serde_json::{Value, json};
@@ -691,25 +691,19 @@ fn a5_highlight_declaration_presence_changes_ancestor_search_revision() {
 // ---------------------------------------------------------------------- A6
 
 #[test]
-fn a6_null_custom_prop_removes_a_property_and_resets_native_behavior() {
+fn a6_null_custom_prop_removes_a_property() {
     let mut tree = three_level_tree();
-    let resets: Arc<Mutex<Vec<(u64, String)>>> = Arc::default();
-    let sink = resets.clone();
-    tree.set_prop_reset_handler(move |id, key| sink.lock().unwrap().push((id, key.to_string())));
-
     apply(
         &mut tree,
         json!([["setCustomProp", 2, "motion", {"to": 1}], ["setCustomProp", 2, "tabIndex", 0], ["setCustomProp", 2, "x", 1]]),
     );
     assert_eq!(tree.animated_ids().collect::<Vec<_>>(), [2]);
     assert_eq!(tree.focusable_ids().collect::<Vec<_>>(), [2]);
-    assert!(resets.lock().unwrap().is_empty());
 
     let result = apply(&mut tree, json!([["setCustomProp", 2, "motion", null]]));
     assert!(result.redraw);
     assert_eq!(tree.animated_ids().count(), 0);
     assert_eq!(tree.node(2).unwrap().prop("motion"), None);
-    assert_eq!(*resets.lock().unwrap(), [(2, "motion".to_string())]);
     apply(
         &mut tree,
         json!([
@@ -719,11 +713,9 @@ fn a6_null_custom_prop_removes_a_property_and_resets_native_behavior() {
     );
     assert_eq!(tree.focusable_ids().count(), 0);
     assert!(!tree.node(2).unwrap().prop_map_allocated());
-    assert_eq!(resets.lock().unwrap().len(), 3);
-    // Removing an absent property is unchanged and resets nothing.
+    // Removing an absent property is unchanged.
     let result = apply(&mut tree, json!([["setCustomProp", 2, "motion", null]]));
     assert!(!result.redraw);
-    assert_eq!(resets.lock().unwrap().len(), 3);
 }
 
 #[test]

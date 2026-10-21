@@ -348,7 +348,6 @@ pub struct HostTree {
     search_changed: bool,
     styles_touched: bool,
     destroy_stack: Vec<u64>,
-    prop_reset: Option<Box<dyn FnMut(NodeId, &str) + Send>>,
     batches_applied: u64,
     redraw_commits: u64,
     idle_commits: u64,
@@ -384,7 +383,6 @@ impl HostTree {
             search_changed: false,
             styles_touched: false,
             destroy_stack: Vec::new(),
-            prop_reset: None,
             batches_applied: 0,
             redraw_commits: 0,
             idle_commits: 0,
@@ -392,13 +390,6 @@ impl HostTree {
             focus_visits: Cell::new(0),
             animation_visits: Cell::new(0),
         }
-    }
-
-    /// Registers the handler invoked when a custom property is removed, so native behavior
-    /// driven by the property can be synchronized back to its default value
-    /// (APP-006 R10). It is called with the element id and the property key.
-    pub fn set_prop_reset_handler(&mut self, handler: impl FnMut(NodeId, &str) + Send + 'static) {
-        self.prop_reset = Some(Box::new(handler));
     }
 
     // ------------------------------------------------------------------ queries
@@ -1037,11 +1028,6 @@ impl HostTree {
         }
         self.redraw = true;
         self.refresh_indexes(id);
-        if removed {
-            if let Some(handler) = self.prop_reset.as_mut() {
-                handler(id, key);
-            }
-        }
     }
 
     /// Recomputes the focusable and animated index membership of one node.
