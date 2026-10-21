@@ -1,5 +1,6 @@
 use crate::{FontId, Pixels, SharedString, TextRun, TextSystem, px};
 use std::{borrow::Cow, iter, sync::Arc};
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation as _};
 use vespertine_collections::HashMap;
 
 /// Determines whether to truncate text from the start or end.
@@ -32,8 +33,6 @@ pub struct LineWrapper {
     pub(crate) font_size: Pixels,
     cached_ascii_char_widths: [Option<Pixels>; 128],
     cached_other_char_widths: HashMap<char, Pixels>,
-    /// Letter spacing added to every character width while a truncation runs; zero otherwise.
-    letter_spacing: Pixels,
 }
 
 impl LineWrapper {
@@ -47,7 +46,6 @@ impl LineWrapper {
             font_size,
             cached_ascii_char_widths: [None; 128],
             cached_other_char_widths: HashMap::default(),
-            letter_spacing: Pixels::ZERO,
         }
     }
 
@@ -192,30 +190,32 @@ impl LineWrapper {
 
     /// Determines if a line should be truncated based on its width.
     ///
-    /// Returns the truncation index in `line`.
+    /// Widths follow the shaped line (TXT-010): every grapheme cluster but the last of the line
+    /// is followed by the letter spacing of its run in `runs`, and the affix takes the spacing
+    /// of the run it replaces. Returns the truncation index in `line`.
     pub fn should_truncate_line(
         &mut self,
         line: &str,
         truncate_width: Pixels,
         truncation_affix: &str,
+        runs: &[TextRun],
         truncate_from: TruncateFrom,
     ) -> Option<usize> {
+        let mut spacing = RunSpacing::new(runs);
+        let affix = self.affix(truncation_affix);
         let mut width = px(0.);
-        let suffix_width = truncation_affix
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .fold(px(0.0), |a, x| a + x);
         let mut truncate_ix = 0;
 
         match truncate_from {
             TruncateFrom::Start => {
                 for (ix, c) in line.char_indices().rev() {
-                    if width + suffix_width < truncate_width {
+                    // The affix replaces the character at `ix` and precedes the kept end.
+                    let followed = ix + c.len_utf8() < line.len();
+                    if width + affix.width(spacing.at(ix), followed) < truncate_width {
                         truncate_ix = ix;
                     }
 
-                    let char_width = self.width_for_char(c);
-                    width += char_width;
+                    width += self.width_for_char(c) + spacing.after(line, ix, c);
 
                     if width.floor() > truncate_width {
                         return Some(truncate_ix);
@@ -224,12 +224,12 @@ impl LineWrapper {
             }
             TruncateFrom::End => {
                 for (ix, c) in line.char_indices() {
-                    if width + suffix_width < truncate_width {
+                    // The affix replaces the character at `ix` and ends the line.
+                    if width + affix.width(spacing.at(ix), false) < truncate_width {
                         truncate_ix = ix;
                     }
 
-                    let char_width = self.width_for_char(c);
-                    width += char_width;
+                    width += self.width_for_char(c) + spacing.after(line, ix, c);
 
                     if width.floor() > truncate_width {
                         return Some(truncate_ix);
@@ -247,44 +247,47 @@ impl LineWrapper {
         line: &str,
         truncate_width: Pixels,
         truncation_affix: &str,
+        runs: &[TextRun],
     ) -> Option<(usize, usize)> {
-        let suffix_width = truncation_affix
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .fold(px(0.0), |a, x| a + x);
+        let mut spacing = RunSpacing::new(runs);
+        let affix = self.affix(truncation_affix);
 
-        let total_width: Pixels = line
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .fold(px(0.0), |a, x| a + x);
+        let mut total_width = px(0.);
+        for (ix, c) in line.char_indices() {
+            total_width += self.width_for_char(c) + spacing.after(line, ix, c);
+        }
 
         if total_width <= truncate_width {
             return None;
         }
 
-        let content_budget = truncate_width - suffix_width;
-        if content_budget <= px(0.) {
-            return Some((0, line.len()));
-        }
-
-        let front_budget = content_budget * (2.0 / 3.0);
-        let back_budget = content_budget - front_budget;
+        // The affix replaces the character at the end of the kept start, so the budget left
+        // for content depends on where the start ends.
+        let content_budget =
+            |affix_spacing: Pixels| truncate_width - affix.width(affix_spacing, true);
 
         let mut front_width = px(0.);
         let mut front_end_ix = 0usize;
         for (ix, c) in line.char_indices() {
-            let char_width = self.width_for_char(c);
-            if front_width + char_width > front_budget {
+            let end = ix + c.len_utf8();
+            let char_width = self.width_for_char(c) + spacing.after(line, ix, c);
+            if front_width + char_width > content_budget(spacing.at(end)) * (2.0 / 3.0) {
                 break;
             }
             front_width += char_width;
-            front_end_ix = ix + c.len_utf8();
+            front_end_ix = end;
         }
+
+        let content_budget = content_budget(spacing.at(front_end_ix));
+        if content_budget <= px(0.) {
+            return Some((0, line.len()));
+        }
+        let back_budget = content_budget - content_budget * (2.0 / 3.0);
 
         let mut back_width = px(0.);
         let mut back_start_ix = line.len();
         for (ix, c) in line.char_indices().rev() {
-            let char_width = self.width_for_char(c);
+            let char_width = self.width_for_char(c) + spacing.after(line, ix, c);
             if back_width + char_width > back_budget {
                 break;
             }
@@ -300,24 +303,10 @@ impl LineWrapper {
     }
 
     /// Truncate a line of text to the given width with this wrapper's font and font size.
-    /// Character widths include the letter spacing of the first run.
+    ///
+    /// Widths include the letter spacing of each character's run in `runs`, as in the shaped
+    /// line (see [`Self::should_truncate_line`]).
     pub fn truncate_line<'a>(
-        &mut self,
-        line: SharedString,
-        truncate_width: Pixels,
-        truncation_affix: &str,
-        runs: &'a [TextRun],
-        truncate_from: TruncateFrom,
-    ) -> (SharedString, Cow<'a, [TextRun]>) {
-        let spacing = runs.first().map_or(Pixels::ZERO, |run| run.letter_spacing);
-        let previous = std::mem::replace(&mut self.letter_spacing, spacing);
-        let result =
-            self.truncate_line_spaced(line, truncate_width, truncation_affix, runs, truncate_from);
-        self.letter_spacing = previous;
-        result
-    }
-
-    fn truncate_line_spaced<'a>(
         &mut self,
         line: SharedString,
         truncate_width: Pixels,
@@ -327,7 +316,7 @@ impl LineWrapper {
     ) -> (SharedString, Cow<'a, [TextRun]>) {
         if truncate_from == TruncateFrom::Middle {
             if let Some((front_end_ix, back_start_ix)) =
-                self.should_truncate_line_middle(&line, truncate_width, truncation_affix)
+                self.should_truncate_line_middle(&line, truncate_width, truncation_affix, runs)
             {
                 let result = SharedString::from(format!(
                     "{}{truncation_affix}{}",
@@ -348,7 +337,7 @@ impl LineWrapper {
         }
 
         if let Some(truncate_ix) =
-            self.should_truncate_line(&line, truncate_width, truncation_affix, truncate_from)
+            self.should_truncate_line(&line, truncate_width, truncation_affix, runs, truncate_from)
         {
             let result = match truncate_from {
                 TruncateFrom::Start => SharedString::from(format!(
@@ -376,33 +365,11 @@ impl LineWrapper {
     /// (`width * max_lines`), this method accounts for word-boundary wrapping:
     /// it walks through characters once, tracking wrap boundaries and the
     /// truncation point simultaneously. When text overflows on the last
-    /// allowed line, it truncates there and appends the affix.
+    /// allowed line, it truncates there and appends the affix. Widths include
+    /// the letter spacing of each character's run in `runs`, as in the shaped line.
     ///
     /// For `max_lines == 1`, this delegates to `truncate_line`.
     pub fn truncate_wrapped_line<'a>(
-        &mut self,
-        text: SharedString,
-        wrap_width: Pixels,
-        max_lines: usize,
-        truncation_affix: &str,
-        runs: &'a [TextRun],
-        truncate_from: TruncateFrom,
-    ) -> (SharedString, Cow<'a, [TextRun]>) {
-        let spacing = runs.first().map_or(Pixels::ZERO, |run| run.letter_spacing);
-        let previous = std::mem::replace(&mut self.letter_spacing, spacing);
-        let result = self.truncate_wrapped_line_spaced(
-            text,
-            wrap_width,
-            max_lines,
-            truncation_affix,
-            runs,
-            truncate_from,
-        );
-        self.letter_spacing = previous;
-        result
-    }
-
-    fn truncate_wrapped_line_spaced<'a>(
         &mut self,
         text: SharedString,
         wrap_width: Pixels,
@@ -424,10 +391,8 @@ impl LineWrapper {
             return self.truncate_line(text, wrap_width, truncation_affix, runs, truncate_from);
         }
 
-        let affix_width: Pixels = truncation_affix
-            .chars()
-            .map(|c| self.width_for_char(c))
-            .sum();
+        let mut spacing = RunSpacing::new(runs);
+        let affix = self.affix(truncation_affix);
 
         let mut width = px(0.);
         let mut line = 0usize;
@@ -470,7 +435,7 @@ impl LineWrapper {
                 continue;
             }
 
-            let char_width = self.width_for_char(c);
+            let char_width = self.width_for_char(c) + spacing.after(&text, ix, c);
 
             if Self::is_break_candidate(prev_c, c, first_non_whitespace_ix.is_some()) {
                 last_candidate_ix = ix;
@@ -508,9 +473,11 @@ impl LineWrapper {
                 }
             } else {
                 // On the last line: track the furthest point where the affix
-                // still fits, and stop as soon as the line overflows.
-                if width + affix_width <= wrap_width {
-                    truncate_ix = ix + c.len_utf8();
+                // still fits, and stop as soon as the line overflows. The affix
+                // replaces the character after `c` and ends the line.
+                let end = ix + c.len_utf8();
+                if width + affix.width(spacing.at(end), false) <= wrap_width {
+                    truncate_ix = end;
                 }
 
                 if width > wrap_width {
@@ -533,6 +500,14 @@ impl LineWrapper {
 
         // Text fits within max_lines without truncation.
         (text, Cow::Borrowed(runs))
+    }
+
+    /// The advance and grapheme-cluster count of a truncation affix.
+    fn affix(&mut self, affix: &str) -> Affix {
+        Affix {
+            advance: affix.chars().map(|c| self.width_for_char(c)).sum(),
+            clusters: affix.graphemes(true).count(),
+        }
     }
 
     /// Any character in this list should be treated as a word character,
@@ -686,14 +661,8 @@ impl LineWrapper {
         )
     }
 
-    /// The advance of `c` plus the letter spacing of the truncation in progress.
     #[inline(always)]
     fn width_for_char(&mut self, c: char) -> Pixels {
-        self.advance_for_char(c) + self.letter_spacing
-    }
-
-    #[inline(always)]
-    fn advance_for_char(&mut self, c: char) -> Pixels {
         if (c as u32) < 128 {
             if let Some(cached_width) = self.cached_ascii_char_widths[c as usize] {
                 cached_width
@@ -713,6 +682,89 @@ impl LineWrapper {
             self.cached_other_char_widths.insert(c, width);
             width
         }
+    }
+}
+
+/// The letter spacing of the runs over a line's bytes, looked up cheaply for byte indices
+/// visited in order, forward or backward.
+struct RunSpacing<'a> {
+    runs: &'a [TextRun],
+    run_ix: usize,
+    run_start: usize,
+}
+
+impl<'a> RunSpacing<'a> {
+    fn new(runs: &'a [TextRun]) -> Self {
+        // Unspaced text skips every lookup and grapheme check.
+        let runs = if runs.iter().all(|run| run.letter_spacing == Pixels::ZERO) {
+            &[]
+        } else {
+            runs
+        };
+        Self {
+            runs,
+            run_ix: 0,
+            run_start: 0,
+        }
+    }
+
+    /// The spacing of the run covering byte `ix`; zero past the last run.
+    fn at(&mut self, ix: usize) -> Pixels {
+        while ix < self.run_start && self.run_ix > 0 {
+            self.run_ix -= 1;
+            self.run_start -= self.runs[self.run_ix].len;
+        }
+        while let Some(run) = self.runs.get(self.run_ix)
+            && ix >= self.run_start + run.len
+        {
+            self.run_start += run.len;
+            self.run_ix += 1;
+        }
+        self.runs
+            .get(self.run_ix)
+            .map_or(Pixels::ZERO, |run| run.letter_spacing)
+    }
+
+    /// The spacing after the character `c` at byte `ix` of `text`, as in the shaped line: its
+    /// run's spacing where another grapheme cluster follows on the same line, zero inside a
+    /// cluster and after the line's last cluster.
+    fn after(&mut self, text: &str, ix: usize, c: char) -> Pixels {
+        let spacing = self.at(ix);
+        let end = ix + c.len_utf8();
+        if spacing == Pixels::ZERO
+            || end >= text.len()
+            || text.as_bytes()[end] == b'\n'
+            || !is_grapheme_boundary(text, end)
+        {
+            Pixels::ZERO
+        } else {
+            spacing
+        }
+    }
+}
+
+fn is_grapheme_boundary(text: &str, ix: usize) -> bool {
+    GraphemeCursor::new(ix, text.len(), true)
+        .is_boundary(text, 0)
+        .unwrap_or(true)
+}
+
+/// The advance and grapheme-cluster count of a truncation affix.
+struct Affix {
+    advance: Pixels,
+    clusters: usize,
+}
+
+impl Affix {
+    /// The affix's width with `spacing` after each of its clusters, except the last when
+    /// nothing follows the affix.
+    fn width(&self, spacing: Pixels, followed: bool) -> Pixels {
+        let spaced = if followed {
+            self.clusters
+        } else {
+            self.clusters.saturating_sub(1)
+        };
+        self.advance + spacing * spaced as f32
     }
 }
 

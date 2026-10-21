@@ -1536,4 +1536,55 @@ mod letter_spacing_truncation {
         assert_eq!(truncated(0.).as_ref(), "lorem ipsum…");
         assert_eq!(truncated(4.).as_ref(), "lorem i…");
     }
+
+    #[test]
+    fn truncation_uses_each_runs_spacing_and_none_after_the_last_cluster() {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let font = font("Test Sans");
+        let spaced = |text: &str, spacing: f32| TextRun {
+            letter_spacing: px(spacing),
+            ..run_of(text, &font)
+        };
+        let truncate = |text: &str, runs: &[TextRun], width: f32, from: TruncateFrom| {
+            let (line, _) = system.line_wrapper(font.clone(), px(16.)).truncate_line(
+                SharedString::from(text.to_string()),
+                px(width),
+                "…",
+                runs,
+                from,
+            );
+            line
+        };
+
+        // "lorem " is unspaced (8 px per character), "ipsum dolor" takes 4 px: "lorem ips" is
+        // 84 px and the closing ellipsis 8 px, while "lorem ipsu" plus it would be 104 px.
+        let runs = [spaced("lorem ", 0.), spaced("ipsum dolor", 4.)];
+        assert_eq!(
+            truncate("lorem ipsum dolor", &runs, 100., TruncateFrom::End).as_ref(),
+            "lorem ips…"
+        );
+
+        // Truncating from the start keeps the unspaced "dolor" (40 px) after an ellipsis that
+        // takes the 4 px of the spaced run it replaces (12 px).
+        let runs = [spaced("lorem ipsum ", 4.), spaced("dolor", 0.)];
+        assert_eq!(
+            truncate("lorem ipsum dolor", &runs, 60., TruncateFrom::Start).as_ref(),
+            "…dolor"
+        );
+
+        // Middle truncation counts the 20 px after "u" of the kept end: only "m" fits.
+        let runs = [spaced("lorem ", 0.), spaced("ipsum", 20.)];
+        assert_eq!(
+            truncate("lorem ipsum", &runs, 70., TruncateFrom::Middle).as_ref(),
+            "lorem…m"
+        );
+
+        // Ten characters at 10 px are 98 px wide: nothing follows the last one.
+        let runs = [spaced("alpha beta", 2.)];
+        assert_eq!(
+            truncate("alpha beta", &runs, 99., TruncateFrom::End).as_ref(),
+            "alpha beta"
+        );
+    }
 }
