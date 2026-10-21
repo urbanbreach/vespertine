@@ -237,11 +237,6 @@ impl PointerState {
         Self::index(button).is_some_and(|index| self.held[index])
     }
 
-    /// Whether the page was last told the pointer is inside it.
-    pub fn is_inside(&self) -> bool {
-        self.inside
-    }
-
     /// A button press at `position` (relative to the page origin).
     ///
     /// Back and forward buttons over the page are consumed and ignored. A forwarded press is
