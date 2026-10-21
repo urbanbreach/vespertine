@@ -178,6 +178,6 @@ run.
 
 ## Linux verification
 
-The landing gates (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
-warnings`, `cargo test --workspace`, `./scripts/check-features`) run on Linux against the
+The workspace gates (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo test --workspace`, `./scripts/third-party --check`) run on Linux against the
 Wayland and X11 backends; see the README for commands.

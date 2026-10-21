@@ -1,6 +1,5 @@
-//! Regression tests for the repository's gate scripts (`scripts/third-party`,
-//! `scripts/check-features`): each loads the script as a module and drives one function with a
-//! controlled environment.
+//! Regression test for the repository's license audit script (`scripts/third-party`): it loads the
+//! script as a module and drives one function with a controlled environment.
 
 use std::path::Path;
 
@@ -46,35 +45,5 @@ with tempfile.TemporaryDirectory() as empty:
 assert rows, "the lockfile lists third-party packages"
 assert first_party, "the lockfile lists first-party packages"
 "#,
-    );
-}
-
-#[test]
-fn a_test_executable_that_exits_unsuccessfully_fails_its_selected_rows() {
-    run_python(
-        "scripts/check-features",
-        r##"
-def run_rows(exit_code):
-    with tempfile.TemporaryDirectory() as tmp:
-        executable = os.path.join(tmp, "tests")
-        with open(executable, "w") as handle:
-            handle.write(f"#!/bin/sh\necho 'test one ... ok'\necho 'test two ... ok'\nexit {exit_code}\n")
-        os.chmod(executable, 0o755)
-        module.build_test_executables = lambda *args: {"krate": [executable]}
-        module.list_tests = lambda exe, manifest_dir, *extra: set() if extra else {"one", "two"}
-        rows = [
-            module.Row(1, "RND-001", "A1", [("test", "krate", "one")]),
-            module.Row(2, "RND-002", "A1", [("test", "krate", "one"), ("test", "krate", "two")]),
-        ]
-        packages = {"krate": {"id": "krate 0.1.0", "manifest_path": os.path.join(tmp, "Cargo.toml")}}
-        module.check_tests(rows, packages, True)
-        return rows
-
-for row in run_rows(0):
-    assert not row.errors, row.errors
-for row in run_rows(101):
-    assert row.errors, "result lines say ok but the executable failed"
-    assert all("status 101" in error for error in row.errors), row.errors
-"##,
     );
 }

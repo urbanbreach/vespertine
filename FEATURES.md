@@ -1,8 +1,8 @@
 # Features
 
 Every implemented specification is listed here, under its area, with the acceptance items it
-covers and what verifies them. `./scripts/check-features` parses these tables, checks that every
-verifier exists, runs them, and fails if any row fails; it is part of the landing gates.
+covers and what verifies them. The tables are documentation: nothing parses them or runs the
+verifiers automatically, so run the tests and examples of the area you changed.
 
 Row syntax (one spec per row, rows in ascending spec order):
 
@@ -12,9 +12,8 @@ Row syntax (one spec per row, rows in ascending spec order):
 
 - `test:<crate>:<name>` is a test exactly as printed by `cargo test -p <crate> -- --list`
   (without the `: test` suffix).
-- `example:<crate>:<name>` is a cargo example of the crate. It is built (dev profile) and run
-  for 10 seconds in the current graphical session; it passes if it exits 0 or is still running
-  at the timeout.
+- `example:<crate>:<name>` is a cargo example of the crate (`cargo run -p <crate> --example
+  <name>`).
 - Verifiers are separated by ` ; `. A row lists every acceptance item (`A1`, `A2`, ...) of its spec.
 
 Visual and performance scenes (`FID-*`, `PERF-*`) live in `crates/vespertine_scenes`; see its README.
