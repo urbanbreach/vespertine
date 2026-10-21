@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use vespertine::{
-    AppContext, Bounds, Context, Entity, InteractiveElement, IntoElement, Modifiers, MouseButton,
-    NavigationDirection, ParentElement, Pixels, Point, Render, Styled, TestAppContext,
+    AppContext, Bounds, Context, Entity, Focusable, InteractiveElement, IntoElement, Modifiers,
+    MouseButton, NavigationDirection, ParentElement, Pixels, Point, Render, Styled, TestAppContext,
     VisualTestContext, Window, div, point,
 };
 use vespertine_components::browser::{BrowserSurface, Presentation};
@@ -181,11 +181,8 @@ impl Fixture {
     /// Whether the address field has keyboard focus.
     pub fn address_focused(&self, cx: &mut VisualTestContext) -> bool {
         cx.update(|window, app| {
-            self.surface
-                .read(app)
-                .address()
-                .read(app)
-                .is_focused(window)
+            let address = self.surface.read(app).address().read(app);
+            address.focus_handle(app).is_focused(window)
         })
     }
 

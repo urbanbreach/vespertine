@@ -6,6 +6,7 @@
 //! private to the browser surface. An embedder may still hand an explicit [`BrowserTheme`] to
 //! `BrowserSurface::set_theme`.
 
+use crate::text::FieldTheme;
 use vespertine::{App, Hsla, Pixels, px};
 use vespertine_theme::{
     appearance::{ActiveTheme, try_theme_of},
@@ -63,6 +64,22 @@ impl BrowserTheme {
         match try_theme_of(cx) {
             Some(theme) => Self::from_theme(theme),
             None => Self::default(),
+        }
+    }
+
+    /// The roles of the address field's editor: the page background behind it, the strong
+    /// border as the half-opaque selection wash.
+    pub(super) fn field_theme(&self) -> FieldTheme {
+        FieldTheme {
+            text: self.text,
+            faint: self.faint,
+            muted: self.muted,
+            selection: self.strong_border.opacity(0.5),
+            caret: self.text,
+            surface: self.page_background,
+            border: self.border,
+            accent: self.strong_border,
+            disabled_surface: self.raised,
         }
     }
 }

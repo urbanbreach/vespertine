@@ -13,7 +13,6 @@
 //! create a surface with [`BrowserSurface::new`], set its presentation (a surface is hidden until
 //! the embedder says otherwise; see [`Presentation::for_host`]) and navigate it.
 
-pub mod address_input;
 pub mod menu;
 pub mod model;
 pub mod shortcuts;
@@ -21,7 +20,6 @@ pub mod surface;
 pub mod theme;
 mod widgets;
 
-pub use address_input::{AddressEvent, AddressInput};
 pub use menu::{MenuCommand, MenuState, command_for_action};
 pub use model::{
     allowed_frame_navigation, allowed_navigation, loopback, normalize_address,

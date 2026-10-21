@@ -1,7 +1,6 @@
 //! The browser surface entity (CMP-022): toolbar, validation row, body (page frame or
 //! placeholder) and the page-provided menu around one embedded [`WebPage`].
 
-use super::address_input::{AddressEvent, AddressInput};
 use super::menu::{MenuCard, MenuCommand, MenuState, command_for_action, menu_card};
 use super::model::{allowed_navigation, normalize_address};
 use super::shortcuts::{
@@ -10,6 +9,7 @@ use super::shortcuts::{
 };
 use super::theme::{BrowserMetrics, BrowserTheme};
 use super::widgets::{globe, icon_button, tooltip};
+use crate::text::{TextField, TextFieldEvent};
 use std::rc::Rc;
 use vespertine::{
     AnyElement, App, AppContext, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle,
@@ -88,7 +88,9 @@ pub type ExternalOpener = Rc<dyn Fn(&str, &mut App)>;
 /// An embedded browser: chrome around one web page.
 pub struct BrowserSurface {
     page: Entity<WebPage>,
-    address: Entity<AddressInput>,
+    address: Entity<TextField>,
+    /// Set while a replacement of the text by the surface itself is reported by the field.
+    replacing_text: bool,
     /// The page state as last seen (a mirror of the page's state, kept in sync on every change).
     pub state: PageState,
     validation: Option<String>,
@@ -120,7 +122,15 @@ impl BrowserSurface {
     /// embedder calls [`BrowserSurface::set_presentation`] (R16).
     pub fn new(context: BrowserContext, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let page = cx.new(|cx| WebPage::new(context, window, cx));
-        let address = cx.new(|cx| AddressInput::new(ADDRESS_PLACEHOLDER, window, cx));
+        let metrics = BrowserMetrics::default();
+        let address = cx.new(|cx| {
+            TextField::new(window, cx)
+                .chromeless()
+                .tab_stop(false)
+                .placeholder(ADDRESS_PLACEHOLDER)
+                .accessible_label("Address")
+                .text_metrics(metrics.address_text_size, metrics.address_line_height)
+        });
         let address_focus = address.read(cx).focus_handle(cx);
         let subscriptions = vec![
             cx.subscribe_in(&page, window, Self::page_event),
@@ -137,13 +147,14 @@ impl BrowserSurface {
         Self {
             page,
             address,
+            replacing_text: false,
             state,
             validation: None,
             edited: false,
             menu: None,
             menu_scroll: ScrollHandle::new(),
             theme: None,
-            metrics: BrowserMetrics::default(),
+            metrics,
             shortcuts: BrowserShortcuts::default(),
             empty_title: "Enter an address".to_owned(),
             empty_description: "Open a website or a local web app beside your content.".to_owned(),
@@ -161,7 +172,7 @@ impl BrowserSurface {
     }
 
     /// The address field entity.
-    pub fn address(&self) -> &Entity<AddressInput> {
+    pub fn address(&self) -> &Entity<TextField> {
         &self.address
     }
 
@@ -182,7 +193,7 @@ impl BrowserSurface {
 
     /// The text of the address field.
     pub fn address_text<'a>(&self, cx: &'a App) -> &'a str {
-        self.address.read(cx).text()
+        self.address.read(cx).value_text()
     }
 
     /// The open page menu, if any.
@@ -267,8 +278,9 @@ impl BrowserSurface {
     /// called with `None`) the roles follow the active THM-003 theme.
     pub fn set_theme(&mut self, theme: impl Into<Option<BrowserTheme>>, cx: &mut Context<Self>) {
         let theme = theme.into();
+        let field_theme = theme.as_ref().map(BrowserTheme::field_theme);
         self.address
-            .update(cx, |address, cx| address.set_theme(theme.clone(), cx));
+            .update(cx, |address, cx| address.set_theme(field_theme, cx));
         self.theme = theme;
         cx.notify();
     }
@@ -282,6 +294,9 @@ impl BrowserSurface {
 
     /// Replaces the metrics of the chrome (R2, R12).
     pub fn set_metrics(&mut self, metrics: BrowserMetrics, cx: &mut Context<Self>) {
+        self.address.update(cx, |address, cx| {
+            address.set_text_metrics(metrics.address_text_size, metrics.address_line_height, cx)
+        });
         self.metrics = metrics;
         cx.notify();
     }
@@ -341,8 +356,7 @@ impl BrowserSurface {
             Ok(url) => {
                 self.validation = None;
                 self.close_menu(cx);
-                self.address
-                    .update(cx, |address, cx| address.set_text(&url, window, cx));
+                self.set_address_text(&url, window, cx);
                 self.edited = false;
                 self.page
                     .update(cx, |page, cx| page.navigate_to(url, window, cx));
@@ -355,10 +369,8 @@ impl BrowserSurface {
     /// Focuses the address field and selects its text (R10).
     pub fn focus_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_menu(cx);
-        let handle = self.address.read(cx).focus_handle(cx);
-        window.focus(&handle, cx);
         self.address
-            .update(cx, |address, cx| address.select_all(window, cx));
+            .update(cx, |address, cx| address.focus_and_select_all(window, cx));
         cx.notify();
     }
 
@@ -450,16 +462,15 @@ impl BrowserSurface {
             )
         };
         self.state = state;
-        let (focused, text) = {
-            let address = self.address.read(cx);
-            (address.is_focused(window), address.text().to_owned())
-        };
+        let (focused, text) = (
+            self.address_focused(window, cx),
+            self.address.read(cx).value_text().to_owned(),
+        );
         if !focused
             && let Some(url) = self.state.url.clone()
             && url != text
         {
-            self.address
-                .update(cx, |address, cx| address.set_text(&url, window, cx));
+            self.set_address_text(&url, window, cx);
             self.edited = false;
         } else {
             let url = self.state.url.as_deref().unwrap_or("");
@@ -479,33 +490,56 @@ impl BrowserSurface {
 
     fn address_event(
         &mut self,
-        _address: &Entity<AddressInput>,
-        event: &AddressEvent,
+        _address: &Entity<TextField>,
+        event: &TextFieldEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
-            AddressEvent::Edited => {
+            // Gaining focus selects the whole text (R10).
+            TextFieldEvent::Focused => {
+                self.address
+                    .update(cx, |address, cx| address.select_all(window, cx));
+            }
+            TextFieldEvent::Changed(_) => {
+                // The change of a programmatic replacement is not an edit by the user.
+                if std::mem::take(&mut self.replacing_text) {
+                    return;
+                }
                 self.validation = None;
-                let text = self.address.read(cx).text();
+                let text = self.address.read(cx).value_text();
                 self.edited = text != self.state.url.as_deref().unwrap_or("");
                 cx.notify();
             }
-            AddressEvent::Submit => {
-                let text = self.address.read(cx).text().to_owned();
-                self.navigate(&text, window, cx);
+            TextFieldEvent::Submitted(text) => {
+                self.navigate(text, window, cx);
             }
-            AddressEvent::Escape => {
+            TextFieldEvent::Cancelled => {
                 let url = self.state.url.clone().unwrap_or_default();
-                self.address
-                    .update(cx, |address, cx| address.set_text(&url, window, cx));
+                self.set_address_text(&url, window, cx);
                 self.edited = false;
                 self.validation = None;
                 let page_focus = self.page.read(cx).focus_handle().clone();
                 window.focus(&page_focus, cx);
                 cx.notify();
             }
+            _ => {}
         }
+    }
+
+    /// Replaces the address text without an edited notification to the user-edit handling.
+    fn set_address_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.address.read(cx).value_text().to_owned();
+        self.address
+            .update(cx, |address, cx| address.set_value(text, window, cx));
+        // The field reports a change only when the text differs; the handler skips that report.
+        if self.address.read(cx).value_text() != before {
+            self.replacing_text = true;
+        }
+    }
+
+    fn address_focused(&self, window: &Window, cx: &App) -> bool {
+        self.address.read(cx).focus_handle(cx).is_focused(window)
     }
 
     // ---- page menu (R14) --------------------------------------------------------------------
@@ -600,7 +634,7 @@ impl BrowserSurface {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let metrics = &self.metrics;
-        let focused = self.address.read(cx).is_focused(window);
+        let focused = self.address_focused(window, cx);
         let show_go = focused || self.edited;
         let border = if self.validation.is_some() {
             theme.danger
@@ -631,7 +665,13 @@ impl BrowserSurface {
             .line_height(metrics.address_line_height)
             .text_color(theme.text)
             .child(globe(metrics.globe_size, theme.muted))
-            .child(self.address.clone())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.address.clone()),
+            )
             .when(show_go, |field| {
                 field.child(
                     div()
@@ -656,7 +696,7 @@ impl BrowserSurface {
                             cx.stop_propagation();
                         })
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            let text = this.address.read(cx).text().to_owned();
+                            let text = this.address.read(cx).value_text().to_owned();
                             this.navigate(&text, window, cx);
                         }))
                         .child("→"),

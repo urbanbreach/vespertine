@@ -148,7 +148,7 @@ fn focusing_the_address_selects_all_text(cx: &mut TestAppContext) {
     assert!(fixture.address_focused(cx) && !fixture.page_focused(cx));
     let (text, selection) = cx.update(|_, app| {
         let address = fixture.surface.read(app).address().read(app);
-        (address.text().to_owned(), address.selection())
+        (address.value_text().to_owned(), address.selected_range())
     });
     assert_eq!(text, "https://example.test/a");
     assert_eq!(selection, 0..text.len());
@@ -161,7 +161,14 @@ fn focusing_the_address_selects_all_text(cx: &mut TestAppContext) {
     let position = fixture.center(cx, "browser-address-field");
     cx.simulate_click(position, Modifiers::none());
     assert!(fixture.address_focused(cx));
-    let selection = cx.update(|_, app| fixture.surface.read(app).address().read(app).selection());
+    let selection = cx.update(|_, app| {
+        fixture
+            .surface
+            .read(app)
+            .address()
+            .read(app)
+            .selected_range()
+    });
     assert_eq!(selection, 0..text.len());
 }
 
@@ -346,12 +353,12 @@ fn the_address_field_edits_text_with_selection_clipboard_and_composition(cx: &mu
         })
     });
     assert_eq!(fixture.address_text(cx), "日本語");
-    // Pasted line breaks never reach the single-line field.
+    // Pasted line breaks never reach the single-line field: each becomes one space.
     cx.update(|_, app| {
         app.write_to_clipboard(vespertine::ClipboardItem::new_string("a\nb".into()))
     });
     cx.simulate_keystrokes("ctrl-a ctrl-v");
-    assert_eq!(fixture.address_text(cx), "ab");
+    assert_eq!(fixture.address_text(cx), "a b");
 }
 
 #[vespertine::test]
