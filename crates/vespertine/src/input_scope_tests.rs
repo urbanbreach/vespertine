@@ -1070,3 +1070,34 @@ fn a_modal_scope_blocks_window_level_listeners_above_it_but_not_app_level_action
         "reverse enters at the last"
     );
 }
+
+#[crate::test]
+fn actions_handled_only_above_a_modal_scope_are_unavailable_inside_it(cx: &mut TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_, cx| ModalScopeView {
+        outside: cx.focus_handle().tab_stop(true),
+        first: cx.focus_handle().tab_stop(true),
+        second: cx.focus_handle().tab_stop(true),
+        scope: cx.focus_handle(),
+        log: Rc::default(),
+    });
+    let (outside, first) = view.read_with(cx, |view, _| (view.outside.clone(), view.first.clone()));
+    let availability = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let listed = window
+                .available_actions(cx)
+                .iter()
+                .any(|action| action.partial_eq(&ScopeProbe));
+            (window.is_action_available(&ScopeProbe, cx), listed)
+        })
+    };
+
+    focus_and_draw(cx, &outside);
+    assert_eq!(availability(cx), (true, true), "outside the scope");
+
+    focus_and_draw(cx, &first);
+    assert_eq!(
+        availability(cx),
+        (false, false),
+        "inside the scope the window-level handler above it is not dispatched"
+    );
+}

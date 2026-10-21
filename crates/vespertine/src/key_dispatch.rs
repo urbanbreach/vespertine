@@ -420,9 +420,12 @@ impl DispatchTree {
         false
     }
 
+    /// The actions handled along the dispatch path to `target`. Under a modal scope only the
+    /// listeners from the scope element down count, as in action dispatch.
     pub fn available_actions(&self, target: DispatchNodeId) -> Vec<Box<dyn Action>> {
         let mut actions = Vec::<Box<dyn Action>>::new();
-        for node_id in self.dispatch_path(target) {
+        let path = self.dispatch_path(target);
+        for node_id in &path[self.modal_scope_start(&path)..] {
             let node = &self.nodes[node_id.0];
             for DispatchActionListener { action_type, .. } in &node.action_listeners {
                 if let Err(ix) = actions.binary_search_by_key(action_type, |a| a.as_any().type_id())
@@ -439,18 +442,16 @@ impl DispatchTree {
         actions
     }
 
+    /// Whether `action` is handled along the dispatch path to `target`. Under a modal scope
+    /// only the listeners from the scope element down count, as in action dispatch.
     pub fn is_action_available(&self, action: &dyn Action, target: DispatchNodeId) -> bool {
-        for node_id in self.dispatch_path(target) {
-            let node = &self.nodes[node_id.0];
-            if node
+        let path = self.dispatch_path(target);
+        path[self.modal_scope_start(&path)..].iter().any(|node_id| {
+            self.nodes[node_id.0]
                 .action_listeners
                 .iter()
                 .any(|listener| listener.action_type == action.as_any().type_id())
-            {
-                return true;
-            }
-        }
-        false
+        })
     }
 
     /// Returns key bindings that invoke an action on the currently focused element. Bindings are
