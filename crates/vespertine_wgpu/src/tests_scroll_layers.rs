@@ -373,11 +373,10 @@ impl Host<Picture> {
     }
 }
 
-/// Tiles of a layer show what its content looks like now: an image updated in place and a
-/// changed background of the scroller reach them, whether the frame is presented again or the
-/// layer is repainted.
+/// Tiles of a layer show an image updated in place, whether the frame is presented again or
+/// the layer is repainted.
 #[test]
-fn a2_scroll_layer_tiles_follow_images_updated_in_place_and_a_new_background() {
+fn a2_scroll_layer_tiles_follow_images_updated_in_place() {
     let mut host = Host::open(
         Picture {
             image: Arc::new(RenderImage::new(solid_frames([220, 40, 40, 255]))),
@@ -406,20 +405,41 @@ fn a2_scroll_layer_tiles_follow_images_updated_in_place_and_a_new_background() {
     host.change(|picture| picture.image = updated);
     host.assert_same_pixels("image updated in place, page repainted");
 
-    // The background changes while the layer is in use.
-    host.wheel(-7.3);
-    host.wheel(-7.3);
-    host.change(|picture| picture.background = 0xdde8ff);
-    host.assert_same_pixels("scroller background changed");
-    for step in 0..3 {
-        host.wheel(-7.3);
-        host.assert_same_pixels(&format!("scroll after the background change, frame {step}"));
-    }
-
     let layered = host.layered;
     let layered = host.stats(layered);
     assert!(
         layered.layer_composites > 0,
         "the layered window composited tiles: {layered:?}"
     );
+}
+
+/// Tiles composited from the cache show a new background of the scroller when nothing else in
+/// the layer changed.
+#[test]
+fn a2_cached_scroll_layer_tiles_show_a_new_scroller_background() {
+    let mut host = Host::open(
+        Picture {
+            image: Arc::new(RenderImage::new(solid_frames([220, 40, 40, 255]))),
+            background: 0xffffff,
+        },
+        |picture| PicturePage { picture },
+    );
+    for _ in 0..6 {
+        host.wheel(-7.3);
+    }
+    let layered = host.layered;
+    let before = host.stats(layered);
+    for _ in 0..3 {
+        host.wheel(-7.3);
+    }
+    let cached = host.stats(layered);
+    assert!(
+        cached.layer_composites > before.layer_composites
+            && cached.tiles_rasterized == before.tiles_rasterized,
+        "the layer composited cached tiles: {before:?} {cached:?}"
+    );
+    host.change(|picture| picture.background = 0xdde8ff);
+    host.assert_same_pixels("scroller background changed");
+    host.wheel(-7.3);
+    host.assert_same_pixels("scrolled after the background change");
 }

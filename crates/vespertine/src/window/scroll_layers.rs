@@ -817,6 +817,11 @@ impl Window {
             (Some(layer), _) => {
                 layer.region = region;
                 layer.recorded = geometry;
+                if layer.background != background {
+                    // Every tile is cleared to the background, so none shows the content any
+                    // more, whatever its primitives hash to (R4, R5).
+                    layer.tiles.clear();
+                }
                 layer.background = background;
                 layer.cache_key = cache_key;
                 layer.scale = scale;
