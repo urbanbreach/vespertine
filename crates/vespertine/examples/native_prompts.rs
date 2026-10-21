@@ -1,5 +1,5 @@
 //! Native file prompts (open files, open folder, multiple selection, save) and external
-//! destinations (reveal in the file manager, open a link).
+//! destinations (reveal in the file manager, open a file, open a URL).
 //!
 //! Click into the "input" box, press a prompt button and cancel the native dialog: the
 //! example checks that the receiver reported cancellation, that the input value and preview
@@ -15,9 +15,9 @@ mod example_support;
 
 use std::path::PathBuf;
 use vespertine::{
-    App, Bounds, Context, Div, FocusHandle, Focusable, KeyDownEvent, Link, LinkTarget,
-    PathPromptFilter, PathPromptOptions, SharedString, Stateful, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    App, Bounds, Context, Div, FocusHandle, Focusable, KeyDownEvent, PathPromptFilter,
+    PathPromptOptions, SharedString, Stateful, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, size,
 };
 use vespertine_platform::application;
 
@@ -238,13 +238,13 @@ impl Render for NativePrompts {
                         )),
                     ),
             )
-            .child(div().flex().gap_2().child("Link:").child(Link::new(
-                "docs-link",
-                LinkTarget::with_default_policy(
-                    "xdg-desktop-portal documentation",
-                    "https://flatpak.github.io/xdg-desktop-portal/docs/",
-                ),
-            )))
+            .child(
+                button("open-docs", "Open documentation link").on_click(cx.listener(
+                    |_, _, _, cx| {
+                        cx.open_url("https://flatpak.github.io/xdg-desktop-portal/docs/");
+                    },
+                )),
+            )
             .child(
                 div()
                     .p_3()
