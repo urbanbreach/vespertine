@@ -61,7 +61,8 @@ cargo run -p vespertine --example hello_world
 
 ## Rendering effects and surfaces
 
-- `backdrop_blur` builds a frosted-glass panel that blurs the content painted before it.
+- `backdrop_blur` builds a frosted-glass panel with the `backdrop_blur` style, which blurs the
+  content painted before the panel.
 - `rounded_clip` sweeps text, an image and a gradient past the corners of a rounded content clip;
   `rounded_clip_limits` shows what the clip does not round (paths, decorations, shadows) and
   `rounded_clip_plain_solid` shows the plain-solid fill case.

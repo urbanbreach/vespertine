@@ -303,6 +303,10 @@ pub struct Style {
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
 
+    /// Gaussian sigma, in logical pixels, of the blur of what was painted behind the element
+    /// (see [`Styled::backdrop_blur`]).
+    pub backdrop_blur: Option<Pixels>,
+
     /// The text style of this element
     #[refineable]
     pub text: TextStyleRefinement,
@@ -969,6 +973,10 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
+        if let Some(sigma) = self.backdrop_blur {
+            window.paint_backdrop_blur(bounds, corner_radii, sigma);
+        }
+
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
         let background_color = self.background.as_ref().and_then(Fill::color);
@@ -1073,6 +1081,7 @@ impl Default for Style {
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            backdrop_blur: None,
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

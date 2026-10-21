@@ -1,13 +1,13 @@
-//! Frosted-glass panel made from the window's own content (RND-003): a striped pattern is
-//! painted, a rounded panel blurs everything painted before it, and the panel's tint, border
-//! and text composite crisply above the blurred region.
+//! Frosted-glass panel made from the window's own content (RND-003, RND-010): a striped
+//! pattern is painted, a rounded panel with the `backdrop_blur` style blurs everything painted
+//! before it, and the panel's tint, border and text composite crisply above the blurred region.
 
 #[path = "example_support/fonts.rs"]
 mod example_support;
 
 use vespertine::{
-    App, Bounds, Context, Corners, IntoElement, Render, Window, WindowBounds, WindowOptions,
-    canvas, div, fill, hsla, point, prelude::*, px, rgb, size,
+    App, Bounds, Context, IntoElement, Render, Window, WindowBounds, WindowOptions, canvas, div,
+    fill, hsla, point, prelude::*, px, rgb, size,
 };
 use vespertine_platform::application;
 
@@ -35,40 +35,27 @@ impl Render for BackdropBlurExample {
         .absolute()
         .size_full();
 
-        // Blur radius 16 logical pixels (device sigma 32 at scale factor 2).
-        let blur = canvas(
-            |_, _, _| (),
-            |bounds, _, window, _| {
-                window.paint_backdrop_blur(bounds, Corners::all(px(PANEL_RADIUS)), px(16.));
-            },
-        )
-        .absolute()
-        .size_full();
-
+        // Blur radius 16 logical pixels (device sigma 32 at scale factor 2), painted before the
+        // panel's own background, border and children.
         let panel = div()
             .absolute()
             .left(px(160.))
             .top(px(80.))
             .w(px(320.))
             .h(px(220.))
-            .child(blur)
+            .rounded(px(PANEL_RADIUS))
+            .backdrop_blur(px(16.))
+            .border_1()
+            .border_color(hsla(0., 0., 1., 0.5))
+            .bg(hsla(0., 0., 1., 0.10))
             .child(
                 div()
                     .absolute()
-                    .size_full()
-                    .rounded(px(PANEL_RADIUS))
-                    .border_1()
-                    .border_color(hsla(0., 0., 1., 0.5))
-                    .bg(hsla(0., 0., 1., 0.10))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(30.))
-                            .top(px(40.))
-                            .text_size(px(32.))
-                            .text_color(rgb(0xFFFFFF))
-                            .child("Frosted panel"),
-                    ),
+                    .left(px(30.))
+                    .top(px(40.))
+                    .text_size(px(32.))
+                    .text_color(rgb(0xFFFFFF))
+                    .child("Frosted panel"),
             );
 
         div()

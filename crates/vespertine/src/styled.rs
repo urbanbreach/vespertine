@@ -802,6 +802,17 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Blurs what was painted behind this element within its bounds and corner radii, before
+    /// the element's shadows, background, children and border paint (frosted glass; paint a
+    /// translucent background over it as the tint). `sigma` is the standard deviation of the
+    /// Gaussian in logical pixels; zero or less paints no blur. The blur follows
+    /// [`Window::paint_backdrop_blur`](crate::Window::paint_backdrop_blur): the active content
+    /// masks clip it, while curved overflow clips, edge fades and opacity do not apply to it.
+    fn backdrop_blur(mut self, sigma: impl Into<crate::Pixels>) -> Self {
+        self.style().backdrop_blur = Some(sigma.into());
+        self
+    }
+
     /// Sets the grid columns of this element.
     fn grid_cols(mut self, cols: u16) -> Self {
         self.style().grid_cols = Some(GridTemplate {
