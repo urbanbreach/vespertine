@@ -8,10 +8,14 @@ use vespertine::{
     Render, Styled, Window, div, list, px, rgb,
 };
 use vespertine_components::streaming::{
-    Commit, Direction, FollowController, History, HistoryRow, ReaderSample, SampleService,
+    Commit, Direction, FollowController, History, HistoryRow, ReaderSample,
     history::EDGE_ROW_HEIGHT,
 };
 use vespertine_test_host::{HostOptions, TestHost, require_backend};
+
+#[path = "support/sample_service.rs"]
+mod sample_service;
+use sample_service::SampleService;
 
 const VIEWPORT: f32 = 300.0;
 

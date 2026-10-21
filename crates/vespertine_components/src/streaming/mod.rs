@@ -14,14 +14,13 @@ pub mod follow;
 pub mod history;
 pub mod overview;
 
-pub use controller::{Commit, FollowController, ViewportMemory, ViewportSnapshot};
+pub use controller::{Commit, FollowController};
 pub use follow::{
     FollowPolicy, NavigationTimeline, PinChange, Stepper, autoscroll_step, list_viewport_height,
     reservation_changed, reserved_height, teleport_excess,
 };
 pub use history::{
     Direction, History, HistoryCommit, HistoryRow, Landing, Page, ReaderSample, Request, Restore,
-    SampleService,
 };
 pub use overview::{
     Marker, OverviewState, Preview, active_marker, bucket_of, bucket_preview, rail_slots,

@@ -30,6 +30,10 @@
 //! parser, incremental parser, display repair and the document view) and the helpers of
 //! [`doc_theme`].
 
+// Lets the unit tests include `tests/support` files that name this crate by its package name.
+#[cfg(test)]
+extern crate self as vespertine_components;
+
 pub mod audio;
 pub mod badges;
 pub mod browser;

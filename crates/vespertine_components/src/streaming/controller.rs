@@ -5,7 +5,7 @@
 //! The controller never interprets a position change it caused itself as user intent: only the
 //! list's user-initiated scroll notification (wheel and touch) reaches the policy (R2).
 
-use std::{cell::RefCell, collections::VecDeque, ops::Range, rc::Rc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use vespertine::{App, ListOffset, ListScrollEvent, ListState, MotionClock, Window, px};
 
@@ -27,8 +27,6 @@ const HOLD_RETAIN: f32 = 0.85;
 const NAV_OVERDRAW: f32 = 320.0;
 /// The pixel anchor materialized above the glued bottom (R8).
 const GLUE_ANCHOR: f32 = 0.75;
-/// Viewport memory is bounded (R16).
-const MEMORY_ENTRIES: usize = 256;
 
 /// A content commit applied to the list (R8).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,90 +41,6 @@ pub enum Commit {
     /// Rows replaced in place (same count, same identities, for example a streamed item
     /// finishing): re-measured retaining their old heights as hints, never spliced.
     ReplaceInPlace(Range<usize>),
-}
-
-/// The reader's remembered place of one conversation (R16).
-#[derive(Clone, Debug, PartialEq)]
-pub enum ViewportSnapshot<K> {
-    /// Follow the tail (stored when pinned).
-    FollowTail,
-    /// An anchored viewport: the identity of the top item, the offset within it and the distance
-    /// from the bottom.
-    Anchored {
-        /// Identity of the top item.
-        item: K,
-        /// Pixel offset within it.
-        offset: f32,
-        /// Distance from the bottom.
-        distance: f32,
-    },
-}
-
-/// Per-conversation viewport memory, bounded to 256 entries (the oldest evicted) (R16).
-#[derive(Clone, Debug)]
-pub struct ViewportMemory<C: Clone + Eq, K: Clone> {
-    entries: VecDeque<(C, ViewportSnapshot<K>)>,
-}
-
-impl<C: Clone + Eq, K: Clone> Default for ViewportMemory<C, K> {
-    fn default() -> Self {
-        Self {
-            entries: VecDeque::new(),
-        }
-    }
-}
-
-impl<C: Clone + Eq, K: Clone> ViewportMemory<C, K> {
-    /// Empty memory.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Remembers the place of `conversation`. An empty list (`row_count == 0`) never overwrites
-    /// an older snapshot.
-    pub fn remember(&mut self, conversation: C, snapshot: ViewportSnapshot<K>, row_count: usize) {
-        if row_count == 0 {
-            return;
-        }
-        self.entries.retain(|(key, _)| *key != conversation);
-        self.entries.push_back((conversation, snapshot));
-        while self.entries.len() > MEMORY_ENTRIES {
-            self.entries.pop_front();
-        }
-    }
-
-    /// The remembered place of `conversation`.
-    pub fn recall(&self, conversation: &C) -> Option<&ViewportSnapshot<K>> {
-        self.entries
-            .iter()
-            .find(|(key, _)| key == conversation)
-            .map(|(_, snapshot)| snapshot)
-    }
-
-    /// Retires a snapshot proved absent by an authoritative empty reset.
-    pub fn retire(&mut self, conversation: &C) {
-        self.entries.retain(|(key, _)| key != conversation);
-    }
-
-    /// Explicit user or navigation intent replaces a pending restore with follow-tail.
-    pub fn replace_with_follow_tail(&mut self, conversation: C) {
-        self.entries.retain(|(key, _)| *key != conversation);
-        self.entries
-            .push_back((conversation, ViewportSnapshot::FollowTail));
-        while self.entries.len() > MEMORY_ENTRIES {
-            self.entries.pop_front();
-        }
-    }
-
-    /// The number of remembered conversations.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether nothing is remembered.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -663,57 +577,6 @@ impl FollowController {
     pub fn clear_reservation(&self) {
         self.list.set_trailing_reservation(None);
         self.inner.borrow_mut().hold = None;
-    }
-
-    // Viewport save and restore (R16).
-
-    /// Saves the reader's place: follow-tail when pinned, else the anchored viewport. `key_of`
-    /// maps a row to its identity.
-    pub fn save_viewport<K>(
-        &self,
-        key_of: impl Fn(usize) -> Option<K>,
-    ) -> Option<ViewportSnapshot<K>> {
-        if self.is_pinned() {
-            return Some(ViewportSnapshot::FollowTail);
-        }
-        let top = self.list.logical_scroll_top();
-        key_of(top.item_ix).map(|item| ViewportSnapshot::Anchored {
-            item,
-            offset: f32::from(top.offset_in_item),
-            distance: self.distance_from_bottom(),
-        })
-    }
-
-    /// Restores a snapshot: follow-tail conversations resume following; an anchored snapshot
-    /// scrolls to the row `row_of` finds for the item.
-    pub fn restore_viewport<K>(
-        &self,
-        snapshot: &ViewportSnapshot<K>,
-        row_of: impl Fn(&K) -> Option<usize>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        match snapshot {
-            ViewportSnapshot::FollowTail => {
-                {
-                    let mut inner = self.inner.borrow_mut();
-                    inner.policy.set_pinned(true);
-                }
-                self.land();
-                let _ = cx;
-            }
-            ViewportSnapshot::Anchored { item, offset, .. } => {
-                if let Some(row) = row_of(item) {
-                    self.begin_scroll_navigation();
-                    self.list.scroll_to(ListOffset {
-                        item_ix: row,
-                        offset_in_item: px(*offset),
-                    });
-                    self.after_programmatic_move();
-                }
-            }
-        }
-        window.refresh();
     }
 
     // The per-frame stepper (R6, R7).
