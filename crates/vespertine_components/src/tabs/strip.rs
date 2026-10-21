@@ -518,6 +518,12 @@ impl TabStrip {
             .content_focus
             .get(id)
             .is_some_and(|focus| focus.contains_focused(window, cx));
+        // Keyboard focus on the closed tab's chip or close slot moves to a surviving chip, so
+        // Tab and Enter keep working from the strip.
+        let focus_on_chip = [self.focus.get(id), self.close_focus.get(id)]
+            .into_iter()
+            .flatten()
+            .any(|focus| focus.is_focused(window));
         self.tabs.remove(index);
         self.history.forget(&self.key, id);
         self.focus.remove(id);
@@ -542,6 +548,22 @@ impl TabStrip {
                 if let Some(focus) = target {
                     window.focus(focus, cx);
                 }
+            }
+        }
+        if focus_on_chip {
+            let target = if was_selected {
+                self.selected.clone()
+            } else {
+                self.tabs
+                    .get(index.min(self.tabs.len().saturating_sub(1)))
+                    .map(|tab| tab.id.clone())
+            };
+            if let Some(target) = target {
+                let focus = self
+                    .focus
+                    .entry(target)
+                    .or_insert_with(|| cx.focus_handle().tab_stop(true));
+                window.focus(focus, cx);
             }
         }
         self.flush_soon(window, cx);

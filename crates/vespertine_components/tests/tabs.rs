@@ -262,6 +262,45 @@ fn keyboard_users_reach_and_activate_the_close_slot_and_the_add_button(cx: &mut 
 }
 
 #[vespertine::test]
+fn closing_a_tab_from_its_focused_close_slot_moves_focus_to_a_surviving_chip(
+    cx: &mut TestAppContext,
+) {
+    let (fixture, cx) = setup(cx, &["a", "b", "c"], Some("a"), 600.0, |strip, _| strip);
+    let focused = |cx: &mut VisualTestContext| {
+        cx.update(|window, app| {
+            fixture
+                .strip
+                .read(app)
+                .focused_tab(window)
+                .map(ToString::to_string)
+        })
+    };
+    // An unselected tab (b): focus lands on its neighbour in the same place (c).
+    cx.update(|window, app| {
+        window.blur(app);
+        for _ in 0..4 {
+            window.focus_next(app);
+        }
+    });
+    redraw(cx);
+    press(cx, "enter");
+    assert_eq!(order(&fixture, cx), ["a", "c"]);
+    assert_eq!(focused(cx).as_deref(), Some("c"));
+
+    // The selected tab (a): focus lands on the chip that becomes selected.
+    cx.update(|window, app| {
+        window.blur(app);
+        window.focus_next(app);
+        window.focus_next(app);
+    });
+    redraw(cx);
+    press(cx, "enter");
+    assert_eq!(order(&fixture, cx), ["c"]);
+    assert_eq!(selected(&fixture, cx).as_deref(), Some("c"));
+    assert_eq!(focused(cx).as_deref(), Some("c"));
+}
+
+#[vespertine::test]
 fn a_press_that_starts_a_drag_does_not_select(cx: &mut TestAppContext) {
     let (fixture, cx) = setup(cx, &["a", "b", "c"], Some("a"), 600.0, |strip, _| strip);
     let from = tab_center(cx, "c");
