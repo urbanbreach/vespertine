@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use vespertine::prelude::FluentBuilder as _;
 use vespertine::{
     App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Pixels, Point, Render,
     RenderImage, Styled, Window, WindowBounds, WindowOptions, div, point, px, rgb, size,
@@ -63,7 +64,7 @@ impl Render for Viewer {
                     .flex_1()
                     .flex()
                     .min_h_0()
-                    .map_width(self.pane_width)
+                    .when_some(self.pane_width, |pane, width| pane.w(width))
                     .child(self.view.render(
                         self.image.clone(),
                         size(px(NATURAL.0), px(NATURAL.1)),
@@ -73,17 +74,6 @@ impl Render for Viewer {
             )
     }
 }
-
-trait MapWidth: Styled + Sized {
-    fn map_width(self, width: Option<Pixels>) -> Self {
-        match width {
-            Some(width) => self.w(width),
-            None => self,
-        }
-    }
-}
-
-impl MapWidth for vespertine::Div {}
 
 fn check(condition: bool, what: &str) {
     if !condition {

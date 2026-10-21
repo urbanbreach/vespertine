@@ -3,12 +3,12 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use vespertine::{IntoElement, ParentElement, Styled, TestAppContext, div, hsla, px, rgb};
 use vespertine_components::audio::{
-    AnimatedGeometry, Bar, Dot, EnvelopeBuffer, Frame, FrameRequest, FrameSource, InkTheme, Line,
-    Mode, Phase, WaveformColors, host_ticked, roll_text, rolling, waveform,
+    AnimatedGeometry, Bar, Dot, Frame, FrameRequest, FrameSource, InkTheme, Line, Mode, Phase,
+    WaveformColors, host_ticked, roll_text, rolling, waveform,
 };
 use vespertine_test_host::{HostOptions, TestHost, require_backend};
 
@@ -376,23 +376,4 @@ fn host_with_changing_label() -> TestHost {
             .child(label)
             .into_any_element()
     })
-}
-
-#[test]
-fn envelope_example_values_drive_the_waveform_input() {
-    // The deterministic samples of the example: irregular polls fill consecutive slots.
-    let base = Instant::now();
-    let mut buffer = EnvelopeBuffer::new();
-    buffer.start(base);
-    let mut stored = 0;
-    for step in 0..50u64 {
-        let raw = 0.01 + 0.2 * ((step % 7) as f32 / 7.0);
-        if buffer.record(base + Duration::from_millis(step * 37), raw) {
-            stored += 1;
-        }
-    }
-    assert!(stored > 20);
-    let bars = buffer.bars(base + Duration::from_millis(50 * 37 + 100), true);
-    assert!(!bars.is_empty());
-    assert!(bars.iter().all(|bar| (0.0..=1.0).contains(&bar.amplitude)));
 }

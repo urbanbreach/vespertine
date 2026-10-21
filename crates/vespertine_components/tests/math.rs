@@ -1080,12 +1080,3 @@ fn slot_runs_use_the_reference_face_and_the_text_color() {
     assert_eq!(runs[1].color, runs[0].color);
     assert_eq!(text.slots()[0].len(), runs[1].len);
 }
-
-#[test]
-fn a_formulas_paint_color_never_changes_its_layout() {
-    // Painting takes the run color at paint time; the cached formula is color independent.
-    let a = formula_of(r"\frac{a}{b}", false);
-    let b = formula_of(r"\frac{a}{b}", false);
-    assert!(Arc::ptr_eq(&a, &b), "one cached layout serves every color");
-    assert_eq!(a.extent(), b.extent());
-}

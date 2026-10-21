@@ -2,18 +2,17 @@
 //! run, an unfinished link, a half-streamed formula and an unclosed fence).
 //!
 //! Every frame appends the next piece. The example checks, at each step, that the stored source is
-//! exactly the appended text, that the canonical tree equals a full parse of it, that earlier
-//! blocks stay stable (their generation does not change) and that the display tree is repaired
-//! only where syntax hangs. At the end it checks the whole-document copy and the exact text of a
-//! selected code block, prints `ok` and exits when `MARKDOWN_STREAM_EXIT=1`; otherwise it keeps
-//! the finished document on screen.
+//! exactly the appended text; the canonical-tree, stable-prefix and repair checks are in the
+//! parser tests. At the end it checks the whole-document copy and the exact text of a selected
+//! code block, prints `ok` and exits when `MARKDOWN_STREAM_EXIT=1`; otherwise it keeps the
+//! finished document on screen.
 
 use std::time::Duration;
 use vespertine::{
     App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window,
     WindowBounds, WindowOptions, div, px, rgb, size,
 };
-use vespertine_components::markdown_doc::{BlockKind, Markdown, MarkdownDocument, parse};
+use vespertine_components::markdown_doc::{BlockKind, Markdown, MarkdownDocument};
 use vespertine_platform::application;
 use vespertine_richtext::{TextService, text_root};
 
@@ -64,7 +63,6 @@ impl Stream {
 
     fn step(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
         let piece = PIECES[self.fed];
-        let before: Vec<_> = self.document.tree();
         self.document.append(piece);
         self.fed += 1;
         let expected: String = PIECES[..self.fed].concat();
@@ -72,18 +70,6 @@ impl Stream {
             self.document.source(),
             expected,
             "the stored source is exactly the appended text"
-        );
-        assert_eq!(
-            self.document.tree(),
-            parse(&expected),
-            "canonical tree == full parse"
-        );
-        let stable = self.document.stable_prefix_blocks();
-        assert!(stable <= before.len());
-        assert_eq!(
-            self.document.tree()[..stable],
-            before[..stable],
-            "earlier rows stay stable"
         );
         cx.notify();
         self.fed == PIECES.len()
