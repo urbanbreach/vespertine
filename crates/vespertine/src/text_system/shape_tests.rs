@@ -900,7 +900,7 @@ mod paint_only_runs {
     fn lines_with_several_font_runs_are_shaped_in_full() {
         let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
         let system = text_system(&shaper);
-        let window = WindowTextSystem::new(system.clone());
+        let window = WindowTextSystem::new(system);
         let font = font("Test Sans");
         let text = "a streaming message begins with some ordinary words";
         let split = 10;
@@ -927,7 +927,7 @@ mod paint_only_runs {
         window.finish_frame();
         // The exact line (text, size and both font runs) is replayed from the previous
         // frame's used entries, without any new shaping.
-        window.reuse_layouts(index.clone()..window.layout_index());
+        window.reuse_layouts(index..window.layout_index());
         window.layout_line(&text, px(16.), &runs, None);
         assert_eq!(shaper.layout_calls.load(Ordering::SeqCst), shapes);
     }
