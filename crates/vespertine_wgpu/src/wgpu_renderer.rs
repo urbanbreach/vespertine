@@ -2043,16 +2043,6 @@ impl WgpuHeadlessRenderer {
         self.core.tiles.stats
     }
 
-    /// Tile textures currently cached.
-    pub fn cached_tiles(&self) -> usize {
-        self.core.tiles.cache.len()
-    }
-
-    /// Freed tile textures held for reuse.
-    pub fn pooled_tiles(&self) -> usize {
-        self.core.tiles.cache.pooled()
-    }
-
     /// Starts or stops recording the quad draw sequences of every frame (PRF-008).
     pub fn record_quad_fills(&mut self, enabled: bool) {
         self.core.fill_log = enabled.then(Vec::new);
