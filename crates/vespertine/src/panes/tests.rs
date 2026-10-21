@@ -1290,6 +1290,28 @@ fn reflow_does_not_restart_route_motion() {
 }
 
 #[test]
+fn retargeting_after_an_idle_period_starts_the_glide_from_rest() {
+    let mut h = surface_harness(false, point(px(0.), px(0.)), vec![]);
+    let state = h.surface(|s| s.state.clone());
+    h.advance(1000);
+    h.set_route(point(px(300.), px(120.)));
+    h.draw();
+    assert_eq!(
+        state.displayed_offset(),
+        point(px(0.), px(0.)),
+        "the first frame shows the surface where it rested"
+    );
+    h.advance(100);
+    h.draw();
+    let expected = glide_from_rest(300., 0.1, 0.42);
+    assert!(
+        (state.route_offset().x.0 - expected).abs() < 0.3,
+        "{} vs {expected}",
+        state.route_offset().x.0
+    );
+}
+
+#[test]
 fn route_reversal_keeps_entity_text_and_focus() {
     let mut h = surface_harness(false, point(px(0.), px(0.)), vec![]);
     let focus = h.surface(|s| s.focus.clone());

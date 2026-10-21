@@ -188,6 +188,24 @@ impl Element for MovingSurface {
             let mut inner = self.state.0.borrow_mut();
             let inner = &mut *inner;
             let route = self.route;
+            let route_duration = |route: Point<Pixels>| {
+                if route == Point::default() {
+                    self.returning
+                } else {
+                    self.docking
+                }
+            };
+
+            // Motion already in flight advances to now first, toward the route it was
+            // heading for, so a displacement added below starts from this frame.
+            let dt = inner
+                .last_time
+                .map_or(0.0, |last| now.saturating_sub(last).as_secs_f32());
+            inner.last_time = Some(now);
+            let mut moving =
+                inner
+                    .travel
+                    .advance(route_duration(inner.route), self.reflow, dt, reduced);
 
             // The surface's natural position is its slot origin plus the route it
             // is meant to rest at. A route change displaces the route glide by the
@@ -195,31 +213,27 @@ impl Element for MovingSurface {
             // (another pane opening, closing or resizing) displaces only the
             // reflow glide, so it never restarts or retargets the route motion.
             if let Some(previous) = inner.layout_origin {
+                let mut displaced = false;
                 if inner.route != route {
                     inner.route_retargets += 1;
                     let delta = inner.route - route;
                     inner.travel.displace([delta.x.0, delta.y.0], true);
+                    displaced = true;
                 }
                 let delta = previous - bounds.origin;
                 if delta != Point::default() {
                     inner.travel.displace([delta.x.0, delta.y.0], false);
+                    displaced = true;
+                }
+                if displaced {
+                    moving = inner
+                        .travel
+                        .advance(route_duration(route), self.reflow, 0.0, reduced);
                 }
             }
             inner.route = route;
             inner.layout_origin = Some(bounds.origin);
-
-            let dt = inner
-                .last_time
-                .map_or(0.0, |last| now.saturating_sub(last).as_secs_f32());
-            inner.last_time = Some(now);
-            let route_duration = if route == Point::default() {
-                self.returning
-            } else {
-                self.docking
-            };
-            inner.moving = inner
-                .travel
-                .advance(route_duration, self.reflow, dt, reduced);
+            inner.moving = moving;
             let [dx, dy] = inner.travel.displacement();
             let travel_now = point(route.x + Pixels(dx), route.y + Pixels(dy));
 
