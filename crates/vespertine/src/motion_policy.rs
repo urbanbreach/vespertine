@@ -111,8 +111,16 @@ impl App {
     /// reduced-motion flag. Installs the policy state if it is missing.
     fn update_motion_policy(&mut self, update: impl FnOnce(&mut MotionState)) {
         let state = self.ensure_motion_state();
+        let gentle_cue = state.policy.system_only_reduction();
         update(state);
         let resolved = state.policy.resolve();
+        let gentle_cue_changed = state.policy.system_only_reduction() != gentle_cue;
+        if resolved == self.reduce_motion() && gentle_cue_changed {
+            // Activity indicators switch between the gentle cue and frozen without a change of
+            // the reduced-motion flag; settle them as a flag change would.
+            self.clear_animation_leases();
+            self.refresh_windows();
+        }
         self.set_reduce_motion(resolved);
     }
 
@@ -424,6 +432,38 @@ mod tests {
         );
         assert!(!cx.update(|cx| cx.animation_clock_is_running()));
         assert_eq!(cx.update(|cx| cx.animation_lease_count()), 0);
+    }
+
+    #[vespertine::test]
+    fn leaving_forced_reduction_under_system_reduction_resumes_the_gentle_cue(
+        cx: &mut TestAppContext,
+    ) {
+        let window = open_indicator(cx);
+        install(cx);
+        cx.update(|cx| cx.set_system_reduced_motion(true));
+        cx.run_until_parked();
+        assert!(indicator(cx, &window).0.gentle_cue);
+
+        cx.update(|cx| cx.set_motion_preference(MotionPreference::On));
+        cx.run_until_parked();
+        // Past the lease of the last gentle-cue frame.
+        for _ in 0..12 {
+            tick(cx);
+        }
+        assert!(
+            !indicator(cx, &window).0.gentle_cue,
+            "forced reduction freezes"
+        );
+        assert!(!cx.update(|cx| cx.animation_clock_is_running()));
+
+        cx.update(|cx| cx.set_motion_preference(MotionPreference::FollowSystem));
+        cx.run_until_parked();
+        let (resumed, renders) = indicator(cx, &window);
+        assert!(resumed.gentle_cue);
+        for _ in 0..4 {
+            tick(cx);
+        }
+        assert_eq!(indicator(cx, &window).1 - renders, 2, "slow stride resumes");
     }
 
     #[vespertine::test]
