@@ -949,6 +949,24 @@ impl HostNode {
             }
         }
 
+        // Assistive technology activates the node through the accessible click action: a
+        // primary click at the node's center, with no pointer press or release before it.
+        if listeners.click.is_some() {
+            let click_node = node.clone();
+            element = element.on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
+                let (click, bounds) = {
+                    let inner = click_node.borrow();
+                    (inner.listeners.click.clone(), inner.bounds)
+                };
+                if let Some(click) = click {
+                    let position = bounds.map_or_else(|| window.mouse_position(), |b| b.center());
+                    let payload =
+                        pointer_payload(position, 1, Modifiers::default(), Some(MouseButton::Left));
+                    click(&payload, window, cx);
+                }
+            });
+        }
+
         if listeners.pointer_move.is_some() {
             let move_node = node.clone();
             element = element.on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
@@ -1518,6 +1536,60 @@ mod tests {
             Modifiers::none(),
         );
         assert_eq!(take(&log), ["up:Some(0):1:40:20"]);
+    }
+
+    #[crate::test]
+    fn an_accessible_click_reaches_the_click_subscription(cx: &mut TestAppContext) {
+        let (_, cx, nodes) = host_view(cx, 2);
+        let log = logger();
+        let record = |name: &'static str| {
+            let log = log.clone();
+            move |event: &HostPointerEvent, _: &mut Window, _: &mut App| {
+                log.borrow_mut().push(format!(
+                    "{name}:{:?}:{}:{}:{}",
+                    event.button, event.click_count, event.x, event.y
+                ));
+            }
+        };
+        nodes[0].on_pointer_up(record("up"));
+        // The second node subscribes to the pointer only: it has no click action.
+        nodes[1].on_pointer_up(record("other-up"));
+        cx.update(|window, _| window.a11y.set_active_for_test(true));
+        draw(cx);
+        nodes[0].on_click(record("click"));
+        draw(cx);
+
+        let click_targets = cx.update(|window, _| {
+            window
+                .rendered_frame
+                .a11y_listeners
+                .iter()
+                .flatten()
+                .filter(|listener| listener.action == accesskit::Action::Click)
+                .map(|listener| listener.node_id)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            click_targets.len(),
+            1,
+            "only the node subscribed to click exposes the click action"
+        );
+        cx.update(|window, cx| {
+            window.handle_a11y_action(
+                accesskit::ActionRequest {
+                    action: accesskit::Action::Click,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node: click_targets[0],
+                    data: None,
+                },
+                cx,
+            );
+        });
+        assert_eq!(
+            take(&log),
+            ["click:Some(0):1:50:25"],
+            "a primary click at the node's center, without a pointer release"
+        );
     }
 
     #[crate::test]
