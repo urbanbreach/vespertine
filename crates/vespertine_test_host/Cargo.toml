@@ -23,6 +23,7 @@ default = []
 profiler = ["vespertine/profiler"]
 
 [dependencies]
+# Not referenced by name: enables accesskit's serde feature, which serializing TreeUpdate needs.
 accesskit = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
 image.workspace = true

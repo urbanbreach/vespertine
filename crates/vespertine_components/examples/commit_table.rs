@@ -7,7 +7,7 @@
 //! 100 commits. Scroll first: the first visible row keeps its place through every one of those
 //! changes. The leading canvas column draws lanes and nodes aligned with the rows.
 //!
-//! Run with: `cargo run -p vespertine_components --example data_table`
+//! Run with: `cargo run -p vespertine_components --example commit_table`
 
 use std::cell::RefCell;
 use std::collections::HashMap;

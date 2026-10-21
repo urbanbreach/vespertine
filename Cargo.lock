@@ -7918,7 +7918,6 @@ dependencies = [
 name = "vespertine_desktop"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "ashpd",
  "futures",
  "libc",
@@ -7981,7 +7980,6 @@ dependencies = [
 name = "vespertine_js"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-channel 2.5.0",
  "futures",
  "log",
@@ -8151,7 +8149,6 @@ dependencies = [
  "anyhow",
  "futures",
  "http",
- "log",
  "thiserror 2.0.17",
  "tokio",
  "vespertine_http_client",

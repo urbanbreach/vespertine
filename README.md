@@ -252,7 +252,7 @@ More examples, by crate (`cargo run --release -p <crate> --example <name>`):
 | Crate | Examples |
 | --- | --- |
 | `vespertine` | `backdrop_blur`, `rounded_clip`, `gpu_surface`, `surface_plate`, `canvas_text`, `image_fit`, `virtual_list_windowed`, `pane_group`, `motion_retarget`, `custom_chrome`, `a11y`, `input`, ... (see `crates/vespertine/examples/README.md`) |
-| `vespertine_components` | `workbench`, `markdown_editor`, `code_editor`, `diff_viewer`, `math_formulas`, `chart_gallery`, `file_tree`, `data_table`, `terminal_surface`, `browser_surface`, `toasts`, `scrollbars`, ... (35) |
+| `vespertine_components` | `workbench`, `markdown_editor`, `code_editor`, `diff_viewer`, `math_formulas`, `chart_gallery`, `file_tree`, `commit_table`, `terminal_surface`, `browser_surface`, `toasts`, `scrollbars`, ... (35) |
 | `vespertine_webview` | `web_page`, `web_page_layers` |
 | `vespertine_richtext` | `rich_geometry` |
 | `vespertine_theme` | `theme_appearance`, `theme_import`, `color_swatches`, `document_theme_live` |

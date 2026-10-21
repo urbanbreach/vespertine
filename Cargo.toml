@@ -613,9 +613,6 @@ default-features = false
 path = "crates/vespertine_platform"
 default-features = false
 
-[workspace.dependencies.vespertine_public_image_loader]
-path = "crates/vespertine_public_image_loader"
-
 [workspace.dependencies.vespertine_refineable]
 path = "crates/vespertine_refineable"
 
@@ -627,9 +624,6 @@ path = "crates/vespertine_residency"
 
 [workspace.dependencies.vespertine_richtext]
 path = "crates/vespertine_richtext"
-
-[workspace.dependencies.vespertine_scenes]
-path = "crates/vespertine_scenes"
 
 [workspace.dependencies.vespertine_scheduler]
 path = "crates/vespertine_scheduler"
