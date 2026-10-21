@@ -358,8 +358,9 @@ impl CompositionShared {
         }
     }
 
-    /// Candidates for pointer forwarding, topmost first.
-    fn route_surfaces(inner: &Inner) -> Vec<RouteSurface> {
+    /// Candidates for forwarding, topmost first: visible framework-forwarding surfaces whose
+    /// slot `listens`.
+    fn route_surfaces(inner: &Inner, listens: impl Fn(&Slot) -> bool) -> Vec<RouteSurface> {
         inner
             .tree
             .layout()
@@ -368,14 +369,12 @@ impl CompositionShared {
             .rev()
             .filter_map(|entry| {
                 let slot = inner.slots.get(&entry.id)?;
-                (slot.visible
-                    && slot.forwarding == InputForwarding::Framework
-                    && slot.pointer_handler.is_some())
-                .then_some(RouteSurface {
-                    id: entry.id,
-                    bounds: slot.logical_bounds,
-                    above_overlay: inner.tree.is_above_overlay(entry.id),
-                })
+                (slot.visible && slot.forwarding == InputForwarding::Framework && listens(slot))
+                    .then_some(RouteSurface {
+                        id: entry.id,
+                        bounds: slot.logical_bounds,
+                        above_overlay: inner.tree.is_above_overlay(entry.id),
+                    })
             })
             .collect()
     }
@@ -391,7 +390,7 @@ impl CompositionShared {
     ) -> bool {
         let deliveries: Vec<PointerDelivery> = {
             let mut inner = self.inner.borrow_mut();
-            let surfaces = Self::route_surfaces(&inner);
+            let surfaces = Self::route_surfaces(&inner, |slot| slot.pointer_handler.is_some());
             if surfaces.is_empty() && inner.router.recipient().is_none() {
                 return false;
             }
@@ -431,15 +430,7 @@ impl CompositionShared {
     ) -> bool {
         let targets = {
             let inner = self.inner.borrow();
-            let surfaces: Vec<RouteSurface> = Self::route_surfaces(&inner)
-                .into_iter()
-                .filter(|surface| {
-                    inner
-                        .slots
-                        .get(&surface.id)
-                        .is_some_and(|slot| slot.wheel_handler.is_some())
-                })
-                .collect();
+            let surfaces = Self::route_surfaces(&inner, |slot| slot.wheel_handler.is_some());
             inner.router.wheel_targets(event, &surfaces, captured)
         };
         for target in targets {
@@ -465,10 +456,14 @@ impl CompositionShared {
         false
     }
 
-    /// Whether any visible surface listens to framework-forwarded pointer input.
+    /// Whether any visible surface listens to framework-forwarded pointer or wheel input.
     pub(crate) fn forwards_input(&self) -> bool {
         let inner = self.inner.borrow();
-        inner.router.recipient().is_some() || !Self::route_surfaces(&inner).is_empty()
+        inner.router.recipient().is_some()
+            || !Self::route_surfaces(&inner, |slot| {
+                slot.pointer_handler.is_some() || slot.wheel_handler.is_some()
+            })
+            .is_empty()
     }
 }
 

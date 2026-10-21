@@ -1587,6 +1587,35 @@ fn a11_forwarding_follows_framework_capture_bounds_ownership_and_visibility(
 }
 
 #[crate::test]
+fn a11_a_surface_with_only_a_wheel_handler_receives_wheel_events(cx: &mut TestAppContext) {
+    let fixture = PositionFixture::new(cx);
+    let wheels: Rc<RefCell<Vec<f32>>> = Default::default();
+    fixture
+        .surface
+        .set_input_forwarding(crate::InputForwarding::Framework);
+    fixture.surface.set_wheel_handler({
+        let wheels = wheels.clone();
+        move |event, _, _| {
+            wheels.borrow_mut().push(event.position.x.0);
+            true
+        }
+    });
+    fixture.frame(cx);
+    cx.update_window(fixture.harness_window, |_, window, cx| {
+        window.dispatch_event(
+            crate::ScrollWheelEvent {
+                position: point(px(300.0), px(100.0)),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    })
+    .unwrap();
+    assert_eq!(*wheels.borrow(), [300.0]);
+}
+
+#[crate::test]
 fn a11_nothing_is_forwarded_after_the_attachment_is_destroyed(cx: &mut TestAppContext) {
     let fixture = PositionFixture::new(cx);
     let log: Rc<RefCell<Vec<String>>> = Default::default();
