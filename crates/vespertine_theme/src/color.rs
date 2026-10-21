@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use vespertine::{Hsla, Rgba};
+use vespertine::{Hsla, Rgba, css_color_to_rgba};
 
 /// A color with 8-bit channels. The text form is `#rrggbb`, or `#rrggbbaa` when not opaque.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -46,27 +46,16 @@ impl Color {
     /// Parses `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` (any case, surrounding whitespace trimmed).
     pub fn parse(text: &str) -> Result<Self, ColorParseError> {
         let error = || ColorParseError(text.to_string());
-        let digits = text.trim().strip_prefix('#').ok_or_else(error)?;
+        let trimmed = text.trim();
+        // The core parser also accepts names and functional notations; only `#` + hex digits
+        // are part of this grammar.
+        let digits = trimmed.strip_prefix('#').ok_or_else(error)?;
         if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(error());
         }
-        let nibble = |index: usize| -> u8 {
-            let byte = digits.as_bytes()[index];
-            (byte as char).to_digit(16).unwrap_or(0) as u8
-        };
-        let pair = |index: usize| nibble(index * 2) << 4 | nibble(index * 2 + 1);
-        match digits.len() {
-            3 => Ok(Self::rgb(nibble(0) * 17, nibble(1) * 17, nibble(2) * 17)),
-            4 => Ok(Self::rgba(
-                nibble(0) * 17,
-                nibble(1) * 17,
-                nibble(2) * 17,
-                nibble(3) * 17,
-            )),
-            6 => Ok(Self::rgb(pair(0), pair(1), pair(2))),
-            8 => Ok(Self::rgba(pair(0), pair(1), pair(2), pair(3))),
-            _ => Err(error()),
-        }
+        css_color_to_rgba(trimmed)
+            .map(Self::from_rgba)
+            .ok_or_else(error)
     }
 
     /// Lowercase hex text form (`#rrggbb`, or `#rrggbbaa` when alpha is not 255).
