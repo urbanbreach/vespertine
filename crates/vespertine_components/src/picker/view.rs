@@ -19,7 +19,8 @@
 //!   the query, favorites or selected identity; Escape steps back one depth at a time.
 //!
 //! Enter activates the highlighted row once per physical press (the [`EnterLatch`]); Ctrl-Enter
-//! is the secondary accept. Everything else the picker does not claim reaches the field.
+//! is the secondary accept; Ctrl-R presses the Retry of a failed section or page. Everything else
+//! the picker does not claim reaches the field.
 
 use super::{
     actions::{
