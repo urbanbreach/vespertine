@@ -119,6 +119,19 @@ impl Tween {
             body * (1. - eased)
         }
     }
+
+    /// The tween running the other way that has the same height at `now`: ease-out cubic
+    /// reveals `1 - (1 - t)^3`, so the reversed tween starts at the progress whose reveal is the
+    /// complement.
+    fn reversed(&self, now: f64) -> Self {
+        let t = ((now - self.started) / FOLD_TWEEN_MS).clamp(0., 1.);
+        let remaining = (1. - t).powi(3);
+        let progress = 1. - (1. - remaining).cbrt();
+        Self {
+            started: now - progress * FOLD_TWEEN_MS,
+            expanding: !self.expanding,
+        }
+    }
 }
 
 /// The row the pointer is over, for the add affordance (R28).
@@ -494,7 +507,8 @@ impl DiffViewState {
         self.mode_wrap = Some(mode_wrap);
 
         // Fold tweens start for files whose collapsed state changed (R26): unwrapped sections
-        // only, never on first sight, never for a reduced-motion user.
+        // only, never on first sight, never for a reduced-motion user. Reversing a running fold
+        // turns it around at its current height.
         if let Some(previous) = self.last_collapsed.clone()
             && !patch_changed
             && !input.wrap
@@ -503,14 +517,15 @@ impl DiffViewState {
             for (index, file) in self.model.files.iter().enumerate() {
                 let was = previous.contains(&file.path);
                 let is = collapsed.contains(&file.path);
-                if was != is && !self.tweens.contains_key(&index) {
-                    self.tweens.insert(
-                        index,
-                        Tween {
+                if was != is {
+                    let tween = match self.tweens.get(&index) {
+                        Some(running) => running.reversed(now),
+                        None => Tween {
                             started: now,
                             expanding: !is,
                         },
-                    );
+                    };
+                    self.tweens.insert(index, tween);
                 }
             }
         }

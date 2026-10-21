@@ -655,6 +655,43 @@ fn r26_a_fold_tweens_the_body_height_for_180ms_and_settles_after_400ms() {
 }
 
 #[test]
+fn r26_reversing_a_running_fold_continues_from_its_height_in_the_new_direction() {
+    require_backend!();
+    let mut rig = Rig::new(Config::new(many_files(2, 1, 10), 400., 300.), (400., 300.));
+    let body = 28. + 20. * 21. + 8.;
+    rig.host.motion_set(1000.).unwrap();
+    rig.refresh();
+    rig.host.click(100., 10., 0, "").unwrap();
+    rig.refresh();
+    rig.host.motion_set(1090.).unwrap();
+    rig.refresh();
+    let middle = stand_in_height(&mut rig, 0).unwrap();
+    assert!(middle > 5. && middle < body - 5., "mid-collapse {middle}");
+    // Expand again while the collapse is still running.
+    rig.host.click(100., 10., 0, "").unwrap();
+    rig.refresh();
+    let reversed = stand_in_height(&mut rig, 0).unwrap();
+    assert!(
+        (reversed - middle).abs() < 1.,
+        "continues from {middle}, got {reversed}"
+    );
+    rig.host.motion_set(1120.).unwrap();
+    rig.refresh();
+    let growing = stand_in_height(&mut rig, 0).unwrap();
+    assert!(growing > middle + 5., "grows from {middle}, got {growing}");
+    rig.host.motion_set(1300.).unwrap();
+    rig.refresh();
+    assert!(
+        (stand_in_height(&mut rig, 0).unwrap() - body).abs() < 0.5,
+        "ends fully open"
+    );
+    rig.host.motion_set(1600.).unwrap();
+    rig.refresh();
+    assert!(rig.read(|state| state.folding_files()).is_empty());
+    assert!(rig.read(|state| state.flat().rows.len()) > 40);
+}
+
+#[test]
 fn r26_wrapped_sections_settle_immediately_and_a_wrap_switch_settles_a_running_tween() {
     require_backend!();
     let mut config = Config::new(many_files(2, 1, 10), 400., 300.);
