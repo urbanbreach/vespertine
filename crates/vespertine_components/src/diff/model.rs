@@ -263,7 +263,7 @@ impl Parser {
             if target == "/dev/null" {
                 file.status = FileStatus::Deleted;
             } else if file.old_path.is_none() {
-                file.path = strip_side_prefix(target).to_owned();
+                file.path = clean_path(target);
             }
         } else if line.trim_end() == "--- /dev/null" {
             file.status = FileStatus::Added;
@@ -538,6 +538,18 @@ mod tests {
         let renamed = one("diff --git \"a/old one.txt\" \"b/new one.txt\"\n");
         assert_eq!(renamed.path, "new one.txt");
         assert_eq!(renamed.old_path.as_deref(), Some("old one.txt"));
+    }
+
+    #[test]
+    fn quoted_target_header_keeps_the_unquoted_display_path() {
+        let file = one(
+            "diff --git \"a/with space\\\\x.txt\" \"b/with space\\\\x.txt\"\nindex 1..2 100644\n--- \"a/with space\\\\x.txt\"\n+++ \"b/with space\\\\x.txt\"\n@@ -1 +1 @@\n-alpha\n+beta\n",
+        );
+        assert_eq!(file.path, "with space\\x.txt");
+        assert_eq!(file.old_path, None);
+        let unified =
+            one("--- \"a/lorem ipsum.rs\"\n+++ \"b/lorem ipsum.rs\"\n@@ -1 +1 @@\n-a\n+b\n");
+        assert_eq!(unified.path, "lorem ipsum.rs");
     }
 
     #[test]
