@@ -23,6 +23,9 @@ pub struct Svg {
 }
 
 /// Create a new SVG element.
+///
+/// The SVG renders as a single-color mask tinted by the text color; to keep its authored colors,
+/// render it with [`img`](crate::img) instead.
 #[track_caller]
 pub fn svg() -> Svg {
     Svg {
