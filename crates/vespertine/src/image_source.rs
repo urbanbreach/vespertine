@@ -6,6 +6,10 @@ use crate::{
     ImageCacheError, ImageFormat, RenderImage, SvgRenderer, decode_static_image,
     decode_static_image_from_decoder,
 };
+use base64::{
+    Engine as _, alphabet,
+    engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig},
+};
 use image::{
     AnimationDecoder, Frame, ImageDecoder as _, Limits, Rgba,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
@@ -146,43 +150,14 @@ fn hex_value(byte: u8) -> Option<u8> {
     char::from(byte).to_digit(16).map(|digit| digit as u8)
 }
 
-/// Standard-alphabet base64 with required padding.
+/// Standard-alphabet base64 with required padding. Non-canonical trailing bits are accepted;
+/// whitespace is not.
 fn decode_base64(text: &str) -> Option<Vec<u8>> {
-    fn value(byte: u8) -> Option<u32> {
-        match byte {
-            b'A'..=b'Z' => Some((byte - b'A') as u32),
-            b'a'..=b'z' => Some((byte - b'a') as u32 + 26),
-            b'0'..=b'9' => Some((byte - b'0') as u32 + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let bytes = text.as_bytes();
-    if !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let chunk_count = bytes.len() / 4;
-    for (chunk_index, chunk) in bytes.chunks_exact(4).enumerate() {
-        let is_last = chunk_index + 1 == chunk_count;
-        let padding = chunk.iter().rev().take_while(|byte| **byte == b'=').count();
-        if padding > 2 || (padding > 0 && !is_last) {
-            return None;
-        }
-        let mut accumulator = 0u32;
-        for (position, byte) in chunk.iter().enumerate() {
-            let digit = if position >= 4 - padding {
-                0
-            } else {
-                value(*byte)?
-            };
-            accumulator = accumulator << 6 | digit;
-        }
-        let triple = accumulator.to_be_bytes();
-        out.extend_from_slice(&triple[1..4 - padding]);
-    }
-    Some(out)
+    const ENGINE: GeneralPurpose = GeneralPurpose::new(
+        &alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_allow_trailing_bits(true),
+    );
+    ENGINE.decode(text).ok()
 }
 
 /// Detects the image format from the actual bytes (ELM-004 R11), in order: PNG, JPEG, GIF,
@@ -530,22 +505,7 @@ mod tests {
     }
 
     fn base64_encode(bytes: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let value = (chunk[0] as u32) << 16
-                | (*chunk.get(1).unwrap_or(&0) as u32) << 8
-                | *chunk.get(2).unwrap_or(&0) as u32;
-            for index in 0..4 {
-                if index <= chunk.len() {
-                    out.push(ALPHABET[(value >> (18 - 6 * index) & 63) as usize] as char);
-                } else {
-                    out.push('=');
-                }
-            }
-        }
-        out
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
     fn percent_encode(bytes: &[u8]) -> String {

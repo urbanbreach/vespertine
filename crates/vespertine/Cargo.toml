@@ -62,6 +62,7 @@ accesskit.workspace = true
 anyhow.workspace = true
 async-task.workspace = true
 backtrace.workspace = true
+base64.workspace = true
 bitflags.workspace = true
 
 vespertine_collections.workspace = true

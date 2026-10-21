@@ -7648,6 +7648,7 @@ dependencies = [
  "async-task",
  "async-tungstenite",
  "backtrace",
+ "base64",
  "bitflags 2.13.1",
  "chrono",
  "criterion",
