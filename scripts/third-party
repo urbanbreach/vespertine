@@ -63,7 +63,6 @@ EXCEPTIONS = {
 # Crates vendored under third_party/, with what differs from the published crate.
 VENDORED = [
     ("taffy", "0.13.0", "MIT", "modified measurement cache and added subtree-layout method for persistent layout nodes (LAY-001)"),
-    ("polling", "3.11.0", "Apache-2.0 OR MIT", "epoll backend arms its timerfd and re-arms its notifier only when a wait needs it (idle wakeups, PERF-IDLE)"),
 ]
 
 # Files that ship with the repository or with a dependency, other than code: (name, version,

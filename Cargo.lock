@@ -1634,22 +1634,10 @@ version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae61cf9c0abb83bd659dab65b7e4e38d8236824c85f0f804f173567bda257d2"
 dependencies = [
- "cssparser-macros 0.6.1",
+ "cssparser-macros",
  "dtoa-short",
  "itoa",
  "phf",
- "smallvec",
-]
-
-[[package]]
-name = "cssparser"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9cdaae01d5ed7882b04d795e7f752f46ff52d2fa3b50a20d28c464510bba98"
-dependencies = [
- "cssparser-macros 0.7.1",
- "dtoa-short",
- "itoa",
  "smallvec",
 ]
 
@@ -1661,16 +1649,6 @@ checksum = "13b588ba4ac1a99f7f2964d24b3d896ddc6bf847ee3855dbd4366f058cfcd331"
 dependencies = [
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "cssparser-macros"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
-dependencies = [
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]
@@ -3688,7 +3666,7 @@ checksum = "5adbb62638edf7e6bc88835cd3ea388bdd53382af42045da0e414ea78aa0c91a"
 dependencies = [
  "bitflags 2.13.1",
  "cfg-if",
- "cssparser 0.36.0",
+ "cssparser",
  "encoding_rs",
  "foldhash 0.2.0",
  "hashbrown 0.17.1",
@@ -3942,7 +3920,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd17bfdd6866df20f34a8697eba00e0b86efa734de0b6a629b07a755d748fd68"
 dependencies = [
  "base64",
- "cssparser 0.36.0",
+ "cssparser",
  "data-url",
  "dugong",
  "icu_collator",
@@ -5131,6 +5109,8 @@ dependencies = [
 [[package]]
 name = "polling"
 version = "3.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0e4f59085d47d8241c88ead0f274e8a0cb551f3625263c05eb8dd897c34218"
 dependencies = [
  "cfg-if",
  "concurrent-queue",
@@ -6237,7 +6217,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cfaaa6035167f0e604e42723c7650d59ee269ef220d7bbe0565602c8a0173b9"
 dependencies = [
  "bitflags 2.13.1",
- "cssparser 0.36.0",
+ "cssparser",
  "derive_more",
  "log",
  "new_debug_unreachable",
@@ -6986,8 +6966,6 @@ name = "taffy"
 version = "0.13.0"
 dependencies = [
  "arrayvec",
- "cssparser 0.37.0",
- "document-features",
  "serde",
  "slotmap",
  "smallvec",
