@@ -654,6 +654,42 @@ fn reveal_loads_ancestors_top_down_following_pagination_then_selects_the_path() 
 }
 
 #[test]
+fn reveal_of_an_entry_hidden_by_the_ignored_filter_is_missing_and_keeps_the_selection() {
+    let mut model = TreeModel::new();
+    let generation = model.generation();
+    model
+        .apply_page(
+            page(
+                "",
+                vec![
+                    Entry::file("alpha.txt"),
+                    Entry::directory("build").ignored(true),
+                ],
+                None,
+            ),
+            generation,
+        )
+        .unwrap();
+    model
+        .apply_page(
+            page("build", vec![Entry::file("build/out.log")], None),
+            generation,
+        )
+        .unwrap();
+    assert!(model.select("alpha.txt"));
+    assert!(model.set_include_ignored(false));
+    assert_eq!(
+        model.reveal_search_match("build/out.log"),
+        RevealStep::Missing
+    );
+    assert_eq!(selected(&model), ["alpha.txt"]);
+    assert!(
+        !model.is_expanded("build"),
+        "a failed reveal expands nothing"
+    );
+}
+
+#[test]
 fn action_paths_follow_the_cursor_and_selection() {
     let mut model = fixture();
     assert!(model.action_paths().is_empty());

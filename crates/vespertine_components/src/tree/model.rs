@@ -311,7 +311,7 @@ pub enum RevealStep {
     Pending,
     /// An ancestor failed to load.
     Failed(String),
-    /// The path does not exist in the fully loaded listing.
+    /// The path does not exist in the fully loaded listing, or the ignored filter hides it.
     Missing,
 }
 
@@ -1264,7 +1264,8 @@ impl TreeModel {
     /// One step of revealing `path` (R22): walks the ancestors top-down; the first ancestor
     /// that does not list the next component yields the load to perform (following pagination
     /// cursors), or `Pending`/`Failed`/`Missing`. When every ancestor lists its child, the
-    /// ancestors are expanded and the path is selected.
+    /// ancestors are expanded and the path is selected; a listed path the ignored filter hides
+    /// is `Missing` and changes nothing.
     pub fn reveal_search_match(&mut self, path: &str) -> RevealStep {
         if path.is_empty() {
             return RevealStep::Missing;
@@ -1298,6 +1299,9 @@ impl TreeModel {
                 };
             }
             directory = next.clone();
+        }
+        if self.hidden_by_filter(path) {
+            return RevealStep::Missing;
         }
         let mut ancestor = parent_path(path);
         while !ancestor.is_empty() {
@@ -1337,6 +1341,11 @@ impl TreeModel {
         }
     }
 
+    /// Whether the ignored filter hides `path` (it or an ancestor is ignored).
+    fn hidden_by_filter(&self, path: &str) -> bool {
+        !self.include_ignored && self.is_ignored(path)
+    }
+
     fn flatten(
         &self,
         directory: &str,
@@ -1355,7 +1364,7 @@ impl TreeModel {
             let Some(child_node) = self.nodes.get(child) else {
                 continue;
             };
-            if !self.include_ignored && self.is_ignored(child) {
+            if self.hidden_by_filter(child) {
                 continue;
             }
             emitted += 1;
