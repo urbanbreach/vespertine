@@ -527,6 +527,69 @@ fn a2_dropping_the_owning_handle_removes_the_surface(cx: &mut TestAppContext) {
     );
 }
 
+/// A surface whose pointer handler holds the only handle of `owned`.
+fn native_owning(
+    cx: &mut TestAppContext,
+    harness: &Harness,
+    owned: crate::NativeSurface,
+) -> crate::NativeSurface {
+    let owner = native(cx, harness);
+    owner.set_pointer_handler(move |_, _, _| {
+        let _ = &owned;
+        false
+    });
+    owner
+}
+
+#[crate::test]
+fn a2_dropping_a_surface_also_removes_a_surface_only_its_handler_owned(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx, true);
+    let owned = native(cx, &harness);
+    let owned_id = owned.id();
+    let owner = native_owning(cx, &harness, owned);
+    drop(owner);
+    harness.frame(cx);
+    harness.with(cx, |window| {
+        let controller = window.composition().unwrap();
+        assert!(matches!(
+            controller.kind(owned_id),
+            Err(CompositionError::Stale(_))
+        ));
+        assert_eq!(controller.layout().entries.len(), 2);
+    });
+    assert!(
+        harness
+            .test(cx, |window| window.attachment(owned_id))
+            .is_none()
+    );
+}
+
+#[crate::test]
+fn a2_removing_a_surface_also_removes_a_surface_only_its_handler_owned(cx: &mut TestAppContext) {
+    let harness = Harness::new(cx, true);
+    let owned = native(cx, &harness);
+    let owned_id = owned.id();
+    let owner = native_owning(cx, &harness, owned);
+    harness.with(cx, |window| {
+        window.composition().unwrap().remove(owner.id()).unwrap();
+    });
+    harness.frame(cx);
+    harness.with(cx, |window| {
+        let controller = window.composition().unwrap();
+        assert!(matches!(
+            controller.kind(owned_id),
+            Err(CompositionError::Stale(_))
+        ));
+        assert_eq!(controller.layout().entries.len(), 2);
+    });
+    assert!(
+        harness
+            .test(cx, |window| window.attachment(owned_id))
+            .is_none()
+    );
+    drop(owner);
+}
+
 // ---- A3: paint stream ----
 
 fn quad_scene(colors: &[crate::Hsla]) -> Scene {

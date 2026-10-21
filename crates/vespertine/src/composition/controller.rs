@@ -121,20 +121,23 @@ impl CompositionShared {
     /// Removes a surface because its owning handle was dropped. The platform learns about it
     /// at the next presentation.
     fn remove_dropped(&self, id: SurfaceId) {
-        {
+        let removed = {
             let Ok(mut inner) = self.inner.try_borrow_mut() else {
-                // No borrow of the composition state is held across callbacks, so a handle
-                // cannot be dropped while it is borrowed; report it rather than lose it.
+                // No borrow of the composition state is held across callbacks or slot
+                // destruction, so a handle cannot be dropped while it is borrowed; report it
+                // rather than lose it.
                 log::error!("surface {id:?} dropped while composition state is borrowed");
                 return;
             };
             if inner.tree.remove(id).is_err() {
                 return;
             }
-            inner.slots.remove(&id);
             inner.router.forget(id);
             inner.needs_sync = true;
-        }
+            inner.slots.remove(&id)
+        };
+        // The slot's handlers may own other surface handles, whose drop needs the state.
+        drop(removed);
         self.invalidator.set_dirty(true);
     }
 
@@ -760,9 +763,13 @@ impl<'a> CompositionController<'a> {
             tree.remove(id)?;
             Ok(())
         })?;
-        let mut inner = self.shared.inner.borrow_mut();
-        inner.slots.remove(&id);
-        inner.router.forget(id);
+        let removed = {
+            let mut inner = self.shared.inner.borrow_mut();
+            inner.router.forget(id);
+            inner.slots.remove(&id)
+        };
+        // The slot's handlers may own other surface handles, whose drop needs the state.
+        drop(removed);
         Ok(())
     }
 
