@@ -641,7 +641,7 @@ impl Render for Select {
         let disabled = self.disabled;
 
         let menu = self.popup.get().map(|open_select| {
-            let motion = SurfaceMotion::now(&self.popup, crate::floating::Side::Bottom, cx);
+            let motion = SurfaceMotion::now(&self.popup, vespertine::FloatingSide::Bottom, cx);
             let view = cx.entity().downgrade();
             let dismiss = Rc::new(move |window: &mut Window, cx: &mut App| {
                 if let Some(view) = view.upgrade() {

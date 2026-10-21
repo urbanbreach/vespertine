@@ -56,8 +56,8 @@ pub use menu::{
     anchored_menu_nested, contained_menu,
 };
 pub use motion::{
-    ENTER_MS, EXIT_MS, REAP_SLACK_MS, SETTLE_TRAVEL, SIDE_TRAVEL, Side, SurfaceMotion,
-    enter_progress, exit_progress, reap_delay,
+    ENTER_MS, EXIT_MS, REAP_SLACK_MS, SETTLE_TRAVEL, SIDE_TRAVEL, SurfaceMotion, enter_progress,
+    exit_progress, reap_delay,
 };
 pub use popup_menu::{BoundsObserver, MenuPart, PopupMenu, PopupMenuItem, menu_item_row};
 pub use trigger::{OutsidePress, TriggerBounds};

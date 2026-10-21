@@ -8,7 +8,7 @@
 //!
 //! ```ignore
 //! anchored_menu_below(&trigger)                    // below the trigger, start aligned, 6 px
-//!     .motion(SurfaceMotion::now(&self.popup, Side::Bottom, cx))
+//!     .motion(SurfaceMotion::now(&self.popup, FloatingSide::Bottom, cx))
 //!     .outside_press(press)                         // optional dismissal probe
 //!     .child(row_a).child(row_b)
 //! ```
@@ -20,18 +20,18 @@
 //! alignment).
 
 use super::{
-    motion::{Side, SurfaceMotion},
+    motion::SurfaceMotion,
     placement::{ContainedAlign, contained_max_size, place_contained, rows_max_height},
     trigger::{OutsidePress, TriggerBounds},
 };
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
-    Anchor, AnyElement, App, Bounds, Display, Element, ElementId, FocusHandle, GlobalElementId,
-    InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId, ParentElement,
-    Pixels, Point, Position, Refineable, RenderOnce, Role, ScrollHandle, Size,
-    StatefulInteractiveElement, Style, StyleRefinement, Styled, Window, anchored, canvas, deferred,
-    div, point, px,
+    Anchor, AnyElement, App, Bounds, Display, Element, ElementId, FloatingAlign, FloatingSide,
+    FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement, IntoElement,
+    KeyDownEvent, LayoutId, ParentElement, Pixels, Point, Position, Refineable, RenderOnce, Role,
+    ScrollHandle, Size, StatefulInteractiveElement, Style, StyleRefinement, Styled, Window,
+    anchored, attach_point, canvas, default_content_anchor, deferred, div, gap_vector, point, px,
 };
 
 /// Padding of the menu card.
@@ -86,14 +86,14 @@ pub enum Placement {
 
 impl Placement {
     /// The side of the trigger the menu sits on, which fixes its motion travel.
-    pub fn side(&self) -> Side {
+    pub fn side(&self) -> FloatingSide {
         match self {
             Placement::Below { .. } | Placement::At(_) | Placement::Contained { .. } => {
-                Side::Bottom
+                FloatingSide::Bottom
             }
-            Placement::Above { .. } => Side::Top,
-            Placement::Beside { left: false, .. } => Side::Right,
-            Placement::Beside { left: true, .. } => Side::Left,
+            Placement::Above { .. } => FloatingSide::Top,
+            Placement::Beside { left: false, .. } => FloatingSide::Right,
+            Placement::Beside { left: true, .. } => FloatingSide::Left,
         }
     }
 }
@@ -434,35 +434,34 @@ impl RenderOnce for AnchoredMenu {
     }
 }
 
-/// The attach point, content anchor and outward offset of a non-contained placement.
+/// The attach point, content anchor and outward offset of a non-contained placement, from the
+/// core side/alignment geometry.
 fn attach_geometry(
     placement: Placement,
     trigger: Option<Bounds<Pixels>>,
 ) -> (Point<Pixels>, Anchor, Point<Pixels>) {
     let t = trigger.unwrap_or_default();
+    let on = |side: FloatingSide, align: ContainedAlign, gap: Pixels| {
+        let align = match align {
+            ContainedAlign::Start => FloatingAlign::Start,
+            ContainedAlign::End => FloatingAlign::End,
+        };
+        (
+            attach_point(t, side, align),
+            default_content_anchor(side, align),
+            gap_vector(side, gap),
+        )
+    };
     match placement {
-        Placement::Below {
-            align: ContainedAlign::Start,
-            gap,
-        } => (t.bottom_left(), Anchor::TopLeft, point(px(0.), gap)),
-        Placement::Below {
-            align: ContainedAlign::End,
-            gap,
-        } => (t.bottom_right(), Anchor::TopRight, point(px(0.), gap)),
-        Placement::Above {
-            align: ContainedAlign::Start,
-            gap,
-        } => (t.origin, Anchor::BottomLeft, point(px(0.), -gap)),
-        Placement::Above {
-            align: ContainedAlign::End,
-            gap,
-        } => (t.top_right(), Anchor::BottomRight, point(px(0.), -gap)),
-        Placement::Beside {
-            left: false,
-            offset,
-        } => (t.top_right(), Anchor::TopLeft, point(offset, px(0.))),
-        Placement::Beside { left: true, offset } => {
-            (t.origin, Anchor::TopRight, point(-offset, px(0.)))
+        Placement::Below { align, gap } => on(FloatingSide::Bottom, align, gap),
+        Placement::Above { align, gap } => on(FloatingSide::Top, align, gap),
+        Placement::Beside { left, offset } => {
+            let side = if left {
+                FloatingSide::Left
+            } else {
+                FloatingSide::Right
+            };
+            on(side, ContainedAlign::Start, offset)
         }
         Placement::At(position) => (position, Anchor::TopLeft, point(px(0.), px(0.))),
         Placement::Contained { .. } => unreachable!("contained menus use ContainedLayer"),

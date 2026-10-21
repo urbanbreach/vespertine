@@ -8,7 +8,7 @@
 
 use super::lifecycle::Popup;
 use std::time::Duration;
-use vespertine::{App, MotionClock, Pixels, Point, point, px};
+use vespertine::{App, FloatingSide, MotionClock, Pixels, Point, point, px};
 
 /// Entrance duration in milliseconds.
 pub const ENTER_MS: f64 = 140.;
@@ -20,40 +20,6 @@ pub const REAP_SLACK_MS: f64 = 20.;
 pub const SETTLE_TRAVEL: Pixels = px(2.);
 /// Travel of a surface that opens beside its trigger.
 pub const SIDE_TRAVEL: Pixels = px(4.);
-
-/// The side of its trigger a floating surface sits on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Side {
-    /// Above the trigger.
-    Top,
-    /// Below the trigger (default).
-    #[default]
-    Bottom,
-    /// Left of the trigger.
-    Left,
-    /// Right of the trigger.
-    Right,
-}
-
-impl Side {
-    /// Travel of the entrance/exit: 2 px above and below the trigger, 4 px beside it.
-    pub fn travel(self) -> Pixels {
-        match self {
-            Side::Top | Side::Bottom => SETTLE_TRAVEL,
-            Side::Left | Side::Right => SIDE_TRAVEL,
-        }
-    }
-
-    /// Unit vector from the surface's rest position toward its trigger.
-    pub fn toward_trigger(self) -> (f32, f32) {
-        match self {
-            Side::Top => (0., 1.),
-            Side::Bottom => (0., -1.),
-            Side::Left => (1., 0.),
-            Side::Right => (-1., 0.),
-        }
-    }
-}
 
 /// Delay of the reap scheduled by a close: exit span plus 20 ms, zero with reduced motion.
 pub fn reap_delay(reduced_motion: bool) -> Duration {
@@ -110,16 +76,25 @@ impl SurfaceMotion {
     };
 
     /// [`SurfaceMotion::of`] at the application's motion clock, honoring reduced motion.
-    pub fn now<T>(popup: &Popup<T>, side: Side, cx: &App) -> Self {
+    pub fn now<T>(popup: &Popup<T>, side: FloatingSide, cx: &App) -> Self {
         Self::of(popup, MotionClock::now_ms(cx), side, cx.reduce_motion())
     }
 
     /// The motion of `popup` at motion time `now_ms` for a surface that sits on `side` of its
-    /// trigger. `travel` is [`SETTLE_TRAVEL`] or [`SIDE_TRAVEL`] (see [`Side::travel`]).
-    pub fn of<T>(popup: &Popup<T>, now_ms: f64, side: Side, reduced_motion: bool) -> Self {
-        let travel = side.travel();
+    /// trigger. The travel is [`SETTLE_TRAVEL`] above and below the trigger and [`SIDE_TRAVEL`]
+    /// beside it.
+    pub fn of<T>(popup: &Popup<T>, now_ms: f64, side: FloatingSide, reduced_motion: bool) -> Self {
+        let travel = match side {
+            FloatingSide::Top | FloatingSide::Bottom => SETTLE_TRAVEL,
+            FloatingSide::Left | FloatingSide::Right => SIDE_TRAVEL,
+        };
         // Unit vector pointing from the rest position toward the trigger.
-        let (ux, uy) = side.toward_trigger();
+        let (ux, uy) = match side {
+            FloatingSide::Top => (0., 1.),
+            FloatingSide::Bottom => (0., -1.),
+            FloatingSide::Left => (1., 0.),
+            FloatingSide::Right => (-1., 0.),
+        };
         let at = |remaining: f32| {
             let distance = f32::from(travel) * remaining;
             point(px(ux * distance), px(uy * distance))
@@ -186,10 +161,10 @@ mod tests {
         assert_eq!(exit_progress(0., 0., true), 1.);
         let mut popup = Popup::new();
         popup.open((), 0.);
-        let enter = SurfaceMotion::of(&popup, 0., Side::Bottom, true);
+        let enter = SurfaceMotion::of(&popup, 0., FloatingSide::Bottom, true);
         assert_eq!(enter, SurfaceMotion::REST);
         popup.begin_close(1.);
-        let exit = SurfaceMotion::of(&popup, 1., Side::Bottom, true);
+        let exit = SurfaceMotion::of(&popup, 1., FloatingSide::Bottom, true);
         assert!(exit.dying && !exit.animating && exit.opacity == 0.);
     }
 
@@ -197,14 +172,14 @@ mod tests {
     fn entrance_settles_two_pixels_toward_the_trigger_and_side_menus_four() {
         let mut popup = Popup::new();
         popup.open((), 0.);
-        let below = SurfaceMotion::of(&popup, 0., Side::Bottom, false);
+        let below = SurfaceMotion::of(&popup, 0., FloatingSide::Bottom, false);
         assert_eq!((below.opacity, below.offset), (0., point(px(0.), px(-2.))));
         assert!(below.animating && !below.dying);
-        let right = SurfaceMotion::of(&popup, 0., Side::Right, false);
+        let right = SurfaceMotion::of(&popup, 0., FloatingSide::Right, false);
         assert_eq!(right.offset, point(px(-4.), px(0.)));
-        let above = SurfaceMotion::of(&popup, 0., Side::Top, false);
+        let above = SurfaceMotion::of(&popup, 0., FloatingSide::Top, false);
         assert_eq!(above.offset, point(px(0.), px(2.)));
-        let rest = SurfaceMotion::of(&popup, 140., Side::Bottom, false);
+        let rest = SurfaceMotion::of(&popup, 140., FloatingSide::Bottom, false);
         assert_eq!(rest, SurfaceMotion::REST);
     }
 
@@ -213,9 +188,9 @@ mod tests {
         let mut popup = Popup::new();
         popup.open((), 0.);
         popup.begin_close(200.);
-        let start = SurfaceMotion::of(&popup, 200., Side::Bottom, false);
+        let start = SurfaceMotion::of(&popup, 200., FloatingSide::Bottom, false);
         assert!(start.dying && start.opacity == 1. && start.offset == point(px(0.), px(0.)));
-        let end = SurfaceMotion::of(&popup, 300., Side::Bottom, false);
+        let end = SurfaceMotion::of(&popup, 300., FloatingSide::Bottom, false);
         assert!(end.opacity == 0. && end.offset == point(px(0.), px(-2.)) && !end.animating);
     }
 }
