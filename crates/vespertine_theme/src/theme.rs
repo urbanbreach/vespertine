@@ -325,16 +325,6 @@ pub struct SourceMetadata {
     pub revision: String,
 }
 
-impl SourceMetadata {
-    /// Whether url, revision, license and asset hash are all non-empty.
-    pub fn is_complete(&self) -> bool {
-        !self.url.trim().is_empty()
-            && !self.revision.trim().is_empty()
-            && !self.license.trim().is_empty()
-            && !self.asset_hash.trim().is_empty()
-    }
-}
-
 /// Default base alpha of frosted card-like tints (THM-003 R17).
 pub const DEFAULT_FROST_TINT_ALPHA: f64 = 0.40;
 
