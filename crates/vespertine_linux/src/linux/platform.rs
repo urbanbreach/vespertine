@@ -782,12 +782,7 @@ impl Platform for LinuxPlatform {
             let identifier = self.connection.borrow().window_identifier();
             self.foreground_executor()
                 .spawn(async move {
-                    let result = super::file_chooser::prompt_for_paths(
-                        &super::file_chooser::DesktopPortal,
-                        identifier,
-                        &options,
-                    )
-                    .await;
+                    let result = super::file_chooser::prompt_for_paths(identifier, &options).await;
                     let _ = done_tx.send(result);
                 })
                 .detach();
@@ -815,7 +810,6 @@ impl Platform for LinuxPlatform {
             self.foreground_executor()
                 .spawn(async move {
                     let result = super::file_chooser::prompt_for_new_path(
-                        &super::file_chooser::DesktopPortal,
                         identifier,
                         &directory,
                         suggested_name.as_deref(),
