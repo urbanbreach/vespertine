@@ -384,7 +384,9 @@ impl Select {
     }
 
     fn commit(&mut self, id: &OptionId, window: &mut Window, cx: &mut Context<Self>) {
-        let enabled = position_of(&self.options, id).is_some_and(|ix| !self.options[ix].disabled);
+        // A menu that stayed open while its owner disabled the select commits nothing.
+        let enabled = !self.disabled
+            && position_of(&self.options, id).is_some_and(|ix| !self.options[ix].disabled);
         if !enabled {
             return;
         }

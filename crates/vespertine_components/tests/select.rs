@@ -496,6 +496,32 @@ fn a_disabled_select_is_not_focusable_and_ignores_input() {
 }
 
 #[test]
+fn an_open_select_disabled_by_its_owner_does_not_commit_a_row_click() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        selected: Some("opt1"),
+        ..Spec::new(options(4))
+    });
+    f.host.click(300.0, 36.0, 0, "").unwrap();
+    f.host.flush();
+    f.settle();
+    assert!(f.open_state());
+    let row = f.rect(MenuPart::Row(2)).expect("row 2");
+    let select = f.select.clone();
+    f.host
+        .app()
+        .update(|cx| select.update(cx, |select, cx| select.set_disabled(true, cx)));
+    f.host.flush();
+    f.host.click(row.0 + 10.0, row.1 + 10.0, 0, "").unwrap();
+    f.host.flush();
+    assert!(f.selections().is_empty());
+    assert_eq!(
+        f.read(|select| select.selected_id().map(|id| id.to_string())),
+        Some("opt1".to_string())
+    );
+}
+
+#[test]
 fn the_heading_stays_fixed_while_only_the_rows_scroll() {
     require_backend!();
     let mut f = fixture(Spec {
