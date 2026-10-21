@@ -20,11 +20,6 @@ use std::sync::Weak;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-/// Whether the application can import dma-buf pool buffers into its GPU device. It cannot: the
-/// transfer is optional (PLT-015 R14) and the fallback chain skips it, so `Transfer::DmaBuf` is
-/// never selected even when the helper advertises it.
-pub const DMABUF_IMPORT_AVAILABLE: bool = false;
-
 /// Outgoing queue bound: messages.
 pub const OUTGOING_MAX_MESSAGES: usize = 1024;
 /// Outgoing queue bound: bytes.
@@ -94,7 +89,7 @@ impl Default for HelperConfig {
         Self {
             helper_path: None,
             profile_root: None,
-            // shm when available, else inline; dma-buf is opt-in.
+            // shm when available, else inline.
             transfers: vec![Transfer::SharedMemory, Transfer::Inline],
             app_name: None,
             env: Vec::new(),
@@ -105,18 +100,16 @@ impl Default for HelperConfig {
 }
 
 impl HelperConfig {
-    /// The mode to configure: the first of dmabuf (only when allowed and importable), shm, inline
-    /// that the helper advertises and the application allows. Inline is the mandatory baseline.
+    /// The mode to configure: shared memory when the helper advertises it and the application
+    /// allows it, else inline, the mandatory baseline.
     pub fn select_transfer(&self, ready: &Ready) -> Transfer {
-        for candidate in [Transfer::DmaBuf, Transfer::SharedMemory] {
-            if candidate == Transfer::DmaBuf && !DMABUF_IMPORT_AVAILABLE {
-                continue;
-            }
-            if self.transfers.contains(&candidate) && ready.transfers.contains(&candidate) {
-                return candidate;
-            }
+        if self.transfers.contains(&Transfer::SharedMemory)
+            && ready.transfers.contains(&Transfer::SharedMemory)
+        {
+            Transfer::SharedMemory
+        } else {
+            Transfer::Inline
         }
-        Transfer::Inline
     }
 }
 
@@ -659,11 +652,6 @@ impl Helper {
         self.shared.page_count()
     }
 
-    /// Sends a global (page 0) command.
-    pub fn send_global(&self, command: &Command) -> Result<(), String> {
-        self.shared.send(0, command)
-    }
-
     /// Kills the child process. Used by tests that simulate a crash.
     #[doc(hidden)]
     pub fn kill_for_tests(&self) {
@@ -895,19 +883,6 @@ mod tests {
         assert_eq!(
             config.select_transfer(&ready(vec![Transfer::Inline])),
             Transfer::Inline
-        );
-        // dma-buf is never selected: the application cannot import it.
-        let config = HelperConfig {
-            transfers: vec![Transfer::DmaBuf, Transfer::SharedMemory, Transfer::Inline],
-            ..HelperConfig::default()
-        };
-        assert_eq!(
-            config.select_transfer(&ready(vec![
-                Transfer::Inline,
-                Transfer::SharedMemory,
-                Transfer::DmaBuf
-            ])),
-            Transfer::SharedMemory
         );
         let config = HelperConfig {
             transfers: vec![Transfer::Inline],

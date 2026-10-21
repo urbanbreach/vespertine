@@ -448,7 +448,6 @@ pub fn send_with_fds(socket: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<(
 pub enum Transfer {
     Inline,
     SharedMemory,
-    DmaBuf,
 }
 
 impl Transfer {
@@ -456,7 +455,6 @@ impl Transfer {
         match self {
             Transfer::Inline => "inline",
             Transfer::SharedMemory => "shm",
-            Transfer::DmaBuf => "dmabuf",
         }
     }
 
@@ -464,7 +462,6 @@ impl Transfer {
         match name {
             "inline" => Some(Transfer::Inline),
             "shm" => Some(Transfer::SharedMemory),
-            "dmabuf" => Some(Transfer::DmaBuf),
             _ => None,
         }
     }
@@ -753,25 +750,11 @@ impl Command {
         let payload = serde_json::to_vec(&self.to_json()).expect("command JSON serializes");
         encode_message(Direction::ToHelper, kind::COMMAND, page, &payload)
     }
-
-    /// Decodes a command payload (used by scripted helpers and tests).
-    pub fn cmd_name(payload: &Value) -> Option<&str> {
-        payload.get("cmd").and_then(Value::as_str)
-    }
 }
 
 /// Clamps a page size or scale to the helper's accepted ranges (PLT-015 R4).
 pub fn clamp_dimension(value: f64) -> u32 {
     (value.round().max(1.0)).min(f64::from(MAX_DIMENSION)) as u32
-}
-
-/// Clamps a page scale to 0.5..4.
-pub fn clamp_scale(scale: f32) -> f32 {
-    if scale.is_nan() {
-        1.0
-    } else {
-        scale.clamp(MIN_SCALE, MAX_SCALE)
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
