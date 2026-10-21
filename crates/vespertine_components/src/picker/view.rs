@@ -1400,6 +1400,8 @@ impl Render for Picker {
 impl Picker {
     /// Reports that the list is scrolled to its end once per arrival at the end (R15). The
     /// source set additionally allows at most one outstanding page request per generation.
+    /// New rows rearm the report: a list that still ends in view after they arrive (a page
+    /// shorter than the viewport) reports again, measured once layout has placed them.
     fn signal_scrolled_to_end(
         &mut self,
         results: &Results,
@@ -1408,6 +1410,16 @@ impl Picker {
     ) {
         if results.state != ListState::Rows {
             self.at_end = false;
+            return;
+        }
+        let rows_unchanged = results
+            .rows()
+            .map(|row| &row.key)
+            .eq(self.results.rows().map(|row| &row.key));
+        if !rows_unchanged {
+            // The scroll extent of the new rows is known after this frame's layout.
+            self.at_end = false;
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
             return;
         }
         let max = f32::from(self.scroll.max_offset().y);

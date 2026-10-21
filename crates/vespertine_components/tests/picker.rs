@@ -105,6 +105,8 @@ struct Spec {
     window: (f64, f64),
     summary_limit: usize,
     scope_limit: usize,
+    /// Records part bounds; its full-size probe adds the list padding to the scroll extent.
+    observe_bounds: bool,
 }
 
 impl Spec {
@@ -119,6 +121,7 @@ impl Spec {
             window: (640., 480.),
             summary_limit: 5,
             scope_limit: 50,
+            observe_bounds: true,
         }
     }
 }
@@ -181,8 +184,7 @@ fn fixture(spec: Spec) -> Fixture {
             );
             let paging_sources = sources.clone();
             let page_sources = sources.clone();
-            let tabs = spec.tabs;
-            let panel = spec.panel;
+            let (tabs, panel, observe_bounds) = (spec.tabs, spec.panel, spec.observe_bounds);
             let picker = cx.new(|cx| {
                 let mut picker = Picker::new(
                     "palette",
@@ -236,9 +238,6 @@ fn fixture(spec: Spec) -> Fixture {
                 .close_on_activate(spec.close_on_activate)
                 .row_accelerators(spec.row_accelerators)
                 .favorites(spec.favorites)
-                .observe_bounds(Rc::new(|part, bounds, cx| {
-                    PaintLog::record_bounds(cx, part_id(part), bounds)
-                }))
                 .on_open(move |_, cx| open_sources.update(cx, |sources, cx| sources.open(cx)))
                 .on_close(move |_, cx| {
                     closed.set(closed.get() + 1);
@@ -258,6 +257,11 @@ fn fixture(spec: Spec) -> Fixture {
                     page_sources.update(cx, |sources, cx| sources.retry_page(0, cx))
                 })
                 .on_activate(move |key, _, _| activated.borrow_mut().push(key.to_string()));
+                if observe_bounds {
+                    picker = picker.observe_bounds(Rc::new(|part, bounds, cx| {
+                        PaintLog::record_bounds(cx, part_id(part), bounds)
+                    }));
+                }
                 if tabs {
                     picker = picker.tabs(vec![
                         ScopeTab::all("All"),
@@ -961,6 +965,42 @@ fn more_rows_than_the_cap_show_the_cap_and_a_paged_source_gets_exactly_one_next_
             .count()
             <= 1,
         "none after a newer generation began"
+    );
+}
+
+#[test]
+fn pages_too_short_to_scroll_keep_requesting_the_next_page() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        tabs: true,
+        commands: Vec::new(),
+        observe_bounds: false,
+        ..Spec::new()
+    });
+    f.open();
+    f.keys("ctrl-3");
+    let page = |rows: &[&str]| {
+        Ok(Answer {
+            rows: rows.iter().map(|row| row.to_string()).collect(),
+            total: None,
+            indexing: false,
+            has_more: true,
+        })
+    };
+    let pages_requested = |f: &Fixture| -> Vec<usize> {
+        let wire = f.shared.wire.borrow();
+        wire.queries.iter().map(|(_, page)| *page).collect()
+    };
+    f.reply(0, page(&["alpha.txt"]));
+    f.settle_replies();
+    assert_eq!(pages_requested(&f), vec![0, 1]);
+    f.reply(1, page(&["beta.txt"]));
+    f.settle_replies();
+    assert!(f.shows("beta.txt"));
+    assert_eq!(
+        pages_requested(&f),
+        vec![0, 1, 2],
+        "the list still ends in view, so the next page is requested"
     );
 }
 
