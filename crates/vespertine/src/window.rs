@@ -6239,7 +6239,7 @@ impl Window {
     /// sprite is inflated by `3 * sigma_d` device pixels on every side before the
     /// transformation while the glyph keeps its size and alignment inside it, and each
     /// fragment averages a Gaussian neighborhood of `min(ceil(3 * sigma_d), 12)` texel taps
-    /// of the glyph's own atlas tile only (see [`blurred_coverage`]). The blurred coverage
+    /// of the glyph's own atlas tile only (see `blurred_coverage`). The blurred coverage
     /// then receives the usual contrast and gamma correction, then the scoped fade and
     /// rounded clip of [`with_edge_fade`](Self::with_edge_fade) and
     /// [`with_rounded_clip`](Self::with_rounded_clip), which are evaluated at final

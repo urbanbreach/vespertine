@@ -24,9 +24,11 @@ pub const BLUR_HALO_SIGMAS: f32 = 3.0;
 /// Largest tap radius of the discrete kernel: at most 25 by 25 = 625 taps.
 pub const MAX_BLUR_TAP_RADIUS: u32 = 12;
 
+#[cfg(any(test, feature = "test-support"))]
 /// Floor of the unpadded size in the tile mapping and of the accumulation denominator.
 pub const BLUR_EPSILON: f32 = 0.000001;
 
+#[cfg(any(test, feature = "test-support"))]
 /// Distance, in texels, a tap is kept away from the tile edge before it is sampled.
 pub const BLUR_TILE_INSET_TEXELS: f32 = 0.5;
 
@@ -64,6 +66,7 @@ pub fn blur_expanded_bounds(bounds: Bounds<ScaledPixels>, sigma_d: f32) -> Bound
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Source tile coordinate, in texels, of the normalized coordinate `unit` (0 to 1) across
 /// the expanded destination size `expanded_size` (device pixels) for a tile of `tile_size`
 /// texels and halo `halo`: `(unit * expanded_size - halo) * tile_size /
@@ -73,11 +76,13 @@ pub fn blur_tile_coordinate(unit: f32, expanded_size: f32, halo: f32, tile_size:
     (unit * expanded_size - halo) * tile_size / (expanded_size - 2.0 * halo).max(BLUR_EPSILON)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Weight of the tap at integer offset `(x, y)` texels: `exp(-(x^2 + y^2) / (2 sigma^2))`.
 pub fn blur_tap_weight(x: i32, y: i32, sigma: f32) -> f32 {
     (-((x * x + y * y) as f32) / (2.0 * sigma * sigma)).exp()
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Sum of the weights of the whole `(2r + 1)^2` neighborhood. This is the divisor of the
 /// blurred coverage, including taps that fall outside the tile.
 pub fn blur_weight_sum(sigma: f32) -> f32 {
@@ -91,6 +96,7 @@ pub fn blur_weight_sum(sigma: f32) -> f32 {
     sum
 }
 
+#[cfg(any(test, feature = "test-support"))]
 /// Blurred coverage at `center`, a position in texels measured from the top-left corner of
 /// a tile of `tile_size` texels, over the tile whose coverage texel `(x, y)` is
 /// `texel(x, y)` (0 to 1).
