@@ -1,6 +1,9 @@
 // Builds the native addon and installs it as native/vespertine_js.node.
 //
-//   node scripts/build-native.mjs [--release]
+//   node scripts/build-native.mjs [--release] [--test-host]
+//
+// `--test-host` also builds the offscreen test renderer behind `@vespertine/host/testing` (and
+// the React/Solid testing helpers) into the addon. Leave it off for addons that ship.
 
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync } from "node:fs";
@@ -10,10 +13,18 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "..");
 const release = process.argv.includes("--release");
+const testHost = process.argv.includes("--test-host");
 
 const build = spawnSync(
   "cargo",
-  ["build", "-p", "vespertine_js_node", "--message-format=json", ...(release ? ["--release"] : [])],
+  [
+    "build",
+    "-p",
+    "vespertine_js_node",
+    "--message-format=json",
+    ...(release ? ["--release"] : []),
+    ...(testHost ? ["--features", "offscreen"] : []),
+  ],
   { cwd: root, stdio: ["inherit", "pipe", "inherit"], encoding: "utf8", maxBuffer: 1 << 28 },
 );
 if (build.status !== 0) process.exit(build.status ?? 1);

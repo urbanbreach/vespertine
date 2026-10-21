@@ -19,7 +19,10 @@ import { loadNative } from "./native.js";
 export function createTestRenderer({ width, height, scaleFactor, native, onError, onEvent } = {}) {
   const addon = native ?? loadNative();
   if (typeof addon.TestRenderer !== "function") {
-    throw new Error("The native addon was built without the offscreen test host (TestRenderer)");
+    throw new Error(
+      "The native addon was built without the offscreen test host (TestRenderer); " +
+        "build it with `node scripts/build-native.mjs --test-host`",
+    );
   }
   return createNativeRenderer({
     native: { Renderer: addon.TestRenderer },

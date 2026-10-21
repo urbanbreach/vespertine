@@ -1,11 +1,11 @@
-//! Test-support observation of what a frame actually paints.
+//! Observation of what a frame actually paints.
 //!
 //! Test hosts (DEV-006) need the strings painted by the last frame in paint order, including
 //! text that is painted by custom elements and therefore exists in no element tree, and they
 //! need to know exactly when a frame starts so that per-frame logs are cleared once per frame.
 //! Every [`ShapedLine`](crate::ShapedLine) and [`WrappedLine`](crate::WrappedLine) paint reports
 //! its source text, and every [`Window::draw`] reports its start, when an observer is installed.
-//! The hooks are compiled only with the `test-support` feature (or for this crate's own tests)
+//! The hooks are compiled only with the `paint-observer` feature (or for this crate's own tests)
 //! and cost one global lookup per painted line or drawn frame when no observer is installed.
 
 use crate::{App, Global, Pixels, Point, SharedString, Window};

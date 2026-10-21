@@ -123,7 +123,7 @@ mod tab_stop;
 mod taffy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "paint-observer"))]
 mod text_paint_observer;
 mod text_system;
 mod url_scheme;
@@ -316,7 +316,7 @@ use taffy::TaffyLayoutEngine;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]
 pub use test::*;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "paint-observer"))]
 pub use text_paint_observer::{PaintObserver, PaintedText};
 pub use text_system::*;
 pub use url_scheme::*;

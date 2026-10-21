@@ -2,7 +2,9 @@
 //! the one dispatcher that maps validated catalog requests onto it.
 
 use super::protocol::{AutomationError, Capability, ErrorCode, METHODS, Request, validate_request};
-use crate::{HostError, Rect, TestHost, TreeNode};
+#[cfg(feature = "offscreen")]
+use crate::{HostError, TestHost};
+use crate::{Rect, TreeNode};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -372,6 +374,7 @@ pub fn method_names() -> Vec<&'static str> {
     METHODS.iter().map(|method| method.name).collect()
 }
 
+#[cfg(feature = "offscreen")]
 fn error(error: HostError) -> AutomationError {
     match error {
         HostError::NoSuchElement(id) => {
@@ -386,6 +389,7 @@ fn error(error: HostError) -> AutomationError {
     }
 }
 
+#[cfg(feature = "offscreen")]
 impl AutomationHost for TestHost {
     fn capabilities(&self) -> Vec<Capability> {
         vec![

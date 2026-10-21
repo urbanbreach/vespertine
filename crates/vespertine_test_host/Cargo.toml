@@ -16,9 +16,20 @@ doctest = false
 [[bin]]
 name = "vespertine_automation_fixture"
 path = "src/bin/automation_fixture.rs"
+required-features = ["offscreen"]
 
 [features]
-default = []
+default = ["offscreen"]
+# The offscreen window and the in-process automation backend over it. They need the test
+# platform and the offscreen GPU renderer; without this feature the crate only provides the
+# automation protocol, client and server plus the retained-host types a live application serves.
+offscreen = [
+    "vespertine/test-support",
+    "dep:vespertine_platform",
+    "vespertine_platform/test-support",
+    "dep:vespertine_wgpu",
+    "vespertine_wgpu/test-support",
+]
 # Exposes the frame-overlay controls of the host (requires the profiler build of vespertine).
 profiler = ["vespertine/profiler"]
 
@@ -32,11 +43,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 ttf-parser = "0.25"
-vespertine = { workspace = true, features = ["test-support"] }
-vespertine_platform = { workspace = true, features = ["test-support"] }
+vespertine.workspace = true
+vespertine_platform = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-vespertine_wgpu = { workspace = true, features = ["test-support"] }
+vespertine_wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

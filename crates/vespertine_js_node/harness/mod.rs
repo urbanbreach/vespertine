@@ -62,14 +62,22 @@ pub fn run_package(
         .unwrap_or_else(|error| panic!("failed to run {program}: {error}"))
 }
 
-/// Builds the addon with cargo and installs it as `<target>/vespertine-js/vespertine_js.node`
-/// (the extension Node requires to load a native module). Returns its path.
+/// Builds the addon, with the offscreen test renderer the JavaScript tests drive, with cargo and
+/// installs it as `<target>/vespertine-js/vespertine_js.node` (the extension Node requires to
+/// load a native module). Returns its path.
 pub fn build_addon(release: bool) -> PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut command = Command::new(cargo);
     command
         .current_dir(workspace_root())
-        .args(["build", "-p", "vespertine_js_node", "--message-format=json"])
+        .args([
+            "build",
+            "-p",
+            "vespertine_js_node",
+            "--features",
+            "offscreen",
+            "--message-format=json",
+        ])
         .stderr(Stdio::inherit());
     if release {
         command.arg("--release");

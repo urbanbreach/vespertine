@@ -78,12 +78,16 @@
 
 mod error;
 mod events;
+#[cfg(feature = "offscreen")]
 mod host;
+#[cfg(feature = "offscreen")]
 mod input;
+#[cfg(feature = "offscreen")]
 mod inspect;
-#[cfg(feature = "profiler")]
+#[cfg(all(feature = "offscreen", feature = "profiler"))]
 mod overlay;
 mod paint_log;
+#[cfg(feature = "offscreen")]
 mod root;
 mod tree;
 mod types;
@@ -94,6 +98,7 @@ pub mod fixture;
 
 pub use error::{HostError, HostResult};
 pub use events::HostEvents;
+#[cfg(feature = "offscreen")]
 pub use host::{
     DEFAULT_HEIGHT, DEFAULT_SCALE_FACTOR, DEFAULT_WIDTH, EventDispatcher, HostOptions,
     MAX_FRAMES_PER_FLUSH, OFFSCREEN_ORIGIN, RendererFactory, SceneObserver, TestHost, is_available,
@@ -108,6 +113,7 @@ pub use types::{
 
 /// Skips the enclosing test (returns early with a message) when no GPU test backend is
 /// available. Tests that need the host must not fake a result when the backend is missing.
+#[cfg(feature = "offscreen")]
 #[macro_export]
 macro_rules! require_backend {
     () => {

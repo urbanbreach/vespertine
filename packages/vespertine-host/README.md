@@ -19,7 +19,10 @@ startFrameLoop(renderer, { onTerminated: () => process.exit(0) });
 
 The renderer is the Node-API addon `vespertine_js_node` (core: `vespertine_js`). Build it with
 `node scripts/build-native.mjs [--release]`; it is installed as `native/vespertine_js.node`
-(or point `VESPERTINE_NATIVE_ADDON` at the file). Importing the helpers never loads the addon or
+(or point `VESPERTINE_NATIVE_ADDON` at the file). The offscreen test renderer behind
+`@vespertine/host/testing` and the React/Solid testing helpers is not part of that addon; build
+the addon that tests load with `node scripts/build-native.mjs --test-host` (cargo feature
+`offscreen` of `vespertine_js_node`). Importing the helpers never loads the addon or
 opens a window; `createNativeRenderer` does.
 
 The window runs on its own UI thread. Commands that need an answer (`getWindowSize`,
@@ -62,7 +65,7 @@ else the running executable) and never relaunches or quits; the caller owns prom
 
 ## Tests and tools
 
-`npm test` (or `bun test`) runs the helper tests, plus headless checks of the addon when it is built;
-`cargo test -p vespertine_js_node` builds the addon and runs both runtimes.
+`npm test` (or `bun test`) runs the helper tests, plus headless checks of the addon when it is built
+with `--test-host`; `cargo test -p vespertine_js_node` builds that addon and runs both runtimes.
 `scripts/record-fixture.mjs` records a mutation queue from a real `react-reconciler` run (needs
 `npm install`); `scripts/measure-serialization.mjs` times the JavaScript side of the DEV-008 fixture.

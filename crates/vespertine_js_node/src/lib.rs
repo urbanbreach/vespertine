@@ -5,6 +5,7 @@
 //! rejections) carrying the core's messages, and UI-thread events are delivered to the
 //! constructor callback through a thread-safe function so the UI thread never blocks.
 
+#[cfg(feature = "offscreen")]
 pub mod test_renderer;
 pub mod updater;
 

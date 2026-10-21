@@ -1,7 +1,7 @@
 // Renders the curated showcase screenshot (DEV-009 R5): the task-list reference surface on the
 // native offscreen test host, captured as a PNG at the path given as the first argument.
 //
-//   VESPERTINE_NATIVE_ADDON=<addon> node scripts/showcase.mjs <output.png>
+//   VESPERTINE_NATIVE_ADDON=<addon built with --test-host> node scripts/showcase.mjs <output.png>
 //
 // Exits 0 after writing the file, 2 when the machine has no GPU or software adapter for the
 // offscreen host (nothing is written), 1 on any other failure.

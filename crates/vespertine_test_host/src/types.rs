@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use vespertine::{Bounds, Modifiers, MouseButton, Pixels, Point, Size, point, px, size};
+use vespertine::{Bounds, Modifiers, MouseButton, Pixels};
+#[cfg(feature = "offscreen")]
+use vespertine::{Point, Size, point, px, size};
 
 /// A rectangle in logical pixels, window coordinates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -205,10 +207,12 @@ pub fn mouse_button(index: u8) -> Option<MouseButton> {
     }
 }
 
+#[cfg(feature = "offscreen")]
 pub(crate) fn logical_point(x: f64, y: f64) -> Point<Pixels> {
     point(px(x as f32), px(y as f32))
 }
 
+#[cfg(feature = "offscreen")]
 pub(crate) fn logical_size(width: f64, height: f64) -> Size<Pixels> {
     size(px(width as f32), px(height as f32))
 }

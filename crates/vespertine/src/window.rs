@@ -3993,7 +3993,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(any(test, feature = "paint-observer"))]
         crate::text_paint_observer::notify_frame_started(self, cx);
 
         assert!(

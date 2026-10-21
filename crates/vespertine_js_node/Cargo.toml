@@ -17,9 +17,16 @@ crate-type = ["cdylib"]
 test = false
 doctest = false
 
+[features]
+# Exports the offscreen `TestRenderer` / `testHostAvailable` behind the JavaScript test helpers
+# (`@vespertine/host/testing`). It builds the test platform and the offscreen GPU renderer into
+# the addon, so production addons leave it off; the package test scripts and
+# `build-native.mjs --test-host` turn it on.
+offscreen = ["vespertine_test_host/offscreen"]
+
 [dependencies]
 vespertine_js.workspace = true
-vespertine_test_host = { path = "../vespertine_test_host" }
+vespertine_test_host = { path = "../vespertine_test_host", default-features = false }
 vespertine_http_client.workspace = true
 vespertine_reqwest_client.workspace = true
 vespertine_updater.workspace = true

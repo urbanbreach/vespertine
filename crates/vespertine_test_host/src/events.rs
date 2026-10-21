@@ -2,7 +2,9 @@
 
 use crate::types::NativeEvent;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
-use vespertine::{App, Global, Subscription};
+#[cfg(feature = "offscreen")]
+use vespertine::Subscription;
+use vespertine::{App, Global};
 
 type SelectionListener = Rc<RefCell<Box<dyn FnMut()>>>;
 
@@ -10,6 +12,7 @@ type SelectionListener = Rc<RefCell<Box<dyn FnMut()>>>;
 struct State {
     queue: VecDeque<NativeEvent>,
     selection_listeners: Vec<(usize, SelectionListener)>,
+    #[cfg(feature = "offscreen")]
     next_listener_id: usize,
 }
 
@@ -52,10 +55,12 @@ impl HostEvents {
         }
     }
 
+    #[cfg(feature = "offscreen")]
     pub(crate) fn drain(&self) -> Vec<NativeEvent> {
         self.state.borrow_mut().queue.drain(..).collect()
     }
 
+    #[cfg(feature = "offscreen")]
     pub(crate) fn subscribe_selection(&self, listener: impl FnMut() + 'static) -> Subscription {
         let mut state = self.state.borrow_mut();
         let id = state.next_listener_id;
