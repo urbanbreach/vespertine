@@ -4,6 +4,65 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
+## Unreleased
+
+A cleanup release: duplicate implementations, unused API, tests that could not fail and the tooling
+of the autonomous build are removed, and the crates build in more places.
+
+### Fixed
+
+- The macOS and Windows backends compile again (a Linux-only `bail` import in `vespertine`, a renamed
+  `util` import in `vespertine_windows`), and both type-check from Linux: the `vespertine_apple` build
+  script asks Cargo for the target OS. `vespertine_desktop` and `vespertine_wgpu` build for Windows and
+  macOS, and so does `vespertine_components`.
+- Projects that depend on Vespertine by path or git build: taffy is a path dependency instead of a
+  `[patch.crates-io]` entry (which Cargo applies only in the top-level workspace), and the vendored
+  crate is its own workspace root, so checkouts nested in another workspace can run `cargo fmt --all`.
+- Text layout no longer assembles lines from cached digit pairs or a cached prefix (glyphs could land
+  up to 0.5 px from the platform's positions, and per-size tables were never freed); every cache miss
+  is shaped by the platform. PRF-013 is withdrawn.
+
+### Changed
+
+- `vespertine_components` has default-on features `browser` (Linux only; needs `vespertine_webview`),
+  `diagram` (Mermaid through `merman`) and `math` (4.2 MB of math faces). Without them, Mermaid fences
+  and formulas render as source.
+- The browser address bar is a chromeless `TextField`: `BrowserSurface::address()` returns
+  `Entity<TextField>`, and pasted line breaks become spaces.
+- The Node addon contains the offscreen test renderer (`TestRenderer`, `testHostAvailable`) and the
+  framework's test support only when built with `scripts/build-native.mjs --test-host` (cargo feature
+  `offscreen` of `vespertine_js_node`); live automation needs only the new `paint-observer` feature of
+  `vespertine`. `vespertine_test_host` gains an `offscreen` feature (default on).
+- `scripts/third-party --check` is an explicit gate instead of part of `cargo test`.
+- `vespertine_theme` has one `Appearance` enum (`theme::Appearance`) and one variant re-key helper
+  (`library::rekeyed_variant_id`), and decodes hex colors with the core CSS parser.
+- Test fixtures left the public API: `vespertine_desktop::context::fake`, the glyph-blur reference
+  helpers of `vespertine` (now `test-support` only), `streaming::SampleService` of
+  `vespertine_components`, and the `instrument`, `reference` and `workload` modules of
+  `vespertine_host_tree`.
+- The `data_table` example of `vespertine_components` is now `commit_table`.
+
+### Removed
+
+- The vendored `polling` crate; the workspace uses the published 3.11.0.
+- `vespertine_residency` and its PERF-PRF-017 scene; PRF-017 keeps A3 (fade spans never reshape).
+- Second implementations: the core link element (`vespertine_richtext` keeps the link layer; target
+  classification stays in `vespertine::link`), the core tree drag-and-drop policies and `DragSession`
+  (the components tree has its own), `KeyboardActivation` (buttons use `ActivationLatch`), the
+  comparison diff viewer (`diff::compare`, `diff::jsdiff`, FID-CMP-015-2; `DiffView` remains),
+  `vespertine_richtext::CodeView` (use `CodeBlock`), the badges checklist panel (use `StatusSection`),
+  `CountReporter` and `OwnershipStack`, `code::ThumbMetrics` and `floating::Side` (use
+  `vespertine::FloatingSide`).
+- Unused API: the vertical tab-group engine, `ControlledState`, streaming viewport memory,
+  `CodeBlock::row_after` and other uncalled builders and helpers in `vespertine`,
+  `vespertine_components`, `vespertine_theme`, `vespertine_webview`, `vespertine_desktop` and
+  `vespertine_test_host`.
+- Tooling: `scripts/land`, `scripts/test-land` and `scripts/check-features` (FEATURES.md remains as
+  documentation), the real-window mode and `retention_showcase` example of `vsp-bench`, and the scene
+  runner's `profile` feature.
+- Tests that could not fail or repeated others, and the fidelity tests that read reference images from
+  outside the repository.
+
 ## 0.1.0 - 2026-10-20
 
 Initial release: a fork of upstream GPUI (pinned in [UPSTREAM.md](UPSTREAM.md)) with 136 implemented
