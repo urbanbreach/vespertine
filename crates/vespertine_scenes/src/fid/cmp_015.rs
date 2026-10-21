@@ -1,5 +1,4 @@
-//! FID-CMP-015-1 (the native unified patch viewer) and FID-CMP-015-2 (the composed comparison
-//! viewer in split mode).
+//! FID-CMP-015-1 (the native unified patch viewer).
 
 use crate::common::hex;
 use crate::scene::{Scene, register_scene};
@@ -7,7 +6,6 @@ use std::sync::Arc;
 use vespertine::{
     AnyElement, App, Entity, IntoElement, ParentElement, Rgba, Styled, Window, div, px, rgb,
 };
-use vespertine_components::diff::compare::{ComparisonHunk, ComparisonView};
 use vespertine_components::diff::state::DiffViewState;
 use vespertine_components::diff::view::DiffView;
 use vespertine_theme::document::DocumentTheme;
@@ -65,41 +63,3 @@ impl Scene for Cmp0151 {
 }
 
 register_scene!("FID-CMP-015-1", || Cmp0151 { state: None });
-
-struct Cmp0152;
-
-impl Scene for Cmp0152 {
-    fn size(&self) -> (f32, f32) {
-        (700.0, 240.0)
-    }
-
-    fn frame(&mut self, _f: u64, _window: &mut Window, _cx: &mut App) -> AnyElement {
-        let hunk = ComparisonHunk {
-            old_start: 1,
-            old_count: 2,
-            new_start: 1,
-            new_count: 2,
-            lines: vec![
-                "-same old".to_owned(),
-                "+same new".to_owned(),
-                " unchanged".to_owned(),
-            ],
-        };
-        let viewer = ComparisonView::new(vec![hunk])
-            .split_view(true)
-            .font_family("Liberation Mono")
-            .font_size(px(13.))
-            .line_height(px(20.))
-            .absolute()
-            .left(px(20.))
-            .top(px(20.))
-            .w(px(660.));
-        div()
-            .size_full()
-            .bg(hex(0x181818))
-            .child(viewer)
-            .into_any_element()
-    }
-}
-
-register_scene!("FID-CMP-015-2", || Cmp0152);
