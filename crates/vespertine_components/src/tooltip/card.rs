@@ -6,11 +6,13 @@
 //! the timers (the dwell and the interactive hide grace) and drives the pure controllers
 //! [`HoverCards`] and [`InteractiveHide`], so the timing rules are the ones tested there. The
 //! card never takes keyboard focus and holds no focus handle, so showing or hiding it never
-//! blurs the focused element, an embedded page or an editor.
+//! blurs the focused element, an embedded page or an editor. While a card is shown it is a
+//! dismissal layer (CMP-002 R6): Escape reaches it before any layer below it and hides it.
 
 use super::hover_card::{HideAnswer, HoverCards, InteractiveHide, Reaction};
 use crate::floating::{
-    AnchoredMenu, BESIDE_OFFSET, ContainedAlign, Placement, TriggerBounds, containment_limits,
+    AnchoredMenu, BESIDE_OFFSET, ContainedAlign, EscapeHandler, EscapeOutcome, LayerRegistration,
+    Placement, TriggerBounds, containment_limits, set_layer_bounds,
 };
 use crate::tokens::ComponentTokens;
 use std::{collections::HashMap, hash::Hash, rc::Rc, time::Duration, time::Instant};
@@ -52,6 +54,8 @@ pub struct HoverCardHost<K: Clone + Eq + Hash + 'static> {
     card_bounds: TriggerBounds,
     origin: Instant,
     last_pointer: Point<Pixels>,
+    /// The dismissal layer of the shown card.
+    layer: Option<LayerRegistration>,
 }
 
 impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
@@ -74,6 +78,7 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
             card_bounds: TriggerBounds::new(),
             origin: cx.background_executor().now(),
             last_pointer: Point::default(),
+            layer: None,
         }
     }
 
@@ -381,11 +386,34 @@ impl<K: Clone + Eq + Hash + 'static> HoverCardHost<K> {
 
 impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(key) = self.cards.shown().cloned() else {
+        let shown = self
+            .cards
+            .shown()
+            .cloned()
+            .and_then(|key| Some((self.triggers.get(&key).cloned()?, key)));
+        let Some((trigger, key)) = shown else {
+            // Dropping the registration leaves the dismissal stack.
+            self.layer = None;
             return div().into_any_element();
         };
-        let Some(trigger) = self.triggers.get(&key).cloned() else {
-            return div().into_any_element();
+        let layer = match &self.layer {
+            Some(layer) => layer.id(),
+            None => {
+                let host = cx.entity().downgrade();
+                let escape: EscapeHandler = Rc::new(move |window, cx| {
+                    if let Some(host) = host.upgrade() {
+                        host.update(cx, |this, cx| {
+                            this.layer = None;
+                            this.dismiss_cold(window, cx);
+                        });
+                    }
+                    EscapeOutcome::Dismissed
+                });
+                let registration = LayerRegistration::new(window, cx, escape);
+                let id = registration.id();
+                self.layer = Some(registration);
+                id
+            }
         };
         let body = self.card_body(&key, window, cx);
         let placement = match self.placement {
@@ -429,7 +457,15 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
                         }
                     })
                     .child(body)
-                    .child(tracker.probe()),
+                    .child(tracker.probe())
+                    .child(
+                        canvas(
+                            move |bounds, window, cx| set_layer_bounds(window, cx, layer, bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
             );
         // Window-level pointer tracking while the card is shown: the interactive corridor and
         // the cold dismissal by a wheel scroll.

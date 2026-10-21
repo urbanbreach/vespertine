@@ -5,6 +5,7 @@ use vespertine::{
     AppContext as _, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
     Styled, Window, div, px,
 };
+use vespertine_components::floating::{EscapeOutcome, register_layer};
 use vespertine_components::tooltip::card::{CardPlacement, HoverCardHost};
 use vespertine_test_host::{HostOptions, TestHost, require_backend};
 
@@ -205,6 +206,41 @@ fn a_click_a_scroll_and_a_drag_dismiss_cold() {
     f.host.scroll_wheel(60.0, 35.0, 0.0, -30.0, "").unwrap();
     f.host.flush();
     assert_eq!(f.shown(), None, "a scroll hides the card");
+}
+
+#[test]
+fn escape_hides_a_shown_card_before_the_layer_below_it() {
+    require_backend!();
+    let mut f = fixture(false, CardPlacement::Below);
+    // A layer that is already open below the card (a menu or a dialog).
+    let below = Rc::new(Cell::new(0));
+    let window = f.host.window();
+    f.host
+        .app()
+        .update_window(window, {
+            let below = below.clone();
+            move |_, window, cx| {
+                register_layer(
+                    window,
+                    cx,
+                    Rc::new(move |_, _| {
+                        below.set(below.get() + 1);
+                        EscapeOutcome::Consumed
+                    }),
+                );
+            }
+        })
+        .unwrap();
+    f.at(0);
+    f.pass(550.);
+    assert_eq!(f.shown(), Some(0));
+    f.host.key_down("escape", false, None).unwrap();
+    f.host.flush();
+    assert_eq!(f.shown(), None, "Escape hides the card");
+    assert_eq!(below.get(), 0, "the layer below did not see it");
+    f.host.key_down("escape", false, None).unwrap();
+    f.host.flush();
+    assert_eq!(below.get(), 1, "the next Escape reaches the layer below");
 }
 
 #[test]
