@@ -8,20 +8,15 @@
 //!   [`column_slot`], [`insertion_index`], [`slide_transition`]) and the [`ReorderPreview`] state
 //!   that tracks the hovered slot for the live gap preview;
 //! * stable group identities and snapshot validation ([`DragGroup`], [`ReorderPayload`]);
-//! * hierarchical (tree) move resolution ([`selection_roots`], [`destination_directory`],
-//!   [`resolve_tree_moves`]);
 //! * the three edge-autoscroll profiles as pure functions ([`linear_autoscroll_speed`],
 //!   [`ramp_autoscroll_step`], [`selection_autoscroll_step`]) and a loop driver
 //!   ([`AutoscrollLoop`]) that runs them on the framework's executor clock;
-//! * [`DragSession`], which owns the destination, the dwell-to-expand timer and the autoscroll loop
-//!   of one drag and cancels all of them together;
 //! * classification and validation of externally dropped paths ([`PathKind`], [`classify_path`],
 //!   [`ExternalPaths::require_regular_files`]);
-//! * drag cursor helpers ([`set_drag_cursor`], [`clear_drag_cursor`]).
+//! * the [`set_drag_cursor`] drag cursor helper.
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashSet,
     fmt,
     path::{Path, PathBuf},
     rc::Rc,
@@ -30,8 +25,8 @@ use std::{
 };
 
 use crate::{
-    App, Bounds, CursorStyle, ExternalPaths, KeyDownEvent, Pixels, Point, ScrollHandle,
-    SharedString, Subscription, Task, Window, point, px,
+    App, Bounds, CursorStyle, ExternalPaths, Pixels, Point, ScrollHandle, SharedString, Task,
+    Window, point, px,
 };
 
 /// Interval between autoscroll ticks.
@@ -50,10 +45,6 @@ pub const RAMP_AUTOSCROLL_MAX_STEP: Pixels = px(12.);
 pub const SELECTION_AUTOSCROLL_FACTOR: f32 = 0.2;
 /// Inset applied to the right and bottom edges when clamping a selection end into an editor.
 pub const SELECTION_EDGE_INSET: Pixels = px(0.5);
-/// Width of the scroll rail at the right edge of a tree, which is never a drop target.
-pub const SCROLL_RAIL_WIDTH: Pixels = px(12.);
-/// How long a destination directory must stay unchanged before a collapsed one expands.
-pub const DWELL_TO_EXPAND: Duration = Duration::from_millis(650);
 
 // ---------------------------------------------------------------------------------------------
 // Slot geometry
@@ -455,211 +446,6 @@ impl<Id: PartialEq> ReorderPayload<Id> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Hierarchical move resolution
-// ---------------------------------------------------------------------------------------------
-
-/// A dragged tree entry: its path relative to the tree root and whether it is a directory.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeEntry {
-    /// Path relative to the tree root.
-    pub path: PathBuf,
-    /// Whether the entry is a directory.
-    pub is_directory: bool,
-}
-
-impl TreeEntry {
-    /// A directory entry.
-    pub fn directory(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            is_directory: true,
-        }
-    }
-
-    /// A file entry.
-    pub fn file(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            is_directory: false,
-        }
-    }
-}
-
-/// What a visible tree row is, for drop-target resolution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TreeRowKind {
-    /// A directory row; it is its own destination.
-    Directory,
-    /// A file row; its destination is its parent directory.
-    File,
-    /// A link row; it is not a target.
-    Link,
-    /// An explicit root row; its destination is the root.
-    Root,
-}
-
-/// A visible tree row under the pointer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeRow {
-    /// Path relative to the tree root (empty for the root row).
-    pub path: PathBuf,
-    /// The row's kind.
-    pub kind: TreeRowKind,
-}
-
-/// What the pointer is over inside a tree's drag region.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TreeHit<'a> {
-    /// A visible row.
-    Row(&'a TreeRow),
-    /// The empty area below the last row.
-    BelowLastRow,
-}
-
-/// The selection roots of a multi-selection: the entries of `visible` (in visible order) for which
-/// `is_selected` holds and none of whose ancestors is selected, so nothing is moved twice.
-pub fn selection_roots(
-    visible: &[TreeEntry],
-    is_selected: impl Fn(&TreeEntry) -> bool,
-) -> Vec<&TreeEntry> {
-    let selected: HashSet<&Path> = visible
-        .iter()
-        .filter(|entry| is_selected(entry))
-        .map(|entry| entry.path.as_path())
-        .collect();
-    visible
-        .iter()
-        .filter(|entry| selected.contains(entry.path.as_path()))
-        .filter(|entry| {
-            !entry
-                .path
-                .ancestors()
-                .skip(1)
-                .any(|ancestor| selected.contains(ancestor))
-        })
-        .collect()
-}
-
-/// Resolves the destination directory (relative to the root; the empty path is the root) for a
-/// pointer position over a tree.
-///
-/// The pointer must be inside `region`; the rightmost [`SCROLL_RAIL_WIDTH`] pixels are never a
-/// target. A directory row is its own destination, a file row targets its parent directory, a link
-/// row is not a target, a root row targets the root, and the empty area below the last row targets
-/// the root.
-pub fn destination_directory(
-    region: Bounds<Pixels>,
-    pointer: Point<Pixels>,
-    hit: TreeHit<'_>,
-) -> Option<PathBuf> {
-    if !region.contains(&pointer) || pointer.x >= region.right() - SCROLL_RAIL_WIDTH {
-        return None;
-    }
-    match hit {
-        TreeHit::BelowLastRow => Some(PathBuf::new()),
-        TreeHit::Row(row) => match row.kind {
-            TreeRowKind::Directory => Some(row.path.clone()),
-            TreeRowKind::File => Some(row.path.parent().map(Path::to_path_buf).unwrap_or_default()),
-            TreeRowKind::Link => None,
-            TreeRowKind::Root => Some(PathBuf::new()),
-        },
-    }
-}
-
-/// One resolved move of a tree drop.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeMove {
-    /// Current path of the entry.
-    pub source: PathBuf,
-    /// New path: `destination_directory/name`, or just `name` for the root.
-    pub destination: PathBuf,
-}
-
-/// Why a tree drop is invalid: there is no destination, hide drop feedback and use the prohibited
-/// cursor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TreeMoveError {
-    /// A directory would move into itself or one of its descendants.
-    IntoSelf {
-        /// The offending directory.
-        source: PathBuf,
-    },
-    /// Two items would land on the same destination path.
-    NameCollision {
-        /// The contested destination path.
-        destination: PathBuf,
-    },
-    /// An entry has no last path component to name it by.
-    MissingName {
-        /// The unnameable entry.
-        source: PathBuf,
-    },
-    /// Every item is skipped (its parent already is the destination), or there are no items.
-    NothingToMove,
-}
-
-impl fmt::Display for TreeMoveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::IntoSelf { source } => {
-                write!(f, "cannot move {} into itself", source.display())
-            }
-            Self::NameCollision { destination } => {
-                write!(f, "several items would become {}", destination.display())
-            }
-            Self::MissingName { source } => write!(f, "{} has no name", source.display()),
-            Self::NothingToMove => f.write_str("nothing to move"),
-        }
-    }
-}
-
-impl std::error::Error for TreeMoveError {}
-
-/// Resolves the moves for dropping `items` (normally [`selection_roots`]) into `destination`
-/// (relative to the root; empty for the root).
-///
-/// Each item lands on `destination/name` where name is the last component of its source path. An
-/// item whose current parent equals the destination is skipped. The whole gesture is invalid if a
-/// directory would go into itself or a descendant, or if two items would land on the same
-/// destination; otherwise the moves are the non-skipped items, and an empty list is invalid.
-pub fn resolve_tree_moves(
-    items: &[TreeEntry],
-    destination: &Path,
-) -> Result<Vec<TreeMove>, TreeMoveError> {
-    let mut landed = HashSet::new();
-    let mut moves = Vec::new();
-    for item in items {
-        if item.is_directory && destination.starts_with(&item.path) {
-            return Err(TreeMoveError::IntoSelf {
-                source: item.path.clone(),
-            });
-        }
-        let Some(name) = item.path.file_name() else {
-            return Err(TreeMoveError::MissingName {
-                source: item.path.clone(),
-            });
-        };
-        let target = destination.join(name);
-        if !landed.insert(target.clone()) {
-            return Err(TreeMoveError::NameCollision {
-                destination: target,
-            });
-        }
-        if item.path.parent() == Some(destination) {
-            continue;
-        }
-        moves.push(TreeMove {
-            source: item.path.clone(),
-            destination: target,
-        });
-    }
-    if moves.is_empty() {
-        return Err(TreeMoveError::NothingToMove);
-    }
-    Ok(moves)
-}
-
-// ---------------------------------------------------------------------------------------------
 // Edge autoscroll profiles (pure)
 // ---------------------------------------------------------------------------------------------
 
@@ -979,211 +765,21 @@ impl AutoscrollLoop {
 // Drag cursor
 // ---------------------------------------------------------------------------------------------
 
-fn set_drag_cursor_style(window: &mut Window, cx: &mut App, style: CursorStyle) -> bool {
-    if !cx.has_active_drag() {
-        return false;
-    }
-    if cx.active_drag_cursor_style() != Some(style) {
-        cx.set_active_drag_cursor_style(style, window);
-    }
-    true
-}
-
 /// Sets the active drag's cursor: a closed hand when the current target would accept the drop,
 /// the prohibited-operation cursor when it would not. Returns `false` when no drag is active.
 pub fn set_drag_cursor(window: &mut Window, cx: &mut App, accepts: bool) -> bool {
+    if !cx.has_active_drag() {
+        return false;
+    }
     let style = if accepts {
         CursorStyle::ClosedHand
     } else {
         CursorStyle::OperationNotAllowed
     };
-    set_drag_cursor_style(window, cx, style)
-}
-
-/// Sets the active drag's cursor back to the arrow, as when the drag state is cleared. Returns
-/// `false` when no drag is active.
-pub fn clear_drag_cursor(window: &mut Window, cx: &mut App) -> bool {
-    set_drag_cursor_style(window, cx, CursorStyle::Arrow)
-}
-
-// ---------------------------------------------------------------------------------------------
-// Drag session: destination, dwell timer and autoscroll of one drag
-// ---------------------------------------------------------------------------------------------
-
-struct SessionState<K> {
-    destination: RefCell<Option<K>>,
-    dwell: RefCell<Option<Task<()>>>,
-    autoscroll: AutoscrollLoop,
-}
-
-/// The transient state of one hierarchical drag: the resolved destination `K`, the dwell timer
-/// that expands a collapsed destination after [`DWELL_TO_EXPAND`], and the autoscroll loop.
-/// Cloning shares the state, so it can be captured by listeners.
-///
-/// Escape ([`cancel_on_escape`](Self::cancel_on_escape)), window deactivation
-/// ([`cancel_on_deactivation`](Self::cancel_on_deactivation)), the pointer leaving the drag region
-/// ([`pointer_moved`](Self::pointer_moved)), an incompatible payload
-/// ([`retain_if_compatible`](Self::retain_if_compatible)) and the end of the drag
-/// ([`clear_if_idle`](Self::clear_if_idle)) all clear the destination, the dwell timer and the
-/// autoscroll loop together.
-pub struct DragSession<K> {
-    state: Rc<SessionState<K>>,
-}
-
-impl<K> Clone for DragSession<K> {
-    fn clone(&self) -> Self {
-        Self {
-            state: self.state.clone(),
-        }
+    if cx.active_drag_cursor_style() != Some(style) {
+        cx.set_active_drag_cursor_style(style, window);
     }
-}
-
-impl<K: Clone + PartialEq + 'static> Default for DragSession<K> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<K: Clone + PartialEq + 'static> DragSession<K> {
-    /// Creates an idle session.
-    pub fn new() -> Self {
-        Self {
-            state: Rc::new(SessionState {
-                destination: RefCell::new(None),
-                dwell: RefCell::new(None),
-                autoscroll: AutoscrollLoop::new(),
-            }),
-        }
-    }
-
-    /// The autoscroll loop of this session.
-    pub fn autoscroll(&self) -> &AutoscrollLoop {
-        &self.state.autoscroll
-    }
-
-    /// The currently resolved destination, if any.
-    pub fn destination(&self) -> Option<K> {
-        self.state.destination.borrow().clone()
-    }
-
-    /// Whether a dwell timer is waiting to fire.
-    pub fn is_dwelling(&self) -> bool {
-        self.state
-            .dwell
-            .borrow()
-            .as_ref()
-            .is_some_and(|task| !task.is_ready())
-    }
-
-    /// Records the destination resolved for the pointer and updates the drag cursor (closed hand
-    /// for a destination, prohibited for none). When the destination changed, the dwell timer
-    /// restarts: after [`DWELL_TO_EXPAND`] unchanged, `on_dwell` is called once with the
-    /// destination. Returns whether the destination changed.
-    pub fn set_destination(
-        &self,
-        destination: Option<K>,
-        window: &mut Window,
-        cx: &mut App,
-        on_dwell: impl Fn(&K, &mut Window, &mut App) + 'static,
-    ) -> bool {
-        set_drag_cursor(window, cx, destination.is_some());
-        if *self.state.destination.borrow() == destination {
-            return false;
-        }
-        *self.state.dwell.borrow_mut() = None;
-        *self.state.destination.borrow_mut() = destination.clone();
-        if let Some(destination) = destination {
-            let task = window.spawn(cx, async move |cx| {
-                cx.background_executor().timer(DWELL_TO_EXPAND).await;
-                cx.update(|window, cx| on_dwell(&destination, window, cx))
-                    .ok();
-            });
-            *self.state.dwell.borrow_mut() = Some(task);
-        }
-        true
-    }
-
-    /// Drops the destination, the dwell timer and the autoscroll loop without touching the drag.
-    pub fn clear(&self) {
-        *self.state.destination.borrow_mut() = None;
-        let dwell = self.state.dwell.borrow_mut().take();
-        drop(dwell);
-        self.state.autoscroll.cancel();
-    }
-
-    /// Clears the session when no drag is active (the drag ended by drop or by a mouse-up outside
-    /// every target). Consumers MUST call this while rendering. Returns whether no drag is active.
-    pub fn clear_if_idle(&self, cx: &App) -> bool {
-        if cx.has_active_drag() {
-            return false;
-        }
-        self.clear();
-        true
-    }
-
-    /// Cancels the session and ends the drag: clears every piece of state, sets the drag cursor
-    /// back to the arrow and stops the active drag. Returns whether a drag was active.
-    pub fn cancel(&self, window: &mut Window, cx: &mut App) -> bool {
-        self.clear();
-        clear_drag_cursor(window, cx);
-        cx.stop_active_drag(window)
-    }
-
-    /// Cancels the drag when `event` is the Escape key. Returns whether it did.
-    pub fn cancel_on_escape(
-        &self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
-        event.keystroke.key == "escape" && cx.has_active_drag() && self.cancel(window, cx)
-    }
-
-    /// Cancels the drag when the pointer leaves the drag `region`. Returns whether the pointer is
-    /// inside the region (and the drag therefore continues).
-    pub fn pointer_moved(
-        &self,
-        region: Bounds<Pixels>,
-        pointer: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
-        if region.contains(&pointer) {
-            return true;
-        }
-        self.cancel(window, cx);
-        false
-    }
-
-    /// Cancels the drag when the payload stopped being compatible. Returns `compatible`.
-    pub fn retain_if_compatible(
-        &self,
-        compatible: bool,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> bool {
-        if !compatible {
-            self.cancel(window, cx);
-        }
-        compatible
-    }
-
-    /// Cancels the session whenever the window is deactivated, for as long as the returned
-    /// subscription lives.
-    pub fn cancel_on_deactivation(&self, window: &mut Window) -> Subscription {
-        let session = self.clone();
-        let (subscription, activate) = window.activation_observers.insert(
-            (),
-            Box::new(move |window, cx| {
-                if !window.is_window_active() {
-                    session.cancel(window, cx);
-                }
-                true
-            }),
-        );
-        activate();
-        subscription
-    }
+    true
 }
 
 // ---------------------------------------------------------------------------------------------
