@@ -911,7 +911,7 @@ mod paint_only_runs {
         let runs = [
             TextRun {
                 len: split,
-                font: font.clone(),
+                font,
                 ..Default::default()
             },
             TextRun {

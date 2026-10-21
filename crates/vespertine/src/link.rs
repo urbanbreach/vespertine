@@ -336,31 +336,6 @@ impl LinkTarget {
     pub fn copy_original(&self, cx: &mut App) {
         cx.write_to_clipboard(ClipboardItem::new_string(self.original.to_string()));
     }
-
-    /// The actions a menu for this target should offer on `surface`.
-    pub fn actions(&self, surface: &LinkSurface) -> Vec<LinkAction> {
-        if self.navigation.is_err() {
-            return vec![LinkAction::Copy];
-        }
-        let mut actions = vec![LinkAction::Primary];
-        match &self.route {
-            LinkRoute::Web => {
-                if surface.embedded {
-                    actions.push(LinkAction::Internal);
-                }
-                actions.push(LinkAction::External);
-            }
-            LinkRoute::Mail => actions.push(LinkAction::Mail),
-            LinkRoute::File { .. } => {
-                actions.extend([LinkAction::OpenFile, LinkAction::RevealFile]);
-            }
-        }
-        actions.push(LinkAction::Copy);
-        if self.file_path().is_some() {
-            actions.push(LinkAction::CopyPath);
-        }
-        actions
-    }
 }
 
 #[cfg(test)]
