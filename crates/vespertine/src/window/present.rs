@@ -276,6 +276,84 @@ mod tests {
         .unwrap();
     }
 
+    /// A view whose only output is `count` present callbacks, each logging `label`, its
+    /// position and the view's `version`.
+    struct CallbackOnly {
+        log: Log,
+        label: &'static str,
+        count: u32,
+        version: u32,
+    }
+
+    impl Render for CallbackOnly {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (log, label, count, version) =
+                (self.log.clone(), self.label, self.count, self.version);
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    for position in 0..count {
+                        let log = log.clone();
+                        window.on_present(move |_, _| {
+                            log.borrow_mut()
+                                .push(format!("{label}{position} v{version}"));
+                        });
+                    }
+                },
+            )
+            .size(px(10.))
+        }
+    }
+
+    struct TwoCallbackViews {
+        first: crate::Entity<CallbackOnly>,
+        second: crate::Entity<CallbackOnly>,
+    }
+
+    impl Render for TwoCallbackViews {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().child(self.first.clone()).child(self.second.clone())
+        }
+    }
+
+    #[crate::test]
+    fn splicing_a_view_that_gains_callbacks_keeps_every_later_callback(cx: &mut TestAppContext) {
+        let log: Log = Default::default();
+        let view = |cx: &mut TestAppContext, label| {
+            let log = log.clone();
+            cx.new(move |_| CallbackOnly {
+                log,
+                label,
+                count: 1,
+                version: 0,
+            })
+        };
+        let (first, second) = (view(cx, "a"), view(cx, "b"));
+        let window = cx.add_window({
+            let (first, second) = (first.clone(), second.clone());
+            move |_, _| TwoCallbackViews { first, second }
+        });
+        let handle: crate::AnyWindowHandle = window.into();
+        let presented = |cx: &mut TestAppContext| -> Vec<String> {
+            draw(cx, handle);
+            present(cx, handle);
+            log.borrow_mut().drain(..).collect()
+        };
+        assert_eq!(presented(cx), ["a0 v0", "b0 v0"]);
+
+        first.update(cx, |view, cx| {
+            view.count = 2;
+            cx.notify();
+        });
+        assert_eq!(presented(cx), ["a0 v0", "a1 v0", "b0 v0"]);
+
+        second.update(cx, |view, cx| {
+            view.version = 1;
+            cx.notify();
+        });
+        assert_eq!(presented(cx), ["a0 v0", "a1 v0", "b0 v1"]);
+    }
+
     #[crate::test]
     fn redraw_requested_from_a_callback_is_deferred(cx: &mut TestAppContext) {
         let observed: Rc<RefCell<Vec<&'static str>>> = Default::default();

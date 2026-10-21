@@ -977,6 +977,8 @@ impl PaintIndex {
             && self.input_handlers_index <= range.end.input_handlers_index
             && self.cursor_styles_index >= range.start.cursor_styles_index
             && self.cursor_styles_index <= range.end.cursor_styles_index
+            && self.present_callbacks_index >= range.start.present_callbacks_index
+            && self.present_callbacks_index <= range.end.present_callbacks_index
             && self.accessed_element_states_index >= range.start.accessed_element_states_index
             && self.accessed_element_states_index <= range.end.accessed_element_states_index
             && self.tab_handle_index >= range.start.tab_handle_index
