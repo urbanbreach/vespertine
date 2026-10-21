@@ -20,6 +20,9 @@ tests that could not fail and the tooling of the autonomous build, and the crate
 - Projects that depend on Vespertine by path or git build: taffy is a path dependency instead of a
   `[patch.crates-io]` entry (which Cargo applies only in the top-level workspace), and the vendored
   crate is its own workspace root, so checkouts nested in another workspace can run `cargo fmt --all`.
+  The `diagram` feature of `vespertine_components` pins `merman-core` and `merman-render` to the
+  `0.8.0-alpha.5` that `merman` needs; without Vespertine's lockfile, Cargo chose their incompatible
+  0.8.0 releases and `merman` failed to compile.
 - Numeric text shaping (PRF-013) keeps the learned tables of at most 256 font sizes (about 1 MB) and
   drops the least recently used. They grew with every distinct font size until fonts changed, so a
   smooth zoom over numbers added one per frame. A size whose check against full shaping failed stays

@@ -7810,6 +7810,8 @@ dependencies = [
  "futures",
  "image",
  "merman",
+ "merman-core",
+ "merman-render",
  "parking_lot",
  "pulldown-cmark",
  "resvg",

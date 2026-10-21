@@ -19,7 +19,7 @@ default = ["browser", "diagram", "math"]
 # on Linux with this feature.
 browser = ["dep:vespertine_webview"]
 # Mermaid diagrams (CMP-013). Without it, Mermaid fences render as ordinary source blocks.
-diagram = ["dep:merman", "dep:resvg"]
+diagram = ["dep:merman", "dep:merman-core", "dep:merman-render", "dep:resvg"]
 # Typeset formulas (CMP-012) with the six embedded math faces. Without it, Markdown shows the
 # formula source.
 math = []
@@ -40,6 +40,8 @@ unicode-width.workspace = true
 ttf-parser.workspace = true
 pulldown-cmark.workspace = true
 merman = { workspace = true, optional = true }
+merman-core = { workspace = true, optional = true }
+merman-render = { workspace = true, optional = true }
 url.workspace = true
 usvg.workspace = true
 resvg = { workspace = true, optional = true }

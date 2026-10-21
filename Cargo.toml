@@ -127,6 +127,10 @@ unicode-width = "0.2"
 ttf-parser = { version = "0.25", default-features = false, features = ["std", "opentype-layout", "glyph-names", "variable-fonts"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 merman = { version = "=0.8.0-alpha.5", default-features = false, features = ["svg", "layout-cytoscape"] }
+# merman requires its sub-crates as `0.8.0-alpha.5`, which also accepts their incompatible 0.8.0
+# releases. Projects that depend on Vespertine resolve without this lockfile, so pin them too.
+merman-core = { version = "=0.8.0-alpha.5", default-features = false }
+merman-render = { version = "=0.8.0-alpha.5", default-features = false }
 url = "2.2"
 webpki-roots = "1.0.8"
 zbus = { version = "5", default-features = false, features = ["async-io"] }
