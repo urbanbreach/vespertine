@@ -13,6 +13,7 @@ use vespertine::{
 use super::common::{Handler, action_button, text_tooltip};
 use super::icons::{ICON_COMMENT, ICON_EDIT, ICON_PLUS, ICON_REMOVE};
 use super::tokens::BadgeTokens;
+use crate::floating::ESCAPE_OWNER_CONTEXT;
 use crate::text::{FieldTheme, TextArea, actions::Cancel};
 
 /// Vertical padding of a card (10 above and below).
@@ -461,10 +462,12 @@ impl RenderOnce for ReviewDraft {
             .child(column_content(inner, self.column, &tokens))
             // Mouse-down inside the draft never starts a selection or a row click.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            // Escape cancels the draft and stops propagating, even before the editor sees it. The
-            // editor binds Escape to its own cancel action, so that action is taken in the
-            // capture phase too; an Escape that ends an input-method composition stays with the
-            // editor.
+            // The draft owns Escape while focus is inside it, even inside a dialog or another
+            // dismissal layer: Escape cancels the draft and stops propagating, even before the
+            // editor sees it. The editor binds Escape to its own cancel action, so that action is
+            // taken in the capture phase too; an Escape that ends an input-method composition
+            // stays with the editor.
+            .key_context(ESCAPE_OWNER_CONTEXT)
             .capture_action(move |_: &Cancel, window, cx| {
                 if cancel_input.read(cx).marked_range().is_none() {
                     cancel_action(window, cx);

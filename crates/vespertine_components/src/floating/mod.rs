@@ -44,10 +44,10 @@ pub use rank::{filter_and_rank, match_rank};
 pub use stepping::{Edge, StepDirection, edge_available, step_available, step_slice};
 
 pub use dismiss::{
-    EscapeHandler, EscapeOutcome, LayerId, is_top_layer, layers, press_is_inside, register_layer,
-    set_layer_bounds, top_layer, unregister_layer,
+    ESCAPE_OWNER_CONTEXT, EscapeHandler, EscapeOutcome, LayerId, LayerRegistration, is_top_layer,
+    layers, press_is_inside, register_layer, set_layer_bounds, top_layer, unregister_layer,
 };
-pub use focus::{FocusPick, FocusTarget, LayerHandle, LayerOptions, open_layer};
+pub use focus::{FocusPick, FocusTarget, LayerHandle, LayerOptions, WeakLayerHandle, open_layer};
 pub use lifecycle::{Popup, close_popup, schedule_reap};
 pub use menu::{
     AnchoredMenu, BESIDE_OFFSET, MENU_PADDING, NESTED_PRIORITY, Placement, ROW_GAP, TOP_PRIORITY,

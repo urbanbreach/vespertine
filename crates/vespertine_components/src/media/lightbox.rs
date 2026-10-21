@@ -12,8 +12,8 @@
 
 use super::viewer::ImageView;
 use crate::floating::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerId, LayerOptions, is_top_layer,
-    open_layer, set_layer_bounds,
+    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerId, LayerOptions, WeakLayerHandle,
+    is_top_layer, open_layer, set_layer_bounds,
 };
 use crate::tokens::ComponentTokens;
 use std::cell::OnceCell;
@@ -99,12 +99,14 @@ pub fn open_lightbox(
     on_close: impl Fn(&mut Window, &mut App) + 'static,
 ) -> LightboxLayer {
     let on_close: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_close);
-    let slot: Rc<OnceCell<LayerHandle>> = Rc::new(OnceCell::new());
+    // The Escape handler lives in the registry entry, so it holds the layer weakly: a strong
+    // handle there would keep the layer registered after its owner dropped it.
+    let slot: Rc<OnceCell<WeakLayerHandle>> = Rc::new(OnceCell::new());
     let escape: EscapeHandler = {
         let slot = slot.clone();
         let on_close = on_close.clone();
         Rc::new(move |window, cx| {
-            if let Some(layer) = slot.get()
+            if let Some(layer) = slot.get().and_then(WeakLayerHandle::upgrade)
                 && layer.close(window, cx)
             {
                 on_close(window, cx);
@@ -124,7 +126,7 @@ pub fn open_lightbox(
             trigger_first: false,
         },
     );
-    let _ = slot.set(layer.clone());
+    let _ = slot.set(layer.downgrade());
     LightboxLayer {
         layer,
         focus: focus.clone(),

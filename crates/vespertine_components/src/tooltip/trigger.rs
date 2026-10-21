@@ -13,9 +13,7 @@
 //! [`TooltipTrigger`] is the ready-made wrapper entity for any other element.
 
 use super::text::{TextTooltip, TooltipSpec};
-use crate::floating::{
-    EscapeHandler, EscapeOutcome, LayerId, TriggerBounds, register_layer, unregister_layer,
-};
+use crate::floating::{EscapeHandler, EscapeOutcome, LayerRegistration, TriggerBounds};
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
@@ -42,7 +40,7 @@ pub type TriggerContent = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 /// pointer press on the trigger calls [`FocusTooltip::hide`].
 pub struct FocusTooltip {
     bounds: TriggerBounds,
-    layer: Option<LayerId>,
+    layer: Option<LayerRegistration>,
     escape: EscapeHandler,
     _subscriptions: Vec<Subscription>,
 }
@@ -96,15 +94,15 @@ impl FocusTooltip {
         if self.layer.is_some() {
             return;
         }
-        self.layer = Some(register_layer(window, cx, self.escape.clone()));
+        self.layer = Some(LayerRegistration::new(window, cx, self.escape.clone()));
         cx.notify();
         window.refresh();
     }
 
     /// Closes the surface and leaves the dismissal stack.
     pub fn hide<T: 'static>(&mut self, window: &mut Window, cx: &mut Context<T>) {
-        if let Some(layer) = self.layer.take() {
-            unregister_layer(window, cx, layer);
+        // Dropping the registration unregisters the layer.
+        if self.layer.take().is_some() {
             cx.notify();
             window.refresh();
         }
@@ -119,7 +117,7 @@ impl FocusTooltip {
     /// The surface for `text` while open: above the trigger, centered, inside the window with the
     /// snap margin, pointer-transparent (no `occlude`, no handlers) and without a focus handle.
     pub fn surface(&self, text: SharedString, tokens: ComponentTokens) -> Option<AnyElement> {
-        let trigger: Bounds<Pixels> = self.layer.and_then(|_| self.bounds.get())?;
+        let trigger: Bounds<Pixels> = self.layer.as_ref().and_then(|_| self.bounds.get())?;
         let chip = TextTooltip::chip_for(text, tokens);
         Some(
             deferred(

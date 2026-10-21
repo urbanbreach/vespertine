@@ -15,6 +15,7 @@ use vespertine_components::badges::{
     NoticeVariant, Severity, card_height, draft_input, notice_chip, render_adder, render_badge,
     render_card, render_draft,
 };
+use vespertine_components::dialog::Dialog;
 use vespertine_components::text::{TextArea, area::CHROME_PADDING_Y};
 use vespertine_richtext::text_root;
 use vespertine_test_host::{DEFAULT_SCALE_FACTOR, HostOptions, TestHost};
@@ -713,6 +714,100 @@ fn the_cancel_button_discards_the_edits_and_a_new_draft_reads_comment() {
     h.host.flush();
     assert!(!h.read(|review| review.editing));
     assert_eq!(h.read(|review| review.body.to_string()), "kept");
+}
+
+struct DialogDraft {
+    input: Entity<TextArea>,
+    editing: bool,
+    cancels: usize,
+    tokens: BadgeTokens,
+}
+
+impl Render for DialogDraft {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity();
+        let draft = self.editing.then(|| {
+            let (cancel, commit) = (this.clone(), this);
+            render_draft(
+                "c1",
+                "src/lib.rs:3",
+                self.input.clone(),
+                false,
+                move |_, cx| {
+                    cancel.update(cx, |draft, cx| {
+                        draft.editing = false;
+                        draft.cancels += 1;
+                        cx.notify();
+                    })
+                },
+                move |_, cx| commit.update(cx, |draft, _| draft.editing = false),
+                None,
+                &self.tokens,
+            )
+        });
+        div().w(px(380.)).children(draft)
+    }
+}
+
+#[test]
+fn escape_in_a_draft_inside_a_dialog_cancels_the_draft_before_the_dialog() {
+    if !vespertine_test_host::is_available() {
+        return;
+    }
+    let slot: Rc<RefCell<Option<(Entity<Dialog>, Entity<DialogDraft>)>>> = Rc::default();
+    let mut host = TestHost::with_view(options(600.0, 500.0), {
+        let slot = slot.clone();
+        move |window, cx| {
+            let tokens = BadgeTokens::neutral();
+            let input = cx.new(|cx| draft_input("", &tokens, window, cx));
+            let draft = cx.new(|_| DialogDraft {
+                input,
+                editing: true,
+                cancels: 0,
+                tokens,
+            });
+            let dialog = cx.new(|cx| Dialog::new("dialog", "Lorem ipsum", cx).child(draft.clone()));
+            *slot.borrow_mut() = Some((dialog.clone(), draft));
+            cx.new(|_| DialogPage { dialog })
+        }
+    })
+    .expect("host");
+    let (dialog, draft) = slot.borrow_mut().take().expect("entities");
+    let window = host.window();
+    host.app()
+        .update_window(window, |_, window, cx| {
+            dialog.update(cx, |dialog, cx| dialog.open(window, cx))
+        })
+        .unwrap();
+    host.flush();
+    host.app()
+        .update_window(window, |_, window, cx| {
+            let handle = draft.read(cx).input.focus_handle(cx);
+            handle.focus(window, cx);
+        })
+        .unwrap();
+    host.flush();
+    host.key_down("escape", false, None).unwrap();
+    host.flush();
+    assert_eq!(host.app().update(|cx| draft.read(cx).cancels), 1);
+    assert!(
+        host.app().update(|cx| dialog.read(cx).is_open()),
+        "the dialog stays open"
+    );
+    // With the draft gone, the next Escape reaches the dialog.
+    host.key_down("escape", false, None).unwrap();
+    host.flush();
+    assert!(!host.app().update(|cx| dialog.read(cx).is_open()));
+}
+
+struct DialogPage {
+    dialog: Entity<Dialog>,
+}
+
+impl Render for DialogPage {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.dialog.clone())
+    }
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Opening and closing focus of a dismissal layer (CMP-002 R9-R11).
 
-use super::dismiss::{EscapeHandler, LayerId, register_layer, unregister_layer};
-use std::rc::Rc;
+use super::dismiss::{EscapeHandler, LayerId, LayerRegistration, unregister_layer};
+use std::rc::{Rc, Weak};
 use vespertine::{App, FocusHandle, Window};
 
 /// What a focus callback or target resolves to (R11).
@@ -72,15 +72,26 @@ pub struct LayerOptions {
 }
 
 /// An open layer: its registry identity and the focus bookkeeping. Created by [`open_layer`] and
-/// ended by [`LayerHandle::close`].
+/// ended by [`LayerHandle::close`]. The layer stays registered while a clone of the handle lives:
+/// when the last clone is dropped (its owner was released without closing), the layer
+/// unregisters itself.
 #[derive(Clone)]
-pub struct LayerHandle {
-    id: LayerId,
-    prior: Option<FocusHandle>,
-    options: Rc<LayerOptionsInner>,
+pub struct LayerHandle(Rc<LayerState>);
+
+/// A handle that does not keep the layer registered (see [`LayerHandle::downgrade`]).
+#[derive(Clone)]
+pub struct WeakLayerHandle(Weak<LayerState>);
+
+impl WeakLayerHandle {
+    /// The layer handle, while a [`LayerHandle`] still keeps the layer.
+    pub fn upgrade(&self) -> Option<LayerHandle> {
+        self.0.upgrade().map(LayerHandle)
+    }
 }
 
-struct LayerOptionsInner {
+struct LayerState {
+    registration: LayerRegistration,
+    prior: Option<FocusHandle>,
     layer_focus: FocusHandle,
     trigger: Option<FocusHandle>,
     final_focus: FocusTarget,
@@ -93,26 +104,32 @@ struct LayerOptionsInner {
 /// frame, so focus moves two frames later, as the base popover menu does).
 pub fn open_layer(window: &mut Window, cx: &mut App, options: LayerOptions) -> LayerHandle {
     let prior = window.focused(cx);
-    let id = register_layer(window, cx, options.escape);
-    let handle = LayerHandle {
-        id,
+    let registration = LayerRegistration::scoped(
+        window,
+        cx,
+        options.escape,
+        Some(options.layer_focus.clone()),
+    );
+    let handle = LayerHandle(Rc::new(LayerState {
+        registration,
         prior,
-        options: Rc::new(LayerOptionsInner {
-            layer_focus: options.layer_focus,
-            trigger: options.trigger,
-            final_focus: options.final_focus,
-            trigger_first: options.trigger_first,
-        }),
-    };
+        layer_focus: options.layer_focus,
+        trigger: options.trigger,
+        final_focus: options.final_focus,
+        trigger_first: options.trigger_first,
+    }));
     let initial = options.initial_focus;
-    let focus_handle = handle.clone();
+    let focus_handle = handle.downgrade();
     window.on_next_frame(move |window, _cx| {
         window.on_next_frame(move |window, cx| {
-            if !is_layer_registered(window, cx, focus_handle.id) {
+            let Some(handle) = focus_handle.upgrade() else {
+                return;
+            };
+            if !is_layer_registered(window, cx, handle.id()) {
                 return;
             }
-            let target = match initial.pick(focus_handle.prior.as_ref(), window, cx) {
-                FocusPick::Default => Some(focus_handle.options.layer_focus.clone()),
+            let target = match initial.pick(handle.prior_focus(), window, cx) {
+                FocusPick::Default => Some(handle.0.layer_focus.clone()),
                 FocusPick::Suppress => None,
                 FocusPick::Handle(handle) => Some(handle),
             };
@@ -131,19 +148,25 @@ fn is_layer_registered(window: &Window, cx: &App, id: LayerId) -> bool {
 impl LayerHandle {
     /// The layer's registry identity.
     pub fn id(&self) -> LayerId {
-        self.id
+        self.0.registration.id()
     }
 
     /// The focus owner captured when the layer opened.
     pub fn prior_focus(&self) -> Option<&FocusHandle> {
-        self.prior.as_ref()
+        self.0.prior.as_ref()
+    }
+
+    /// A handle that does not keep the layer registered, for callbacks the layer itself owns
+    /// (its Escape handler), which would otherwise keep it registered forever.
+    pub fn downgrade(&self) -> WeakLayerHandle {
+        WeakLayerHandle(Rc::downgrade(&self.0))
     }
 
     /// Ends the layer: unregisters it (Escape stops reaching it at once) and restores focus
     /// after the current event has finished, so a press that moved focus elsewhere keeps it.
     /// Returns false (and does nothing more) when the layer was already closed.
     pub fn close(&self, window: &mut Window, cx: &mut App) -> bool {
-        if !unregister_layer(window, cx, self.id) {
+        if !unregister_layer(window, cx, self.id()) {
             return false;
         }
         let this = self.clone();
@@ -156,11 +179,8 @@ impl LayerHandle {
     /// focus is still inside the layer or nowhere; when that owner is no longer mounted the
     /// fallback is the owning trigger if mounted, otherwise the window's default (no focus).
     fn restore_focus(&self, window: &mut Window, cx: &mut App) {
-        match self
-            .options
-            .final_focus
-            .pick(self.prior.as_ref(), window, cx)
-        {
+        let state = &self.0;
+        match state.final_focus.pick(state.prior.as_ref(), window, cx) {
             FocusPick::Handle(handle) => {
                 handle.focus(window, cx);
                 return;
@@ -168,7 +188,7 @@ impl LayerHandle {
             FocusPick::Suppress => return,
             FocusPick::Default => {}
         }
-        let layer = &self.options.layer_focus;
+        let layer = &state.layer_focus;
         let still_here = match window.focused(cx) {
             None => true,
             Some(focused) => focused == *layer || layer.contains(&focused, window),
@@ -176,10 +196,10 @@ impl LayerHandle {
         if !still_here {
             return;
         }
-        let (first, second) = if self.options.trigger_first {
-            (self.options.trigger.as_ref(), self.prior.as_ref())
+        let (first, second) = if state.trigger_first {
+            (state.trigger.as_ref(), state.prior.as_ref())
         } else {
-            (self.prior.as_ref(), self.options.trigger.as_ref())
+            (state.prior.as_ref(), state.trigger.as_ref())
         };
         let target = first
             .into_iter()

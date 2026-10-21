@@ -1013,3 +1013,120 @@ fn form_children_keep_their_text_cursor_and_selection_across_rerenders() {
     );
     assert!(f.is_open());
 }
+
+#[test]
+fn escape_during_a_field_composition_stays_with_the_field_and_keeps_the_dialog_open() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        with_field: true,
+        ..Spec::new()
+    });
+    f.open();
+    let field = f.field();
+    let handle = f.host.app().update(|cx| field.read(cx).focus_handle(cx));
+    f.focus(&handle);
+    let window = f.host.window();
+    f.host
+        .app()
+        .update_window(window, |_, window, cx| {
+            field.update(cx, |field, cx| {
+                field.replace_and_mark_text_in_range(None, "に", None, window, cx)
+            })
+        })
+        .unwrap();
+    f.settle();
+    f.take_log();
+    f.key("escape");
+    assert!(f.is_open(), "the composition owns the Escape");
+    assert!(f.log().is_empty(), "{:?}", f.log());
+    let marked = f.host.app().update(|cx| field.read(cx).marked_range());
+    assert!(marked.is_some(), "the composition is still in progress");
+
+    // With the composition committed, Escape cancels the dialog again.
+    f.host
+        .app()
+        .update_window(window, |_, window, cx| {
+            field.update(cx, |field, cx| {
+                field.replace_text_in_range(None, "日", window, cx)
+            })
+        })
+        .unwrap();
+    f.settle();
+    f.key("escape");
+    assert!(!f.is_open());
+}
+
+struct Holder {
+    dialog: Option<Entity<Dialog>>,
+    page: FocusHandle,
+    keys: Rc<Cell<u32>>,
+}
+
+impl Render for Holder {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let keys = self.keys.clone();
+        div()
+            .id("holder")
+            .size_full()
+            .track_focus(&self.page)
+            .on_key_down(move |_, _, _| keys.set(keys.get() + 1))
+            .children(self.dialog.clone())
+    }
+}
+
+#[test]
+fn releasing_an_open_dialog_without_closing_it_leaves_no_layer_to_swallow_escape() {
+    require_backend!();
+    let keys = Rc::new(Cell::new(0));
+    let slot: Rc<RefCell<Option<Entity<Holder>>>> = Rc::default();
+    let mut host = TestHost::with_view(HostOptions::with_size(480., 360.), {
+        let keys = keys.clone();
+        let slot = slot.clone();
+        move |_, cx| {
+            let dialog = cx.new(|cx| Dialog::new("dialog", "Lorem ipsum", cx));
+            let holder = cx.new(|cx| Holder {
+                dialog: Some(dialog),
+                page: cx.focus_handle(),
+                keys,
+            });
+            *slot.borrow_mut() = Some(holder.clone());
+            holder
+        }
+    })
+    .expect("host");
+    let holder = slot.borrow_mut().take().expect("holder");
+    let window = host.window();
+    host.app()
+        .update_window(window, |_, window, cx| {
+            let dialog = holder.read(cx).dialog.clone().expect("dialog");
+            dialog.update(cx, |dialog, cx| dialog.open(window, cx));
+        })
+        .unwrap();
+    host.flush();
+    let open_layers = host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx).len())
+        .unwrap();
+    assert_eq!(open_layers, 1);
+
+    // The owner drops the dialog while it is open, then the page takes focus.
+    host.app()
+        .update_window(window, |_, window, cx| {
+            holder.update(cx, |holder, cx| {
+                holder.dialog = None;
+                cx.notify();
+            });
+            let page = holder.read(cx).page.clone();
+            page.focus(window, cx);
+        })
+        .unwrap();
+    host.flush();
+    let open_layers = host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx).len())
+        .unwrap();
+    assert_eq!(open_layers, 0, "the released dialog's layer is gone");
+    host.key_down("escape", false, None).unwrap();
+    host.flush();
+    assert_eq!(keys.get(), 1, "Escape reaches the page again");
+}
