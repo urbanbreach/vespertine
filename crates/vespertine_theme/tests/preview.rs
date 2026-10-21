@@ -8,7 +8,7 @@ use vespertine::{AppContext as _, TestAppContext};
 use vespertine_theme::{
     appearance::{self, style_generation, theme_of},
     import::Compilation,
-    library::{InstallMode, Library},
+    library::{self, InstallMode, Library},
     preview::{self, PreviewInfo},
     selection::{AccentSelection, AppearanceMode, SurfacePreference, ThemeSelection},
     theme::DEFAULT_DARK_ID,
@@ -225,10 +225,10 @@ fn commit_with_a_suffixed_identifier_selects_the_rekeyed_variant(cx: &mut TestAp
         assert_eq!(theme_of(cx).colors.background, hex("#334455"));
     });
     assert_eq!(
-        preview::rekeyed_variant_id("cand", "cand-2", "cand-cand"),
+        library::rekeyed_variant_id("cand", "cand-2", "cand-cand"),
         "cand-2-cand"
     );
-    assert_eq!(preview::rekeyed_variant_id("x", "y", "other"), "y-other");
+    assert_eq!(library::rekeyed_variant_id("x", "y", "other"), "y-other");
 }
 
 #[vespertine::test]

@@ -12,11 +12,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     fmt,
     io::Write as _,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 /// Largest durable library file.
@@ -275,14 +273,20 @@ fn unique_id(base: &str, taken: impl Fn(&str) -> bool) -> String {
     id
 }
 
-/// Re-keys a family and its reports to `new_id` (THM-004 R9): a variant id that starts with the
-/// old family id has that prefix replaced, any other gets `<new id>-` prepended.
+/// The identifier a variant gets when its family `old_family` is re-keyed to `new_family`
+/// (THM-004 R9): an id that starts with the old family id has that prefix replaced, any other
+/// gets `<new family>-` prepended.
+pub fn rekeyed_variant_id(old_family: &str, new_family: &str, variant_id: &str) -> String {
+    match variant_id.strip_prefix(old_family) {
+        Some(rest) => format!("{new_family}{rest}"),
+        None => format!("{new_family}-{variant_id}"),
+    }
+}
+
+/// Re-keys a family and its reports to `new_id` (THM-004 R9).
 fn rekey(family: &mut ThemeFamily, reports: &mut [VariantReport], new_id: &str) {
     let old_id = family.id.clone();
-    let rekeyed = |id: &str| match id.strip_prefix(old_id.as_str()) {
-        Some(rest) => format!("{new_id}{rest}"),
-        None => format!("{new_id}-{id}"),
-    };
+    let rekeyed = |id: &str| rekeyed_variant_id(&old_id, new_id, id);
     for variant in &mut family.variants {
         variant.id = rekeyed(&variant.id);
         variant.family_id = new_id.to_string();
@@ -971,36 +975,6 @@ impl Library {
             None => fail(format!("`{id}` has no source location")),
         }
     }
-}
-
-/// Keeps the appearance resolution in step with `library` (THM-004 R10, R13): after every
-/// library change the runtime registry is reinstalled with a forced style generation advance
-/// (a reloaded theme keeps its identifier while its colors change) and an explicitly removed
-/// theme that was selected is repointed. The reinstall runs as soon as the operation that
-/// caused the event has finished. Returns the observer registration.
-pub fn bind_runtime(cx: &vespertine::App, library: &Rc<RefCell<Library>>) -> ObserverId {
-    let app = cx.to_async();
-    let weak = Rc::downgrade(library);
-    library.borrow_mut().observe(move |event| {
-        let removed = match event {
-            LibraryEvent::Removed { variant_ids, .. } => variant_ids.clone(),
-            // The last good family stays active: nothing to reinstall.
-            LibraryEvent::ReloadFailed { .. } => return,
-            _ => Vec::new(),
-        };
-        let Some(library) = weak.upgrade() else {
-            return;
-        };
-        let app = app.clone();
-        let executor = app.foreground_executor().clone();
-        executor
-            .spawn(async move {
-                app.update(|cx| {
-                    library.borrow().install_runtime(cx, &removed);
-                });
-            })
-            .detach();
-    })
 }
 
 #[derive(Serialize)]

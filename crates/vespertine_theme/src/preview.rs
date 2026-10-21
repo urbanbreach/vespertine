@@ -9,7 +9,7 @@
 use crate::{
     appearance,
     import::Compilation,
-    library::{InstallMode, Library, LibraryError},
+    library::{InstallMode, Library, LibraryError, rekeyed_variant_id},
     theme::{ThemeFamily, ThemeVariant, has_blocking_issue},
 };
 use std::sync::Arc;
@@ -98,14 +98,6 @@ pub fn cancel_on_release<T: 'static>(cx: &mut App, owner: &Entity<T>) -> Subscri
     cx.observe_release(owner, |_, cx| {
         cancel(cx);
     })
-}
-
-/// The identifier a variant gets when its family `old_family` is re-keyed to `new_family`.
-pub fn rekeyed_variant_id(old_family: &str, new_family: &str, variant_id: &str) -> String {
-    match variant_id.strip_prefix(old_family) {
-        Some(rest) => format!("{new_family}{rest}"),
-        None => format!("{new_family}-{variant_id}"),
-    }
 }
 
 /// Commits a candidate: installs it into `library` (persisting atomically), installs the
