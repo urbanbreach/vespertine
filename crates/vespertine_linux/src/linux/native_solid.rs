@@ -44,27 +44,36 @@ impl SolidProducer {
 
     /// Shows `left` over the left half and `right` over the right half of a buffer of `size`
     /// device pixels (opaque sRGB). Does nothing when nothing changed since the last call.
+    #[cfg_attr(
+        not(any(feature = "wayland", feature = "x11")),
+        expect(
+            unused_variables,
+            reason = "without a display backend there is no producer"
+        )
+    )]
     pub fn present(
         &mut self,
         size: Size<DevicePixels>,
         left: [u8; 3],
         right: [u8; 3],
     ) -> Result<()> {
-        match self {
+        // Matching the place, not the reference, keeps the match exhaustive when neither
+        // display backend is built and the enum has no variants.
+        match *self {
             #[cfg(feature = "wayland")]
-            SolidProducer::Wayland(producer) => producer.present(size, left, right),
+            SolidProducer::Wayland(ref mut producer) => producer.present(size, left, right),
             #[cfg(feature = "x11")]
-            SolidProducer::X11(producer) => producer.present(size, left, right),
+            SolidProducer::X11(ref mut producer) => producer.present(size, left, right),
         }
     }
 
     /// Processes the display server's events for the producer (buffer releases, repaints).
     pub fn pump(&mut self) -> Result<()> {
-        match self {
+        match *self {
             #[cfg(feature = "wayland")]
-            SolidProducer::Wayland(producer) => producer.pump(),
+            SolidProducer::Wayland(ref mut producer) => producer.pump(),
             #[cfg(feature = "x11")]
-            SolidProducer::X11(producer) => producer.pump(),
+            SolidProducer::X11(ref mut producer) => producer.pump(),
         }
     }
 }
