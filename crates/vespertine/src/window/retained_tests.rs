@@ -192,6 +192,39 @@ fn presence_only_global_dependency(cx: &mut TestAppContext) {
     );
 }
 
+/// A global write reaches every window that read the global, not only the first one drawn.
+#[crate::test]
+fn global_write_rebuilds_its_readers_in_every_window(cx: &mut TestAppContext) {
+    let renders = [counter(), counter()];
+    let windows: Vec<AnyWindowHandle> = renders
+        .iter()
+        .map(|renders| {
+            let value = cx.new({
+                let renders = renders.clone();
+                move |_| GlobalValueView(Counter { renders })
+            });
+            let presence = cx.new(|_| GlobalPresenceView(Counter { renders: counter() }));
+            cx.add_window(move |_, _| TwoViews { value, presence })
+                .into()
+        })
+        .collect();
+    for window in &windows {
+        draw(cx, *window);
+        draw(cx, *window);
+    }
+    let baseline = renders.each_ref().map(|renders| renders.get());
+
+    cx.update(|cx| cx.set_global(Flag(7)));
+    for window in &windows {
+        draw(cx, *window);
+    }
+    assert_eq!(
+        renders.each_ref().map(|renders| renders.get()),
+        baseline.map(|count| count + 1),
+        "the reader in each window is built again"
+    );
+}
+
 struct Model {
     value: u32,
 }

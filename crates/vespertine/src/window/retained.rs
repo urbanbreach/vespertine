@@ -242,6 +242,10 @@ pub(crate) struct RetainedViews {
     capslock_readers: FxHashSet<ViewKey>,
     hover_readers: FxHashMap<HitboxId, SmallVec<[ViewKey; 2]>>,
     pub frame_epoch: u64,
+    /// The tracker clock when the preceding frame began: globals written after it are checked
+    /// against their readers. The tracker is shared by every window, so each window keeps its
+    /// own mark instead of consuming a shared list of changes.
+    globals_checked_at: u64,
 }
 
 /// Inputs that changed since the preceding frame.
@@ -551,37 +555,23 @@ impl RetainedViews {
                 }
             }
         }
-        let changes = tracker.take_global_changes();
-        for global in changes.values {
-            let readers = self
-                .global_readers
-                .get(&global)
-                .cloned()
-                .unwrap_or_default();
-            let written_at = tracker.global_value_written_at(global);
-            for key in readers {
-                if self
-                    .get(key)
-                    .is_some_and(|record| written_at > record.built_clock)
-                {
-                    self.flag_dirty(key);
-                }
-            }
-        }
-        for global in changes.presence {
-            let readers = self
-                .presence_readers
-                .get(&global)
-                .cloned()
-                .unwrap_or_default();
-            let written_at = tracker.global_presence_written_at(global);
-            for key in readers {
-                if self
-                    .get(key)
-                    .is_some_and(|record| written_at > record.built_clock)
-                {
-                    self.flag_dirty(key);
-                }
+        let since = std::mem::replace(&mut self.globals_checked_at, tracker.now());
+        if tracker.last_global_write() > since {
+            let mut stale: SmallVec<[ViewKey; 8]> = SmallVec::new();
+            self.collect_stale_global_readers(
+                &self.global_readers,
+                since,
+                |global| tracker.global_value_written_at(global),
+                &mut stale,
+            );
+            self.collect_stale_global_readers(
+                &self.presence_readers,
+                since,
+                |global| tracker.global_presence_written_at(global),
+                &mut stale,
+            );
+            for key in stale {
+                self.flag_dirty(key);
             }
         }
         if inputs.pointer {
@@ -598,6 +588,27 @@ impl RetainedViews {
             for key in self.capslock_readers.iter().copied().collect::<Vec<_>>() {
                 self.flag_dirty(key);
             }
+        }
+    }
+
+    /// Adds to `stale` the readers in `readers` of every global written after `since` that
+    /// were built before that write.
+    fn collect_stale_global_readers(
+        &self,
+        readers: &FxHashMap<TypeId, SmallVec<[ViewKey; 2]>>,
+        since: u64,
+        written_at: impl Fn(TypeId) -> u64,
+        stale: &mut SmallVec<[ViewKey; 8]>,
+    ) {
+        for (global, keys) in readers {
+            let written_at = written_at(*global);
+            if written_at <= since {
+                continue;
+            }
+            stale.extend(keys.iter().copied().filter(|key| {
+                self.get(*key)
+                    .is_some_and(|record| written_at > record.built_clock)
+            }));
         }
     }
 

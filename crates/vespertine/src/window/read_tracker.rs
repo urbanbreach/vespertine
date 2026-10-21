@@ -88,13 +88,6 @@ pub(crate) enum WriteTarget {
     Presence(TypeId),
 }
 
-/// Globals and presence changes that happened since the previous drain.
-#[derive(Default)]
-pub(crate) struct GlobalChanges {
-    pub values: FxHashSet<TypeId>,
-    pub presence: FxHashSet<TypeId>,
-}
-
 #[derive(Default)]
 pub(crate) struct ReadTracker {
     frames: RefCell<Vec<ReadFrame>>,
@@ -104,7 +97,8 @@ pub(crate) struct ReadTracker {
     global_clock: RefCell<FxHashMap<TypeId, u64>>,
     presence_clock: RefCell<FxHashMap<TypeId, u64>>,
     draw_writes: RefCell<Vec<DrawWrite>>,
-    global_changes: RefCell<GlobalChanges>,
+    /// The logical time of the latest global write (value or presence).
+    last_global_write: Cell<u64>,
     /// Number of entity updates (any time), for tests and diagnostics.
     /// Depth of read-only platform queries (input-method queries): updates
     /// made by them do not count unless the entity notifies.
@@ -345,13 +339,7 @@ impl ReadTracker {
         if presence_changed {
             self.presence_clock.borrow_mut().insert(type_id, now);
         }
-        {
-            let mut changes = self.global_changes.borrow_mut();
-            changes.values.insert(type_id);
-            if presence_changed {
-                changes.presence.insert(type_id);
-            }
-        }
+        self.last_global_write.set(now);
         if self.drawing.get() {
             let writer = self.current_view();
             let mut writes = self.draw_writes.borrow_mut();
@@ -401,7 +389,8 @@ impl ReadTracker {
         !self.draw_writes.borrow().is_empty()
     }
 
-    pub fn take_global_changes(&self) -> GlobalChanges {
-        std::mem::take(&mut *self.global_changes.borrow_mut())
+    /// The logical time of the latest write of any global (0 if none was ever written).
+    pub fn last_global_write(&self) -> u64 {
+        self.last_global_write.get()
     }
 }
