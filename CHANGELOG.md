@@ -4,7 +4,7 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
-## 0.2.0-alpha.1 - 2026-10-21
+## 0.2.0-alpha.1 - 2026-10-22
 
 The first public release, an early alpha: the API changes between releases without deprecation.
 Releases are tagged on GitHub and used as git dependencies (see "Using Vespertine" in the README);
