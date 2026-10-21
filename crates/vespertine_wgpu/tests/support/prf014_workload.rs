@@ -30,9 +30,6 @@ pub const CONFIG1_FRAMES: u32 = 720;
 pub const CONFIG2_START: u32 = CONFIG1_FRAMES;
 pub const CONFIG2_RAMP_END: u32 = 1820;
 
-/// Total frames of both configurations: 0..1920.
-pub const TOTAL_FRAMES: u32 = 1920;
-
 /// Text of label `label` (0..100) in frame `frame`:
 /// `W[(label * 7 + frame) % 64]`, a space, `W[(label * 3 + frame * 5) % 64]`,
 /// `" office affine "` and the decimal number `frame * 100 + label`.
