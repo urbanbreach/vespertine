@@ -14,8 +14,8 @@
 //! * Crossing from one surface to another sends a leave to the previous recipient (with the
 //!   new pointer position) before the enter and move of the new one.
 //! * A press keeps its recipient through the matching release even when the pointer moves
-//!   over a different surface; moves while a button is held go to the owner, whose pointer
-//!   position may lie outside its bounds.
+//!   over a different surface; moves and further button presses while a button is held go to
+//!   the owner, whose pointer position may lie outside its bounds.
 //! * Hidden or destroyed surfaces stop participating immediately: they receive nothing,
 //!   not even a leave.
 //! * Wheel events go to the topmost candidate under the pointer; a handler reporting the
@@ -172,7 +172,9 @@ impl PointerRouter {
                 }
             }
             PointerInput::Down(event) => {
-                let target = Self::hit(&eligible, event.position);
+                // An additional button pressed during a press goes to the press owner, which
+                // also receives its release.
+                let target = self.owner.or_else(|| Self::hit(&eligible, event.position));
                 self.cross_to(
                     target,
                     event.position,
@@ -456,6 +458,39 @@ mod tests {
         );
         assert_eq!(router.press_owner(), None);
         assert_eq!(router.recipient(), Some(upper));
+    }
+
+    #[test]
+    fn a11_an_additional_press_during_a_press_goes_to_the_press_owner() {
+        let (lower, upper, list) = surfaces();
+        let mut router = PointerRouter::default();
+        router.route(&down(10.0, 10.0), &list, false);
+        router.route(&mv(70.0, 10.0, Some(MouseButton::Left)), &list, false);
+        let right = |input| match input {
+            PointerInput::Down(event) => PointerInput::Down(MouseDownEvent {
+                button: MouseButton::Right,
+                ..event
+            }),
+            PointerInput::Up(event) => PointerInput::Up(MouseUpEvent {
+                button: MouseButton::Right,
+                ..event
+            }),
+            other => other,
+        };
+        // Over the other surface, the second button's press and release both go to the owner.
+        assert_eq!(
+            kinds(&router.route(&right(down(70.0, 10.0)), &list, false)),
+            [(lower, "down")]
+        );
+        assert_eq!(
+            kinds(&router.route(&right(up(70.0, 10.0)), &list, false)),
+            [(lower, "up")]
+        );
+        assert_eq!(router.press_owner(), Some(lower));
+        assert_eq!(
+            kinds(&router.route(&up(70.0, 10.0), &list, false)),
+            [(lower, "up"), (lower, "leave"), (upper, "enter")]
+        );
     }
 
     #[test]
