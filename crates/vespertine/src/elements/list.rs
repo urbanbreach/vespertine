@@ -2363,7 +2363,11 @@ impl StateInner {
             while rendered_height < available_height && top_ix > 0 {
                 let prev_ix = top_ix - 1;
                 if let Some(item) = self.mounted_item(prev_ix) {
-                    let stored = item.size();
+                    // As in the forward pass, the reserved last row is always remeasured: its
+                    // stored size includes the reservation extra.
+                    let stored = item
+                        .size()
+                        .filter(|_| !(reservation_active && prev_ix + 1 == count));
                     let reusable = stored.and_then(|_| {
                         rows.as_deref()
                             .and_then(|rows| rows.reusable(window, prev_ix))

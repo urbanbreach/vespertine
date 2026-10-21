@@ -434,3 +434,62 @@ fn a1_appending_rows_consumes_the_reservation_without_a_transient_gap(cx: &mut T
         ]
     );
 }
+
+/// A window whose root is one identified list of 20 px rows filling a 100 px viewport, drawn
+/// with row replay enabled.
+struct RetainedRows {
+    state: ListState,
+}
+
+impl crate::Render for RetainedRows {
+    fn render(
+        &mut self,
+        _: &mut crate::Window,
+        _: &mut crate::Context<Self>,
+    ) -> impl crate::IntoElement {
+        list(self.state.clone(), |_, _, _| {
+            crate::div().h(px(20.)).w_full().into_any_element()
+        })
+        .id("rows")
+        .w_full()
+        .h(px(100.))
+    }
+}
+
+#[vespertine::test]
+fn clearing_the_reservation_after_a_retained_walk_up_leaves_the_natural_extent(
+    cx: &mut TestAppContext,
+) {
+    let state = ListState::new(1, ListAlignment::Top, px(0.));
+    state.set_trailing_reservation(Some((0, px(0.))));
+    let window = cx.open_window(size(px(100.), px(100.)), {
+        let state = state.clone();
+        move |_, _| RetainedRows { state }
+    });
+    let draw = |cx: &mut TestAppContext| {
+        // The root view is rebuilt; its rows' recorded output stays replayable.
+        window
+            .update(cx, |_, window, cx| {
+                window.set_retention_enabled(true);
+                cx.notify();
+            })
+            .unwrap();
+        crate::AppContext::update_window(cx, window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx)
+        })
+        .unwrap();
+    };
+    draw(cx);
+    draw(cx);
+    assert_eq!((extra(&state), total(&state)), (80., 100.));
+    // Anchored past the last row, the pass walks up to the reserved row, which must be
+    // measured naturally rather than replayed with its padded height.
+    state.scroll_to_end();
+    draw(cx);
+    assert_eq!((extra(&state), total(&state)), (80., 100.));
+    assert!(!state.trailing_reservation_filled());
+    state.set_trailing_reservation(None);
+    draw(cx);
+    assert_eq!(total(&state), 20.);
+    assert_eq!(state.max_offset_for_scrollbar().y, px(0.));
+}
