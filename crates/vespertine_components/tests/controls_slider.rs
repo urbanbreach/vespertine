@@ -220,6 +220,40 @@ fn controls_a6_slider_exposes_role_label_value_range_step_and_value_text() {
 }
 
 #[test]
+fn controls_a6_assistive_numeric_actions_change_the_value_through_normalization() {
+    use vespertine::accesskit::{Action, ActionData};
+    require_backend!();
+    let owner = Owner::new(736.0);
+    let mut host = slider_host(pixels(), &owner, |slider| slider);
+    let slider = node(&mut host, "slider", Some("Width"));
+    for action in [Action::Increment, Action::Decrement, Action::SetValue] {
+        assert!(slider.supports(action), "{action:?}");
+    }
+    a11y_action(&mut host, &slider, Action::Increment, None);
+    assert_eq!(owner.value.get(), 752.0);
+    let slider = node(&mut host, "slider", Some("Width"));
+    a11y_action(&mut host, &slider, Action::Decrement, None);
+    assert_eq!(owner.value.get(), 736.0);
+    let slider = node(&mut host, "slider", Some("Width"));
+    a11y_action(
+        &mut host,
+        &slider,
+        Action::SetValue,
+        Some(ActionData::NumericValue(1003.0)),
+    );
+    assert_eq!(owner.value.get(), 1008.0, "snapped to the step");
+    let slider = node(&mut host, "slider", Some("Width"));
+    a11y_action(
+        &mut host,
+        &slider,
+        Action::SetValue,
+        Some(ActionData::NumericValue(5000.0)),
+    );
+    assert_eq!(owner.value.get(), 1200.0, "clamped to the maximum");
+    assert_eq!(owner.notifications(), vec![752.0, 736.0, 1008.0, 1200.0]);
+}
+
+#[test]
 fn controls_a6_disabled_slider_reports_disabled_takes_no_focus_and_ignores_input() {
     require_backend!();
     let owner = Owner::new(736.0);

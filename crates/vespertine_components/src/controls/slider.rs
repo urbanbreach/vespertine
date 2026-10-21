@@ -44,6 +44,7 @@
 
 use std::{cell::Cell, rc::Rc, time::Duration};
 
+use vespertine::accesskit::{Action, ActionData};
 use vespertine::{
     AnyElement, App, Bounds, Context, ElementId, Entity, FocusHandle, InteractiveElement,
     IntoElement, MouseButton, Orientation, ParentElement, Pixels, RenderOnce, Role, SharedString,
@@ -360,6 +361,24 @@ fn deliver(
     });
     if changed && let Some(on_change) = on_change {
         on_change(value, window, cx);
+    }
+}
+
+/// An assistive Increment (`direction` 1) or Decrement (-1): one keyboard step from the
+/// displayed value.
+fn assistive_step(
+    state: &Entity<SliderState>,
+    range: &SliderRange,
+    on_change: &Option<ChangeHandler>,
+    direction: i32,
+) -> impl FnMut(Option<&ActionData>, &mut Window, &mut App) + 'static {
+    let state = state.clone();
+    let range = range.clone();
+    let on_change = on_change.clone();
+    move |_, window, cx| {
+        let current = state.read(cx).displayed();
+        let target = range.step_value(current, direction);
+        deliver(&state, target, &on_change, window, cx);
     }
 }
 
@@ -840,6 +859,25 @@ impl RenderOnce for Slider {
                         });
                         if target != current {
                             deliver(&state, target, &on_change, window, cx);
+                        }
+                    }
+                })
+                // Assistive numeric actions go through the same normalization and delivery as
+                // the keyboard.
+                .on_a11y_action(
+                    Action::Increment,
+                    assistive_step(&state, &range, &on_change, 1),
+                )
+                .on_a11y_action(
+                    Action::Decrement,
+                    assistive_step(&state, &range, &on_change, -1),
+                )
+                .on_a11y_action(Action::SetValue, {
+                    let state = state.clone();
+                    let range = range.clone();
+                    move |data, window, cx| {
+                        if let Some(&ActionData::NumericValue(value)) = data {
+                            deliver(&state, range.normalize(value), &on_change, window, cx);
                         }
                     }
                 });

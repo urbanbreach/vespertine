@@ -91,6 +91,11 @@ impl Node {
         self.actions & ACTION_CLICK != 0
     }
 
+    /// Whether the node advertises `action` (bit `action as u8` of the action mask).
+    pub fn supports(&self, action: vespertine::accesskit::Action) -> bool {
+        self.actions & (1 << action as u64) != 0
+    }
+
     pub fn number(&self, key: &str) -> Option<f64> {
         self.properties.get(key).and_then(Value::as_f64)
     }
@@ -177,15 +182,25 @@ pub fn center(host: &mut TestHost, node: &Node) -> (f64, f64) {
 
 /// Delivers the accessibility click action to `node`, as assistive technology would.
 pub fn a11y_click(host: &mut TestHost, node: &Node) {
+    a11y_action(host, node, vespertine::accesskit::Action::Click, None);
+}
+
+/// Delivers an accessibility action with its data to `node`, as assistive technology would.
+pub fn a11y_action(
+    host: &mut TestHost,
+    node: &Node,
+    action: vespertine::accesskit::Action,
+    data: Option<vespertine::accesskit::ActionData>,
+) {
     let window = host.window();
     host.app()
         .simulate_accessibility_action(
             window,
             vespertine::accesskit::ActionRequest {
-                action: vespertine::accesskit::Action::Click,
+                action,
                 target_tree: vespertine::accesskit::TreeId::ROOT,
                 target_node: vespertine::accesskit::NodeId(node.id),
-                data: None,
+                data,
             },
         )
         .expect("the action is delivered");
