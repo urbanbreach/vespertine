@@ -197,7 +197,9 @@ impl IncrementalParser {
         let Some(last) = self.blocks.last() else {
             return;
         };
-        if matches!(last.kind, BlockKind::Code { .. }) {
+        // Code text has no inline syntax to repair, also when the code is nested in a quote or
+        // list item.
+        if ends_in_code(last) {
             return;
         }
         let from = self
@@ -230,6 +232,19 @@ fn can_absorb(kind: &BlockKind) -> bool {
             | BlockKind::DisplayMath(_)
             | BlockKind::Code { fenced: true, .. }
     )
+}
+
+/// Whether the last leaf block of `block` (descending into quotes and list items) is code.
+fn ends_in_code(block: &Block) -> bool {
+    match &block.kind {
+        BlockKind::Code { .. } => true,
+        BlockKind::Quote(children) => children.last().is_some_and(ends_in_code),
+        BlockKind::List { items, .. } => items
+            .last()
+            .and_then(|item| item.blocks.last())
+            .is_some_and(ends_in_code),
+        _ => false,
+    }
 }
 
 /// Clamps block ranges to the stored source (the repair appends text that is not in it).

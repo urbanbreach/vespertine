@@ -373,6 +373,19 @@ fn a_streaming_code_fence_is_not_repaired() {
 }
 
 #[test]
+fn a_streaming_nested_code_fence_is_not_repaired() {
+    for source in [
+        "- item\n\n  ```rust\n  let a = *b",
+        "> ```rust\n> let a = *b",
+    ] {
+        let mut parser = IncrementalParser::new();
+        parser.append(source);
+        let display = parser.display_tree().to_vec();
+        assert_eq!(display.as_slice(), parser.tree(), "{source:?}");
+    }
+}
+
+#[test]
 fn replace_resets_the_stored_source() {
     let mut parser = IncrementalParser::new();
     parser.append("abc\n\ndef");
