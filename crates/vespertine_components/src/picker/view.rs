@@ -25,12 +25,13 @@ use super::{
     actions::{
         Accelerator1, Accelerator2, Accelerator3, Accelerator4, Accelerator5, Accelerator6,
         Accelerator7, Accelerator8, Accelerator9, BackOut, ConfirmSecondary, MoveDown, MoveUp,
-        NextTab, PICKER_CONTEXT, PreviousTab, ToggleFavorite, bind_default_keys,
+        NextTab, PICKER_CONTEXT, PreviousTab, Retry, ToggleFavorite, bind_default_keys,
     },
     highlight::{RowExtent, reveal_offset},
     model::{Depth, EscapeOutcome as DepthOutcome, PickerModel, ReopenPolicy, ScopeTab},
     results::{Footer, ListState, Paging, Results, Row, RowKey, SectionSpec},
 };
+use crate::controls::Button;
 use crate::floating::{
     EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, OutsidePress,
     is_top_layer, open_layer, stepping::StepDirection,
@@ -1032,9 +1033,7 @@ impl Picker {
                 ),
                 tokens,
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    if let Some(handler) = this.on_retry.clone() {
-                        handler(&section_key, window, cx);
-                    }
+                    this.retry_section(&section_key, window, cx);
                 }),
             ))
             .into_any_element()
@@ -1046,19 +1045,52 @@ impl Picker {
         tokens: &ComponentTokens,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        div()
-            .id(id.into())
-            .role(Role::Button)
-            .aria_label("Retry")
+        Button::new(id)
+            .label("Retry")
+            .tokens(tokens.clone())
             .px(px(8.))
             .py(px(2.))
-            .rounded(px(4.))
-            .bg(tokens.control_surface)
-            .text_color(tokens.text)
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .on_click(on_click)
-            .child("Retry")
+    }
+
+    /// Retries a failed section and returns typing to the query field.
+    fn retry_section(
+        &mut self,
+        section_key: &SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(handler) = self.on_retry.clone() {
+            handler(section_key, window, cx);
+        }
+        self.field.read(cx).focus_handle(cx).focus(window, cx);
+    }
+
+    /// Retries the failed page request and returns typing to the query field.
+    fn retry_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handler) = self.on_retry_page.clone() {
+            handler(window, cx);
+        }
+        self.field.read(cx).focus_handle(cx).focus(window, cx);
+    }
+
+    /// The keyboard Retry: the first failed section in display order, else the failed page
+    /// request. Returns whether a Retry was shown.
+    fn retry_shown(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let failed_section = self
+            .results
+            .sections
+            .iter()
+            .find(|section| section.error.is_some())
+            .map(|section| section.key.clone());
+        if let Some(key) = failed_section {
+            self.retry_section(&key, window, cx);
+        } else if matches!(self.results.footer, Footer::MoreError(_)) {
+            self.retry_page(window, cx);
+        } else {
+            return false;
+        }
+        true
     }
 
     fn list(
@@ -1167,11 +1199,7 @@ impl Picker {
             line = line.child(self.retry_button(
                 (self.id.clone(), "retry-page"),
                 tokens,
-                cx.listener(|this, _: &ClickEvent, window, cx| {
-                    if let Some(handler) = this.on_retry_page.clone() {
-                        handler(window, cx);
-                    }
-                }),
+                cx.listener(|this, _: &ClickEvent, window, cx| this.retry_page(window, cx)),
             ));
         }
         Some(
@@ -1303,6 +1331,12 @@ impl Render for Picker {
             }))
             .on_action(cx.listener(|this, _: &ToggleFavorite, window, cx| {
                 if !this.toggle_favorite(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            // Keyboard access to the Retry of a failed section or page (R15).
+            .on_action(cx.listener(|this, _: &Retry, window, cx| {
+                if this.model.depth() != Depth::List || !this.retry_shown(window, cx) {
                     cx.propagate();
                 }
             }))

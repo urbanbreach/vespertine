@@ -1034,6 +1034,45 @@ fn the_picker_exposes_a_labelled_dialog_a_list_of_options_and_the_active_descend
 }
 
 #[test]
+fn the_keyboard_reaches_retry_of_a_failed_section_and_of_a_failed_page() {
+    require_backend!();
+    let mut f = fixture(Spec {
+        tabs: true,
+        commands: Vec::new(),
+        observe_bounds: false,
+        ..Spec::new()
+    });
+    f.open();
+    f.keys("ctrl-3");
+    f.reply(0, Err("index offline".into()));
+    f.settle_replies();
+    let retry = node(&mut f.host, "button", Some("Retry"));
+    assert!(retry.supports(vespertine::accesskit::Action::Focus));
+    f.keys("ctrl-r");
+    let queries = f.shared.wire.borrow().queries.clone();
+    assert_eq!(queries.len(), 2, "the section retry began a new request");
+    assert!(f.field_focused(), "typing continues in the query");
+    f.reply(
+        1,
+        Ok(Answer {
+            rows: vec!["alpha.txt".into()],
+            total: None,
+            indexing: false,
+            has_more: true,
+        }),
+    );
+    f.settle_replies();
+    // The short page asked for the next one; it fails.
+    assert_eq!(f.shared.wire.borrow().queries.last().map(|q| q.1), Some(1));
+    f.reply(2, Err("timeout".into()));
+    f.settle_replies();
+    f.keys("ctrl-r");
+    let wire = f.shared.wire.borrow();
+    assert_eq!(wire.queries.len(), 4, "the page retry asked again");
+    assert_eq!(wire.queries[3].1, 1);
+}
+
+#[test]
 fn a_row_hint_shows_after_500_ms_of_hovering_the_row() {
     require_backend!();
     let mut f = fixture(Spec::new());

@@ -29,6 +29,8 @@ actions!(
         ToggleFavorite,
         /// Step back out of an open choice submenu (Left).
         BackOut,
+        /// Retry the first failed section, else the failed page request (Ctrl-R).
+        Retry,
         /// The first numbered accelerator (Ctrl-1): the first tab or visible row.
         Accelerator1,
         /// The second numbered accelerator (Ctrl-2).
@@ -86,6 +88,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", PreviousTab, context),
         KeyBinding::new("ctrl-enter", ConfirmSecondary, context),
         KeyBinding::new("ctrl-shift-f", ToggleFavorite, context),
+        KeyBinding::new("ctrl-r", Retry, context),
         KeyBinding::new("left", BackOut, Some(CHOICES_CONTEXT)),
     ];
     bindings.extend(accelerator_bindings());
