@@ -89,29 +89,5 @@ machine load, and compare release builds only.
 
 ## Profiling
 
-`--features profile` builds the runner with measurement aids that are inert unless their environment
-variable is set:
-
-- `VSP_IPROF=<file>`: samples the instruction pointer of the main thread every `VSP_IPROF_PERIOD`
-  (default 100 000) user instructions through the kernel's performance counters and, when the runner
-  exits, writes the samples per module and the cost per function and source line (inlined frames
-  resolved). The "stable samples" line counts the samples in the runner binary, libc and libm: the
-  instructions of the framework itself, without the spinning of GPU drivers and the compositor
-  connection, which make plain instruction and CPU-time counts vary by tens of percent between runs
-  on a loaded machine. Two runs with different `--frames` give the stable instructions of one frame
-  without startup.
-- `VSP_COUNT=<file>`: the whole process's user-space instruction and cycle counters (all threads),
-  polled every 20 ms, headed by the time the result file was written.
-- `VSP_PROFILE=<file>`: a timer-driven sampling CPU profiler (`pprof`, process CPU time of all
-  threads) starting at `VSP_PROFILE_DELAY_MS` (default 3500, past startup and warmup) at
-  `VSP_PROFILE_HZ` (default 500), reporting inclusive and self cost per function, self cost per
-  source line and per caller chain.
-
-The release profile already carries line tables. Build with the feature, run, and rebuild without it
-before taking timings: a binary with the profilers must never be compared with one without.
-
-```sh
-cargo build --release -p vespertine_scenes --features profile
-VSP_PROFILE=$PWD/target/list.prof target/release/vsp-scene-runner \
-    --scene PERF-LIST --mode perf --frames 1200 --out target/prof-list.json
-```
+Profile the release runner with `perf record` and `perf report`; the release profile carries line
+tables.

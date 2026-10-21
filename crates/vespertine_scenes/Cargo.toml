@@ -16,13 +16,7 @@ doctest = false
 name = "vsp-scene-runner"
 path = "src/bin/vsp-scene-runner.rs"
 
-[features]
-# Sampling CPU profiler for the Vespertine runner (see README, "Profiling").
-profile = ["dep:pprof", "dep:backtrace"]
-
 [dependencies]
-backtrace = { version = "0.3", optional = true }
-pprof = { version = "0.15", optional = true, default-features = false, features = ["huge-depth"] }
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11"] }
 vespertine_platform = { workspace = true, features = ["wayland", "x11"] }
 vespertine_wgpu.workspace = true
