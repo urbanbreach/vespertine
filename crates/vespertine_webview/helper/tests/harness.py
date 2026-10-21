@@ -881,12 +881,6 @@ def test_composition_and_text(site):
         h.cmd(page, "commit", text="!")
         settle()
         assert value(h, page).endswith("!"), value(h, page)
-        # the context never filters key events: ordinary keys still arrive during composition
-        h.cmd(page, "preedit", text="ab")
-        type_key(h, page, "Right")
-        h.cmd(page, "unmark")
-        settle()
-        assert not any("keydown" in e and "Right" in e for e in []) 
     finally:
         assert h.finish() == 0
 

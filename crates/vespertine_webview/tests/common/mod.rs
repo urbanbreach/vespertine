@@ -99,9 +99,8 @@ pub fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> boo
     }
 }
 
+/// Whether `pid` still has a process table entry. A zombie counts as existing: it is gone only
+/// once its parent has reaped it.
 pub fn process_exists(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
-        && std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .map(|stat| !stat.contains(") Z "))
-            .unwrap_or(false)
 }
