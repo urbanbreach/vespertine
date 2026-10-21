@@ -34,8 +34,6 @@ pub struct BadgeTokens {
     pub danger_muted: Hsla,
     /// Busy status tone (activity).
     pub busy: Hsla,
-    /// Success status tone.
-    pub success: Hsla,
     /// Popover surface fill.
     pub popover: Hsla,
     /// Popover hairline border.
@@ -72,7 +70,6 @@ impl BadgeTokens {
             danger: rgb(0xE5675F).into(),
             danger_muted: rgb(0xE59A94).into(),
             busy: rgb(0x4C8DF6).into(),
-            success: rgb(0x58B879).into(),
             popover: rgb(0x1A1A1A).into(),
             popover_border: rgb(0x3F4450).into(),
             element_hover: rgb(0x30343D).into(),
@@ -107,7 +104,6 @@ impl BadgeTokens {
             danger: colors.danger.to_hsla(),
             danger_muted: colors.danger_muted.to_hsla(),
             busy: accent.activity.to_hsla(),
-            success: colors.success.to_hsla(),
             popover: colors.overlay.to_hsla(),
             popover_border: colors.border_strong.to_hsla(),
             element_hover: colors.hover.to_hsla(),

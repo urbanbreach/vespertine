@@ -1,4 +1,4 @@
-//! CMP-028: badges, notices, review cards and the checklist panel in the offscreen test host.
+//! CMP-028: badges, notices and review cards in the offscreen test host.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -10,10 +10,10 @@ use vespertine::{
     Window, canvas, div, px, rgb,
 };
 use vespertine_components::badges::{
-    BADGE_HEIGHT, BadgeCards, BadgeDescriptor, BadgeTokens, CardCallbacks, ChecklistPanel,
-    CommentContent, DRAFT_HEIGHT, DRAFT_INPUT_HEIGHT, DetailRow, ICON_COMMENT, IconAssets,
-    NoticeAction, NoticeVariant, Severity, card_height, checklist::Item, checklist::ItemStatus,
-    draft_input, notice_chip, render_adder, render_badge, render_card, render_draft,
+    BADGE_HEIGHT, BadgeCards, BadgeDescriptor, BadgeTokens, CardCallbacks, CommentContent,
+    DRAFT_HEIGHT, DRAFT_INPUT_HEIGHT, DetailRow, ICON_COMMENT, IconAssets, NoticeAction,
+    NoticeVariant, Severity, card_height, draft_input, notice_chip, render_adder, render_badge,
+    render_card, render_draft,
 };
 use vespertine_components::text::{TextArea, area::CHROME_PADDING_Y};
 use vespertine_richtext::text_root;
@@ -855,66 +855,4 @@ fn the_adder_opens_without_reaching_the_row_and_is_labelled() {
             .expect("json")
             .contains("Add comment")
     );
-}
-
-// --- The checklist panel -------------------------------------------------------------------------
-
-#[test]
-fn the_checklist_panel_folds_toggles_and_dismisses() {
-    if !vespertine_test_host::is_available() {
-        return;
-    }
-    let tokens = BadgeTokens::neutral();
-    let items: Rc<[Item]> = (0..10)
-        .map(|index| {
-            let status = match index {
-                0..=6 => ItemStatus::Completed,
-                7 => ItemStatus::InProgress,
-                _ => ItemStatus::Pending,
-            };
-            Item::new(format!("step {index}"), status)
-        })
-        .collect::<Vec<_>>()
-        .into();
-    let mut host = TestHost::with_element(options(400.0, 400.0), {
-        move |_, _| {
-            ChecklistPanel::new("owner-1", "tasks", items.clone(), false, &tokens)
-                .into_any_element()
-        }
-    })
-    .expect("host");
-    host.flush();
-    host.flush();
-    // Expanded while work remains: the window of three around the headline with two folds.
-    let painted = host.painted_text();
-    let has = |needle: &str| painted.iter().any(|text| text.contains(needle));
-    assert!(has("6 earlier") && has("1 later"), "{painted:?}");
-    assert!(has("step 6") && has("step 7") && has("step 8"));
-    assert!(!has("step 5") && !has("step 9"));
-    assert!(has("7 of 10"));
-
-    // The header toggle collapses the list to the headline; toggling again expands it.
-    host.click(100.0, 16.0, 0, "").expect("click");
-    host.flush();
-    host.flush();
-    let painted = host.painted_text();
-    assert!(
-        painted.iter().any(|text| text == "step 7"),
-        "headline only: {painted:?}"
-    );
-    assert!(!painted.iter().any(|text| text.contains("earlier")));
-    host.click(100.0, 16.0, 0, "").expect("click");
-    host.flush();
-    host.flush();
-    assert!(
-        host.painted_text()
-            .iter()
-            .any(|text| text.contains("6 earlier"))
-    );
-
-    // Dismissal is allowed while idle and hides the section for this very list.
-    host.click(400.0 - 16.0 - 12.0, 16.0, 0, "").expect("click");
-    host.flush();
-    host.flush();
-    assert!(host.painted_text().is_empty(), "{:?}", host.painted_text());
 }

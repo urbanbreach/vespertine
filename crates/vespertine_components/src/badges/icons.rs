@@ -1,5 +1,5 @@
 //! The small icon set the CMP-028 components draw themselves (copy, warning, comment, edit,
-//! remove, plus, check). Domain icons (a badge's icon) are supplied by the host by name.
+//! remove, plus). Domain icons (a badge's icon) are supplied by the host by name.
 //!
 //! The components address icons by asset path. [`IconAssets`] serves these paths from embedded
 //! SVGs; hosts chain it before their own asset source, or provide the same paths themselves.
@@ -21,8 +21,6 @@ pub const ICON_EDIT: &str = "vespertine/icons/edit.svg";
 pub const ICON_REMOVE: &str = "vespertine/icons/remove.svg";
 /// Plus.
 pub const ICON_PLUS: &str = "vespertine/icons/plus.svg";
-/// Check mark.
-pub const ICON_CHECK: &str = "vespertine/icons/check.svg";
 
 const STROKE: &str = r#"fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round""#;
 
@@ -42,7 +40,6 @@ fn icon(path: &str) -> Option<String> {
         ICON_EDIT => svg(r#"<path d="M4 20l1-5L16 4l4 4L9 19Z"/><path d="M14 6l4 4"/>"#),
         ICON_REMOVE => svg(r#"<path d="M6 6l12 12"/><path d="M18 6 6 18"/>"#),
         ICON_PLUS => svg(r#"<path d="M12 5v14"/><path d="M5 12h14"/>"#),
-        ICON_CHECK => svg(r#"<path d="M5 12.5l4.5 4.5L19 7"/>"#),
         _ => return None,
     })
 }
@@ -64,7 +61,6 @@ impl AssetSource for IconAssets {
             ICON_EDIT,
             ICON_REMOVE,
             ICON_PLUS,
-            ICON_CHECK,
         ]
         .into_iter()
         .filter(|candidate| candidate.starts_with(path))

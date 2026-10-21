@@ -6,14 +6,16 @@
 //! [`ActivityPill`] and [`CornerCountBadge`] with the count formatting policy, [`notice_chip`]
 //! (severity-tinted, selectable and copyable message), [`ReviewCard`] / [`ReviewDraft`] /
 //! [`CommentAdder`] (located header, clipped body, bounded draft in a CMP-008 text area) and the
-//! [`ChecklistPanel`]. They expose owner-provided callbacks and slots and know nothing about
-//! the application's domain data. Colors come from [`BadgeTokens`] (theme roles).
+//! checklist source cache ([`ListCache`]; the checklist panel is
+//! [`StatusSection`](crate::status::StatusSection)). They expose owner-provided callbacks and
+//! slots and know nothing about the application's domain data. Colors come from [`BadgeTokens`]
+//! (theme roles).
 //!
 //! The components address icons by asset path; [`IconAssets`] serves the icons they draw
 //! themselves.
 
 mod badge;
-pub mod checklist;
+mod checklist;
 mod common;
 mod count;
 mod icons;
@@ -25,14 +27,13 @@ pub use badge::{
     BADGE_HEIGHT, BadgeCards, BadgeDescriptor, CARD_WIDTH, DetailCard, DetailRow, HOVER_DELAY,
     InlineBadge, Trailing, detail_card, render_badge,
 };
-pub use checklist::{ChecklistPanel, ListCache};
+pub use checklist::ListCache;
 pub use count::{
     ActivityPill, ActivityPillView, COUNT_CAP, CornerCountBadge, CountDisplay, activity_pill,
     corner_count_badge, count_display, count_label, count_label_capped, dot_opacity, pill_width,
 };
 pub use icons::{
-    ICON_CHECK, ICON_COMMENT, ICON_COPY, ICON_EDIT, ICON_PLUS, ICON_REMOVE, ICON_WARNING,
-    IconAssets,
+    ICON_COMMENT, ICON_COPY, ICON_EDIT, ICON_PLUS, ICON_REMOVE, ICON_WARNING, IconAssets,
 };
 pub use notice::{NoticeAction, NoticeVariant, Severity, notice_chip};
 pub use review::{
