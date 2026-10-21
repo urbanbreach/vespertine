@@ -15,12 +15,10 @@ use std::{
 };
 use vespertine_collections::{FxHashMap, FxHashSet};
 
-/// Identity of a retained view record. The window owns the slab the index
-/// refers to; the generation guards against recycled slots.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ViewKey {
-    pub index: u32,
-    pub generation: u32,
+slotmap::new_key_type! {
+    /// Identity of a retained view record in the window's slot map; the key's
+    /// version guards against recycled slots.
+    pub(crate) struct ViewKey;
 }
 
 /// A shared counter that stateful scroll and list objects bump whenever the

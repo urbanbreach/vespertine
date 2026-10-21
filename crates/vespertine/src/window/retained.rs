@@ -229,15 +229,9 @@ impl Placement {
     }
 }
 
-enum Slot {
-    Occupied { generation: u32, record: ViewRecord },
-    Free { generation: u32 },
-}
-
 #[derive(Default)]
 pub(crate) struct RetainedViews {
-    slots: Vec<Slot>,
-    free: Vec<u32>,
+    slots: slotmap::SlotMap<ViewKey, ViewRecord>,
     by_path: FxHashMap<GlobalElementId, ViewKey>,
     by_entity: FxHashMap<EntityId, SmallVec<[ViewKey; 1]>>,
     entity_readers: FxHashMap<EntityId, SmallVec<[ViewKey; 2]>>,
@@ -284,17 +278,11 @@ fn add_key<K: Eq + std::hash::Hash + Copy, const N: usize>(
 
 impl RetainedViews {
     pub fn get(&self, key: ViewKey) -> Option<&ViewRecord> {
-        match self.slots.get(key.index as usize)? {
-            Slot::Occupied { generation, record } if *generation == key.generation => Some(record),
-            _ => None,
-        }
+        self.slots.get(key)
     }
 
     pub fn get_mut(&mut self, key: ViewKey) -> Option<&mut ViewRecord> {
-        match self.slots.get_mut(key.index as usize)? {
-            Slot::Occupied { generation, record } if *generation == key.generation => Some(record),
-            _ => None,
-        }
+        self.slots.get_mut(key)
     }
 
     pub fn lookup(&self, path: &GlobalElementId) -> Option<ViewKey> {
@@ -338,24 +326,7 @@ impl RetainedViews {
             built_epoch: 0,
             row: None,
         };
-        let key = if let Some(index) = self.free.pop() {
-            let generation = match &self.slots[index as usize] {
-                Slot::Free { generation } => *generation,
-                Slot::Occupied { .. } => unreachable!("free list points at an occupied slot"),
-            };
-            self.slots[index as usize] = Slot::Occupied { generation, record };
-            ViewKey { index, generation }
-        } else {
-            let index = self.slots.len() as u32;
-            self.slots.push(Slot::Occupied {
-                generation: 0,
-                record,
-            });
-            ViewKey {
-                index,
-                generation: 0,
-            }
-        };
+        let key = self.slots.insert(record);
         self.by_path.insert(path, key);
         add_key(&mut self.by_entity, entity_id, key);
         key
@@ -531,10 +502,7 @@ impl RetainedViews {
         inputs: &InputChanges,
     ) {
         self.frame_epoch += 1;
-        for record in self.slots.iter_mut().filter_map(|slot| match slot {
-            Slot::Occupied { record, .. } => Some(record),
-            Slot::Free { .. } => None,
-        }) {
+        for record in self.slots.values_mut() {
             record.notified = false;
         }
         for entity in notified {
@@ -822,35 +790,19 @@ impl RetainedViews {
     /// frame.
     pub fn sweep(&mut self) {
         let epoch = self.frame_epoch;
-        let mut dead = Vec::new();
-        for (index, slot) in self.slots.iter().enumerate() {
-            if let Slot::Occupied { generation, record } = slot
-                && record.live_epoch != epoch
-            {
-                dead.push(ViewKey {
-                    index: index as u32,
-                    generation: *generation,
-                });
-            }
-        }
+        let dead: Vec<ViewKey> = self
+            .slots
+            .iter()
+            .filter(|(_, record)| record.live_epoch != epoch)
+            .map(|(key, _)| key)
+            .collect();
         for key in dead {
             self.remove(key);
         }
     }
 
     pub fn remove(&mut self, key: ViewKey) {
-        let Some(Slot::Occupied { generation, .. }) = self.slots.get_mut(key.index as usize) else {
-            return;
-        };
-        if *generation != key.generation {
-            return;
-        }
-        let generation = generation.wrapping_add(1);
-        let slot = std::mem::replace(
-            &mut self.slots[key.index as usize],
-            Slot::Free { generation },
-        );
-        let Slot::Occupied { record, .. } = slot else {
+        let Some(record) = self.slots.remove(key) else {
             return;
         };
         self.unindex_reads(key, &record.reads);
@@ -858,7 +810,6 @@ impl RetainedViews {
             self.by_path.remove(&record.path);
         }
         remove_key(&mut self.by_entity, record.entity_id, key);
-        self.free.push(key.index);
     }
 
     #[cfg(any(test, feature = "test-support"))]
