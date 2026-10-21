@@ -714,6 +714,32 @@ fn enter_activates_once_per_physical_press_and_the_latch_resets() {
 }
 
 #[test]
+fn enter_during_a_composition_in_the_query_does_not_activate_a_row() {
+    require_backend!();
+    let mut f = fixture(Spec::new());
+    f.open();
+    f.reply(0, files(&[]));
+    f.settle_replies();
+    let field = f.read(|picker, _| picker.field().clone());
+    let window = f.host.window();
+    f.host
+        .app()
+        .update_window(window, |_, window, cx| {
+            field.update(cx, |field, cx| {
+                field.replace_and_mark_text_in_range(None, "sa", None, window, cx)
+            })
+        })
+        .unwrap();
+    f.settle();
+    assert!(f.highlighted().is_some(), "the preedit matches a row");
+    f.host.key_down("enter", false, None).unwrap();
+    f.host.key_up("enter", None).unwrap();
+    f.settle();
+    assert!(f.shared.activated.borrow().is_empty());
+    assert!(f.is_open());
+}
+
+#[test]
 fn tabs_wrap_the_numbered_accelerator_selects_and_a_change_resets_highlight_and_scroll() {
     require_backend!();
     let mut f = fixture(Spec {

@@ -1314,9 +1314,11 @@ impl Render for Picker {
                 }
             }))
             // Enter reaches the field as its submit action; the picker claims it first so the
-            // press activates once (R14).
+            // press activates once (R14). During a composition Enter belongs to the input method,
+            // so the field's own guard handles it.
             .capture_action(cx.listener(|this, _: &Submit, window, cx| {
-                if this.model.depth() != Depth::List {
+                if this.model.depth() != Depth::List || this.field.read(cx).marked_range().is_some()
+                {
                     return;
                 }
                 let results = this.build_results(cx);
