@@ -738,8 +738,15 @@ impl<'a> Builder<'a> {
             Event::TaskListMarker(checked) => {
                 let range = self.range(range);
                 let marker = TaskMarker { range, checked };
-                if let Some(Frame::Item { task, .. }) = self.frames.last_mut() {
-                    *task = Some(marker);
+                match self.frames.last_mut() {
+                    // A tight item: the marker opens the item's implicit paragraph.
+                    Some(Frame::Item { task, .. }) => *task = Some(marker),
+                    // A loose item: the marker comes inside the item's explicit paragraph.
+                    Some(Frame::Para { .. }) => {
+                        let run = self.task_run(&marker);
+                        self.push_run(run);
+                    }
+                    _ => {}
                 }
             }
             Event::FootnoteReference(label) => {

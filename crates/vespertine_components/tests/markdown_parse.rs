@@ -93,6 +93,29 @@ fn nested_lists_keep_start_numbers_and_task_markers() {
 }
 
 #[test]
+fn loose_task_items_keep_their_markers() {
+    let source = "- [x] done\n\n- [ ] todo\n";
+    let blocks = parse(source);
+    let BlockKind::List { items, .. } = &blocks[0].kind else {
+        panic!("{blocks:?}")
+    };
+    let first_run = |item: usize| match &items[item].blocks[0].kind {
+        BlockKind::Paragraph(runs) => runs[0].clone(),
+        other => panic!("{other:?}"),
+    };
+    let done = first_run(0);
+    assert_eq!(done.text, "[x] ");
+    let task = done.task.unwrap();
+    assert!(task.checked);
+    assert_eq!(&source[task.range], "[x]");
+    let todo = first_run(1);
+    assert_eq!(todo.text, "[ ] ");
+    let task = todo.task.unwrap();
+    assert!(!task.checked);
+    assert_eq!(&source[task.range], "[ ]");
+}
+
+#[test]
 fn tables_keep_alignment_and_missing_cells() {
     let source = "| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 |\n";
     let BlockKind::Table {
