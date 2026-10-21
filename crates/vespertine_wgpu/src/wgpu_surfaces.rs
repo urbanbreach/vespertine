@@ -256,7 +256,7 @@ impl SurfaceBatcher {
             {
                 continue;
             }
-            let Some(texture) = surface.texture.downcast_ref::<wgpu::Texture>() else {
+            let Some(texture) = surface_texture(surface) else {
                 continue;
             };
             let Some(bind_group) = create_bind_group(
@@ -273,6 +273,17 @@ impl SurfaceBatcher {
             pass.draw(0..4, 0..1);
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn surface_texture(surface: &PaintSurface) -> Option<&wgpu::Texture> {
+    surface.texture.downcast_ref()
+}
+
+/// macOS surfaces carry a video buffer for the Metal renderer, not a GPU texture.
+#[cfg(target_os = "macos")]
+fn surface_texture(_: &PaintSurface) -> Option<&wgpu::Texture> {
+    None
 }
 
 /// Binds one surface's texture. Returns `None` (the surface is skipped) when the device

@@ -33,6 +33,7 @@
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod linux;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod pulse;
 #[cfg(test)]
 mod tests;
