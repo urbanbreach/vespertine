@@ -187,8 +187,9 @@ fn advance_slots(
                 }
                 rt.slot.retarget(target, transition, now);
             }
-        } else if viewport_changed && rt.slot.is_active(now) {
-            // A window-driven change discards any departing allocation.
+        } else if (viewport_changed || reduce_motion) && rt.slot.is_active(now) {
+            // A window-driven change discards any departing allocation, and reduced motion
+            // settles a transition that began before it was enabled.
             rt.slot.snap(target, transition, now);
             if target > 0.0 {
                 rt.content.snap(target, transition, now);

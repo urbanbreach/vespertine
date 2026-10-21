@@ -670,6 +670,31 @@ fn reduced_motion_snaps_slot_transitions() {
 }
 
 #[test]
+fn enabling_reduced_motion_settles_running_slot_transitions() {
+    for (opening, settled) in [(true, 256.), (false, 0.)] {
+        let mut h = Harness::new(
+            size(px(1000.), px(700.)),
+            vec![PaneDescriptor::leading("leading").collapsed(opening)],
+        );
+        h.set_collapsed("leading", !opening);
+        h.draw();
+        h.advance(50);
+        h.draw();
+        let midway = h.slot("leading").size.width;
+        assert!(midway > px(0.) && midway < px(256.), "opening {opening}");
+
+        h.cx.update(|cx| cx.set_reduce_motion(true));
+        h.draw();
+        assert_eq!(
+            h.slot("leading").size.width,
+            px(settled),
+            "opening {opening}"
+        );
+        assert!(!h.placement("leading").closing, "opening {opening}");
+    }
+}
+
+#[test]
 fn slot_transition_uses_the_size_curve() {
     let mut h = Harness::new(
         size(px(1000.), px(700.)),
