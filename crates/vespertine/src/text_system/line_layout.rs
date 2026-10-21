@@ -621,7 +621,14 @@ impl LineLayoutCache {
                             font_size,
                             runs,
                         );
-                        caches.append_track(font_generation, text, font_size, runs, &layout);
+                        caches.append_track(
+                            self.platform_text_system.as_ref(),
+                            font_generation,
+                            text,
+                            font_size,
+                            runs,
+                            &layout,
+                        );
                         layout
                     }
                 },

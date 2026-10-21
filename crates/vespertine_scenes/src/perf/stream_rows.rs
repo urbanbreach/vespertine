@@ -49,10 +49,8 @@ mod tests {
             cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
                 .unwrap();
         }
-        // The validation of the incremental shaping never turns it off, and most frames shape
-        // only the new words of the live message.
+        // Most frames shape only the new words of the live message.
         let shaping = cx.update(|cx| cx.text_system().shape_stats());
-        assert!(!shaping.append_disabled, "{shaping:?}");
         assert!(
             shaping.appended_lines as usize >= FRAMES / 2,
             "most frames shape only the new words: {shaping:?}"

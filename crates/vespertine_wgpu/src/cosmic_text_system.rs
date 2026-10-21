@@ -368,6 +368,14 @@ impl PlatformTextSystem for CosmicTextSystem {
         self.0.write().layout_line(text, font_size, runs)
     }
 
+    /// `ShapeLine` splits a line at its UAX #14 break opportunities and shapes every piece
+    /// alone, each trailing space as a piece of its own; glyphs are then placed left to right by
+    /// their advances. A space between ASCII alphanumerics is followed by such an opportunity
+    /// whatever precedes it, and printable ASCII is one left-to-right span without tabs.
+    fn shapes_ascii_words_independently(&self) -> bool {
+        true
+    }
+
     fn recommended_rendering_mode(
         &self,
         _font_id: FontId,

@@ -1812,6 +1812,18 @@ pub trait PlatformTextSystem: Send + Sync {
     ) -> Result<(Size<DevicePixels>, Vec<u8>)>;
     /// Layout a line of text with the given font runs.
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout;
+    /// Whether [`Self::layout_line`] shapes printable ASCII in one font run word by word.
+    ///
+    /// `true` promises, for such a line `text` and every position `p` where `text[p - 1]` is a
+    /// space that follows an ASCII alphanumeric and `text[p]` is an ASCII alphanumeric:
+    /// the glyphs before `p` are those of `text[..p]` shaped alone, and the glyphs from `p`
+    /// on are those of `text[p..]` shaped alone, translated by the advance of `text[..p]`.
+    /// The text system then reuses the layout of a shorter line that the line extends and
+    /// shapes only the words after it. Backends that shape across such spaces return `false`,
+    /// the default, and every line is shaped in full.
+    fn shapes_ascii_words_independently(&self) -> bool {
+        false
+    }
     /// Returns the recommended text rendering mode for the given font and size.
     fn recommended_rendering_mode(&self, _font_id: FontId, _font_size: Pixels)
     -> TextRenderingMode;

@@ -207,22 +207,25 @@ impl PlatformTextSystem for TestShaper {
         let size = font_size.0;
         let kerning = self.kerning.lock().clone();
         let ligatures = self.ligatures.lock().clone();
+        // Kerning adjusts the advance of the first glyph of a pair, as OpenType pair
+        // positioning does.
+        let kern_after = |end: usize, c: char| {
+            text[end..]
+                .chars()
+                .next()
+                .and_then(|next| kerning.get(&(c, next)))
+                .map_or(0.0, |delta| delta * size)
+        };
         let mut x = 0.0f32;
         let mut shaped_runs = Vec::new();
         let mut start = 0;
-        let mut previous: Option<char> = None;
         for run in runs {
             let face = self.face(run.font_id);
             let mut glyphs = Vec::new();
             let slice = &text[start..start + run.len];
             let mut chars = slice.char_indices().peekable();
             while let Some((ix, c)) = chars.next() {
-                if let Some(before) = previous
-                    && let Some(delta) = kerning.get(&(before, c))
-                {
-                    x += *delta * size;
-                }
-                if let Some(&(_, next)) = chars.peek()
+                if let Some(&(next_ix, next)) = chars.peek()
                     && ligatures.contains(&(c, next))
                 {
                     glyphs.push(ShapedGlyph {
@@ -231,9 +234,11 @@ impl PlatformTextSystem for TestShaper {
                         index: start + ix,
                         is_emoji: false,
                     });
-                    x += Self::char_advance(&face, c, size) + Self::char_advance(&face, next, size);
+                    let end = start + next_ix + next.len_utf8();
+                    x += Self::char_advance(&face, c, size)
+                        + Self::char_advance(&face, next, size)
+                        + kern_after(end, next);
                     chars.next();
-                    previous = Some(next);
                     continue;
                 }
                 glyphs.push(ShapedGlyph {
@@ -242,8 +247,8 @@ impl PlatformTextSystem for TestShaper {
                     index: start + ix,
                     is_emoji: false,
                 });
-                x += Self::char_advance(&face, c, size);
-                previous = Some(c);
+                let end = start + ix + c.len_utf8();
+                x += Self::char_advance(&face, c, size) + kern_after(end, c);
             }
             start += run.len;
             if !glyphs.is_empty() {
@@ -267,6 +272,22 @@ impl PlatformTextSystem for TestShaper {
             runs: shaped_runs,
             len: text.len(),
         }
+    }
+
+    /// Words are shaped independently unless a kerning pair, a ligature or the triple-nine
+    /// shift reaches across a space.
+    fn shapes_ascii_words_independently(&self) -> bool {
+        !self.skew_triple_nines.load(Ordering::SeqCst)
+            && !self
+                .kerning
+                .lock()
+                .keys()
+                .any(|(a, b)| *a == ' ' || *b == ' ')
+            && !self
+                .ligatures
+                .lock()
+                .iter()
+                .any(|(a, b)| *a == ' ' || *b == ' ')
     }
 
     fn recommended_rendering_mode(
@@ -296,6 +317,14 @@ fn run_of(text: &str, font: &Font) -> TextRun {
 
 fn layout(window: &WindowTextSystem, text: &str, font: &Font) -> Arc<LineLayout> {
     window.layout_line(text, px(16.), &[run_of(text, font)], None)
+}
+
+/// Asserts that two layouts are identical: glyph ids, cluster indices, positions, width and
+/// metrics. `Debug` prints every float in its shortest round-trip form, so equal text means
+/// bit-equal values.
+#[track_caller]
+fn assert_same_layout(actual: &LineLayout, expected: &LineLayout) {
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
 }
 
 mod fallback {
@@ -1153,10 +1182,7 @@ mod numeric {
 
 mod appended {
     use super::*;
-    use crate::text_system::shape_cache::{
-        APPEND_CHECK_INTERVAL, APPEND_INITIAL_CHECKS, APPEND_MAX_CHAIN, APPEND_MIN_LEN,
-        layouts_agree_within,
-    };
+    use crate::text_system::shape_cache::{APPEND_MAX_CHAIN, APPEND_MIN_LEN};
 
     struct Fixture {
         shaper: Arc<TestShaper>,
@@ -1167,6 +1193,9 @@ mod appended {
 
     fn fixture() -> Fixture {
         let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        // Kerning inside words; whole-pixel values keep every sum exact.
+        shaper.kerning.lock().insert(('o', 'r'), -0.0625);
+        shaper.kerning.lock().insert(('w', 'a'), 0.125);
         let system = text_system(&shaper);
         let window = WindowTextSystem::new(system.clone());
         Fixture {
@@ -1193,21 +1222,21 @@ mod appended {
         /// Lays `text` out through the cache and checks it against full platform shaping.
         fn checked(&self, text: &str) -> Arc<LineLayout> {
             let cached = layout(&self.window, text, &self.font);
-            let platform = self.platform(text);
-            let units = 8.0 + 2.0 * (text.len() as f32).sqrt() + APPEND_MAX_CHAIN as f32;
-            let tolerance = 0.001f32.max(platform.width.0 * units * f32::EPSILON);
-            assert!(
-                layouts_agree_within(&cached, &platform, tolerance),
-                "`{text}` differs from platform shaping"
-            );
+            assert_same_layout(&cached, &self.platform(text));
             cached
         }
     }
 
+    /// Letters only, so that every advance and kerning value is a whole number of pixels and
+    /// the shortcut's additions are exact.
     fn stream(words: usize) -> String {
-        let mut text = String::from("a streaming message begins with some ordinary words");
+        let mut text = String::from("lorem ipsum dolor sit amet consectetur adipiscing elit");
         for ix in 0..words {
-            text.push_str(&format!(" w{ix}"));
+            let word: String = [b'a' + (ix % 26) as u8, b'a' + (ix / 26 % 26) as u8]
+                .iter()
+                .map(|&byte| byte as char)
+                .collect();
+            text.push_str(&format!(" w{word}"));
         }
         text
     }
@@ -1223,14 +1252,12 @@ mod appended {
         let f = fixture();
         assert!(stream(0).len() >= APPEND_MIN_LEN);
         f.checked(&stream(0));
-        let steps = APPEND_INITIAL_CHECKS as usize + 12;
+        let steps = 40;
         for words in 1..=steps {
             f.checked(&stream(words));
         }
         let stats = f.system.shape_stats();
         assert_eq!(stats.appended_lines, assembled_of(steps));
-        assert_eq!(stats.append_checks, APPEND_INITIAL_CHECKS);
-        assert!(!stats.append_disabled);
 
         // The next line extends a chain: only the words after the last shared boundary reach
         // the platform (the direct comparison below is not counted by the cache).
@@ -1239,22 +1266,6 @@ mod appended {
         let before = f.system.shape_stats().platform_line_shapes;
         f.checked(&stream(next));
         assert_eq!(f.system.shape_stats().platform_line_shapes - before, 1);
-    }
-
-    #[test]
-    fn a_long_streamed_line_keeps_appended_shaping_enabled_through_the_sampled_checks() {
-        let f = fixture();
-        f.checked(&stream(0));
-        // Past the initial checks and the first sampled comparison, on a line whose width is
-        // thousands of pixels: the comparison tolerates the rounding of long sums.
-        let steps = APPEND_CHECK_INTERVAL as usize + APPEND_MAX_CHAIN as usize;
-        for words in 1..=steps {
-            f.checked(&stream(words));
-        }
-        let stats = f.system.shape_stats();
-        assert!(!stats.append_disabled);
-        assert_eq!(stats.appended_lines, assembled_of(steps));
-        assert!(stats.append_checks > APPEND_INITIAL_CHECKS);
     }
 
     #[test]
@@ -1279,7 +1290,7 @@ mod appended {
         f.checked(&stream(3));
         f.checked(&format!(
             "{} and then something else",
-            stream(3).replace("some", "any")
+            stream(3).replace("dolor", "dolos")
         ));
         f.checked("short");
         f.checked(&"x".repeat(APPEND_MIN_LEN + 10));
@@ -1376,45 +1387,7 @@ mod appended {
             .window
             .layout_line(&longer, px(16.), &colored(longer.len()), None);
         assert_eq!(f.system.shape_stats().appended_lines, 1);
-        let platform = f.platform(&longer);
-        let tolerance = 0.001f32.max(platform.width.0 * 8.0 * f32::EPSILON);
-        assert!(layouts_agree_within(&layout, &platform, tolerance));
-    }
-
-    #[test]
-    fn a_platform_that_shapes_across_spaces_disables_assembly() {
-        let f = fixture();
-        // A glyph shift that depends on a word before the shaped tail.
-        f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
-        let base = "a streaming message begins with 999 and some ordinary words";
-        f.checked(base);
-        f.checked(&format!("{base} w0"));
-        let stats = f.system.shape_stats();
-        assert!(stats.append_disabled, "{stats:?}");
-        assert_eq!(stats.append_checks, 1);
-        let assembled = stats.appended_lines;
-        for words in 1..6 {
-            f.checked(&format!("{base} w0 w{words}"));
-        }
-        assert_eq!(f.system.shape_stats().appended_lines, assembled);
-    }
-
-    #[test]
-    fn sampled_comparisons_continue_after_the_initial_checks() {
-        let f = fixture();
-        f.checked(&stream(0));
-        let steps = (APPEND_INITIAL_CHECKS + 2 * APPEND_CHECK_INTERVAL) as usize * 8 / 7 + 8;
-        for words in 1..=steps {
-            f.checked(&stream(words));
-        }
-        let stats = f.system.shape_stats();
-        assert_eq!(stats.appended_lines, assembled_of(steps));
-        assert!(stats.appended_lines > APPEND_INITIAL_CHECKS + 2 * APPEND_CHECK_INTERVAL);
-        assert_eq!(
-            stats.append_checks,
-            APPEND_INITIAL_CHECKS + stats.appended_lines / APPEND_CHECK_INTERVAL
-        );
-        assert!(!stats.append_disabled);
+        assert_same_layout(&layout, &f.platform(&longer));
     }
 
     #[test]
@@ -1428,5 +1401,18 @@ mod appended {
             .unwrap();
         f.checked(&stream(2));
         assert_eq!(f.system.shape_stats().appended_lines, 1);
+    }
+
+    /// TXT-3: a platform whose shaping of the new words depends on earlier words never has a
+    /// shorter line's layout reused, however long the line.
+    #[test]
+    fn a_contextual_shift_at_the_junction_is_never_reused() {
+        let f = fixture();
+        f.shaper.skew_triple_nines.store(true, Ordering::SeqCst);
+        let base = format!("999 {}end", "a ".repeat(4096));
+        layout(&f.window, &base, &f.font);
+        let longer = format!("{base} w0");
+        assert_same_layout(&layout(&f.window, &longer, &f.font), &f.platform(&longer));
+        assert_eq!(f.system.shape_stats().appended_lines, 0);
     }
 }
