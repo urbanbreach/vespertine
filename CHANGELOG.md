@@ -18,10 +18,6 @@ of the autonomous build are removed, and the crates build in more places.
 - Projects that depend on Vespertine by path or git build: taffy is a path dependency instead of a
   `[patch.crates-io]` entry (which Cargo applies only in the top-level workspace), and the vendored
   crate is its own workspace root, so checkouts nested in another workspace can run `cargo fmt --all`.
-- Text layout no longer assembles lines from cached digit pairs or a cached prefix (glyphs could land
-  up to 0.5 px from the platform's positions, and per-size tables were never freed); every cache miss
-  is shaped by the platform. PRF-013 is withdrawn. Measured cost: the PERF-STREAM scene (a streaming
-  transcript) takes about 16% more CPU per frame; PERF-TEXT is unchanged.
 
 ### Changed
 
