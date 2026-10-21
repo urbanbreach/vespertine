@@ -101,11 +101,6 @@ impl<R> ScopedContent<R> {
         &self.projections
     }
 
-    /// Splits the content into its text and projections.
-    pub fn into_parts(self) -> (String, Vec<Projection<R>>) {
-        (self.text, self.projections)
-    }
-
     /// Builds the clipboard item for copying or cutting this content from an editor of the
     /// given scope.
     ///

@@ -82,11 +82,6 @@ impl RequestGeneration {
             current: self.0.clone(),
         }
     }
-
-    /// Supersedes all outstanding requests without starting a new one.
-    pub fn cancel_all(&self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
 }
 
 /// Identifies one request of a [`RequestGeneration`].

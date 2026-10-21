@@ -10,7 +10,7 @@
 //! The parsed form is normalized, so `PartialEq` is deep equality that ignores `null`/absent
 //! properties and key order, and applying a style is idempotent.
 
-use std::{collections::HashMap, fmt, hash::Hash};
+use std::fmt;
 
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -121,26 +121,6 @@ fn font_weight_from_string(text: &str) -> FontWeight {
         },
     };
     FontWeight(weight)
-}
-
-/// Compares two style descriptions as JSON values: deep equality where object members that are
-/// `null` count as absent and key order is irrelevant.
-pub fn style_json_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Object(a), Value::Object(b)) => {
-            let present =
-                |map: &Map<String, Value>| map.iter().filter(|(_, value)| !value.is_null()).count();
-            present(a) == present(b)
-                && a.iter()
-                    .filter(|(_, value)| !value.is_null())
-                    .all(|(key, value)| b.get(key).is_some_and(|other| style_json_eq(value, other)))
-        }
-        (Value::Array(a), Value::Array(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| style_json_eq(a, b))
-        }
-        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
-        _ => a == b,
-    }
 }
 
 /// One layer of a style: the base style, or one of the nested interactive state styles.
@@ -331,63 +311,6 @@ pub fn style_json_mouse_blocking(
     operation: &str,
 ) -> Result<MouseBlocking, HostStyleError> {
     Ok(HostStyle::from_json(value, operation)?.mouse_blocking())
-}
-
-/// The outcome of [`StyleStore::update`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StyleUpdate {
-    /// The new style equals the stored one: nothing to send, apply or repaint.
-    Unchanged,
-    /// The stored style was replaced.
-    Changed,
-}
-
-/// Keeps the current [`HostStyle`] of every element so that re-sending an equal style costs
-/// nothing and a change to one element never touches another.
-#[derive(Clone, Debug)]
-pub struct StyleStore<K: Eq + Hash> {
-    styles: HashMap<K, HostStyle>,
-}
-
-impl<K: Eq + Hash> Default for StyleStore<K> {
-    fn default() -> Self {
-        Self {
-            styles: HashMap::new(),
-        }
-    }
-}
-
-impl<K: Eq + Hash> StyleStore<K> {
-    /// Creates an empty store.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Replaces the style of `key` with the one described by `value`. An element without a
-    /// stored style has the empty style. On error nothing is stored.
-    pub fn update(
-        &mut self,
-        key: K,
-        value: &Value,
-        operation: &str,
-    ) -> Result<StyleUpdate, HostStyleError> {
-        let style = self.styles.entry(key).or_default();
-        Ok(if style.replace(value, operation)? {
-            StyleUpdate::Changed
-        } else {
-            StyleUpdate::Unchanged
-        })
-    }
-
-    /// The stored style of `key`.
-    pub fn get(&self, key: &K) -> Option<&HostStyle> {
-        self.styles.get(key)
-    }
-
-    /// Removes the style of `key`, which is equivalent to replacing it with the empty style.
-    pub fn remove(&mut self, key: &K) -> Option<HostStyle> {
-        self.styles.remove(key)
-    }
 }
 
 struct Reader<'a> {

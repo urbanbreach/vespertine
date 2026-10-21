@@ -293,26 +293,6 @@ impl Interactivity {
         }
     }
 
-    /// Removes a property previously set through [`Self::apply_aria_attribute`]
-    /// (the attribute is no longer present). Returns false for unknown names.
-    pub fn remove_aria_attribute(&mut self, name: &str) -> bool {
-        let aria = self.aria_mut();
-        match name {
-            "aria-id" => aria.author_id = None,
-            "aria-label" => {
-                aria.label = None;
-                aria.label_attribute_present = false;
-            }
-            "aria-description" => aria.description = None,
-            "aria-valuetext" => aria.value = None,
-            "aria-expanded" => aria.expanded = None,
-            "aria-selected" => aria.selected = None,
-            "aria-level" => aria.level = None,
-            _ => return false,
-        }
-        true
-    }
-
     /// The role exported for this element's own node, or `None` when it exports
     /// none. `GenericContainer` never forces a node, so assigning it behaves
     /// like assigning no role.

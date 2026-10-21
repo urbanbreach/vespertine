@@ -337,11 +337,6 @@ pub fn curved_clip_coverage<'a>(
         .fold(1.0f32, |coverage, shape| coverage.min(shape.coverage(p)))
 }
 
-/// A pixel's center position in device coordinates.
-pub fn pixel_center(x: u32, y: u32) -> [f32; 2] {
-    [x as f32 + 0.5, y as f32 + 0.5]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

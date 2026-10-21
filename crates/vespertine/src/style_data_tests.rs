@@ -17,8 +17,7 @@ use crate::{
 };
 
 use super::style_data::{
-    HostStyle, HostStyleError, StyleStore, StyleUpdate, cursor_style_from_keyword, style_json_eq,
-    style_json_mouse_blocking,
+    HostStyle, HostStyleError, cursor_style_from_keyword, style_json_mouse_blocking,
 };
 
 const OP: &str = "setStyle";
@@ -643,15 +642,6 @@ fn equality_ignores_undefined_and_key_order() {
     assert_ne!(a, c);
     let d = parse(json!({ "width": 10, "padding": 4 }));
     assert_ne!(a, d);
-
-    let x = json!({ "a": 1, "b": { "c": [1, 2], "d": null }, "e": null });
-    let y = json!({ "b": { "c": [1.0, 2] }, "a": 1.0 });
-    assert!(style_json_eq(&x, &y));
-    assert!(!style_json_eq(&x, &json!({ "a": 1, "b": { "c": [2, 1] } })));
-    assert!(!style_json_eq(
-        &x,
-        &json!({ "a": 1, "b": { "c": [1, 2] }, "z": 0 })
-    ));
 }
 
 #[test]
@@ -685,45 +675,6 @@ fn replacing_a_style_reverts_omitted_properties_and_equal_styles_change_nothing(
     assert_eq!(style.to_refinement().background, None);
     assert!(style.replace(&json!({}), OP).unwrap());
     assert_eq!(style, HostStyle::default());
-}
-
-#[test]
-fn style_store_updates_only_the_changed_element() {
-    let mut store: StyleStore<&str> = StyleStore::new();
-    let hover = json!({ "width": 10, "hover": { "backgroundColor": "#00f" } });
-    assert_eq!(store.update("a", &hover, OP).unwrap(), StyleUpdate::Changed);
-    assert_eq!(
-        store.update("b", &json!({ "width": 20 }), OP).unwrap(),
-        StyleUpdate::Changed
-    );
-    // Re-sending an equal style, including an equal nested hover style, sends nothing.
-    let reordered = json!({ "hover": { "backgroundColor": "#0000ff" }, "width": 10 });
-    assert_eq!(
-        store.update("a", &reordered, OP).unwrap(),
-        StyleUpdate::Unchanged
-    );
-    assert_eq!(
-        store.update("b", &json!({ "width": 20 }), OP).unwrap(),
-        StyleUpdate::Unchanged
-    );
-    // Changing the nested style of one element updates only that element.
-    let changed = json!({ "width": 10, "hover": { "backgroundColor": "#00f1" } });
-    assert_eq!(
-        store.update("a", &changed, OP).unwrap(),
-        StyleUpdate::Changed
-    );
-    assert_eq!(
-        store.update("b", &json!({ "width": 20 }), OP).unwrap(),
-        StyleUpdate::Unchanged
-    );
-    assert!(store.update("a", &json!({ "width": false }), OP).is_err());
-    assert_eq!(store.get(&"a"), Some(&parse(changed)));
-    // Removing a style is equivalent to the empty style.
-    assert!(store.remove(&"b").is_some());
-    assert_eq!(
-        store.update("b", &json!({}), OP).unwrap(),
-        StyleUpdate::Unchanged
-    );
 }
 
 #[test]

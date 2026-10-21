@@ -554,11 +554,6 @@ impl LayerFrame {
         &self.dirty
     }
 
-    /// The bounds of tile `coord` in content space.
-    pub fn tile_bounds(&self, coord: TileCoord) -> Bounds<DevicePixels> {
-        coord.bounds()
-    }
-
     /// The content hash of tile `coord` (see [`LayerContent::tile_hash`]).
     pub fn tile_hash(&self, coord: TileCoord) -> u64 {
         self.content.tile_hash(coord)
