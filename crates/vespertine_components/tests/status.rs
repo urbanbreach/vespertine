@@ -109,8 +109,15 @@ fn a1_slot_and_neighbor_bounds_do_not_change_in_any_state() {
         .update_window(window, |_, window, cx| window.focused(cx).is_some())
         .unwrap();
     assert!(focused, "the retry action takes keyboard focus");
-    host.simulate_keystrokes("enter", None).unwrap();
-    assert_eq!(retries.get(), 1);
+    // A whole press (down and up) activates once, with Enter and with Space.
+    host.key_down("enter", false, None).unwrap();
+    host.key_up("enter", None).unwrap();
+    host.flush();
+    assert_eq!(retries.get(), 1, "one Enter press retries once");
+    host.key_down("space", false, None).unwrap();
+    host.key_up("space", None).unwrap();
+    host.flush();
+    assert_eq!(retries.get(), 2, "one Space press retries once");
     assert_eq!(
         stage.get(),
         Stage::Error,
@@ -122,7 +129,7 @@ fn a1_slot_and_neighbor_bounds_do_not_change_in_any_state() {
     for dy in [30.0, 36.0, 42.0, 48.0, 54.0, 60.0] {
         host.click(x, f64::from(f32::from(slot.origin.y) + dy), 0, "")
             .unwrap();
-        if retries.get() == 2 {
+        if retries.get() == 3 {
             found = true;
             break;
         }
