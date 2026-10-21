@@ -117,7 +117,8 @@ source pin even when resolving the Linux build.
   `vespertine_components` (`crates/vespertine_components/src/math/fonts/`); THIRD_PARTY.md
   lists them with their licenses.
 - Preserved macOS/Windows tests, `windows-manifest`, and runtime Metal shaders.
-- Vendored taffy 0.13.0 under `third_party/taffy` (MIT; `[patch.crates-io]`), changed in
+- Vendored taffy 0.13.0 under `third_party/taffy` (MIT; a path dependency rather than a
+  `[patch.crates-io]` entry, so projects that depend on Vespertine build it too), changed in
   two files. `src/tree/cache.rs`: each node retains sixteen measurement results (at least
   nine, LAY-001 R4) found by key and replaced with a second-chance policy, instead of one
   result per constraint kind; layout results are unchanged. `src/tree/taffy_tree.rs`: adds

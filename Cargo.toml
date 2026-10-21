@@ -43,6 +43,8 @@ members = [
     "crates/vespertine_ztracing",
     "crates/vespertine_ztracing_macro",
 ]
+# Vendored crates are path dependencies, not members: no fmt, clippy or tests of our own run on them.
+exclude = ["third_party"]
 
 [workspace.package]
 publish = false
@@ -534,6 +536,7 @@ features = [
 
 [workspace.dependencies.taffy]
 version = "=0.13.0"
+path = "third_party/taffy"
 default-features = false
 
 [workspace.dependencies.unicode-bidi]
@@ -730,9 +733,6 @@ rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"
 [patch.crates-io.async-task]
 git = "https://github.com/zed-industries/async-task.git"
 rev = "015845a19fc31752c02367567d3b8900a406f9da"
-
-[patch.crates-io.taffy]
-path = "third_party/taffy"
 
 [patch.crates-io.polling]
 path = "third_party/polling"

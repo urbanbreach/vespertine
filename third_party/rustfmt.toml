@@ -1,0 +1,2 @@
+# Vendored crates keep their upstream formatting; `cargo fmt --all` reaches them as path dependencies.
+disable_all_formatting = true
