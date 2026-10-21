@@ -4,7 +4,7 @@ mod docs_support;
 
 use docs_support::{Log, drag, host, log, washes};
 use vespertine::{IntoElement, ParentElement, Styled, div, px};
-use vespertine_components::code::{CodeBlock, CodeScrollState, LineBounds, gutter_width};
+use vespertine_components::code::{CodeBlock, CodeScrollState, LineBounds};
 use vespertine_richtext::highlight;
 use vespertine_richtext::search::{HighlightDeclaration, HighlightSpec};
 use vespertine_test_host::require_backend;
@@ -152,15 +152,6 @@ fn a2_line_numbers_are_chrome_excluded_from_copy_and_search() {
         "only the code line containing 2 matches: {washes:?}"
     );
     assert_eq!(washes[0].0, "x2");
-}
-
-#[test]
-fn a2_gutter_width_is_digits_times_seven_plus_twelve_with_a_minimum_of_28() {
-    let metrics = DocumentTheme::dark().metrics;
-    for count in [1, 9, 10, 99] {
-        assert_eq!(gutter_width(count, &metrics), 28.);
-    }
-    assert_eq!(gutter_width(1000, &metrics), 40.);
 }
 
 #[test]

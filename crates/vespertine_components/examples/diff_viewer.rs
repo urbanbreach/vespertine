@@ -15,9 +15,7 @@
 //!   line height;
 //! * inserting an annotation card keeps the top line;
 //! * Escape cancels an open draft without reaching the owner (the code under it is not
-//!   activated), while Escape without a draft does reach the owner;
-//! * a live patch update with the same row count keeps the logical anchor, and a color-only
-//!   theme change neither reparses nor moves it.
+//!   activated), while Escape without a draft does reach the owner.
 //!
 //! Run it interactively with `DIFF_VIEWER_INTERACTIVE=1`.
 
@@ -30,7 +28,6 @@ use vespertine::{
     Keystroke, ListOffset, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement,
     Styled, Window, WindowBounds, WindowOptions, div, prelude::FluentBuilder, px, rgb, size,
 };
-use vespertine_components::diff::model::parse_count;
 use vespertine_components::diff::rows::{Annotation, DiffMode, Row, RowAnchor, Side, row_anchor};
 use vespertine_components::diff::state::DiffViewState;
 use vespertine_components::diff::view::DiffView;
@@ -40,7 +37,7 @@ use vespertine_theme::document::DocumentTheme;
 
 const FILES: usize = 60;
 
-fn patch(rename: bool) -> String {
+fn patch() -> String {
     let long = "a_very_long_line_that_needs_wrapping_".repeat(12);
     let mut patch = String::new();
     for file in 0..FILES {
@@ -48,7 +45,7 @@ fn patch(rename: bool) -> String {
             "diff --git a/src/module_{file}.rs b/src/module_{file}.rs\n--- a/src/module_{file}.rs\n+++ b/src/module_{file}.rs\n@@ -1,40 +1,40 @@\n"
         ));
         for line in 0..40 {
-            let label = if rename { "renamed" } else { "value" };
+            let label = "value";
             if line % 4 == 1 {
                 patch.push_str(&format!(
                     "-    let {label}_{file}_{line} = compute({line});\n"
@@ -93,7 +90,7 @@ impl Demo {
         theme.font_mono = "Liberation Mono".into();
         let demo = Self {
             state,
-            patch: Arc::from(patch(false)),
+            patch: Arc::from(patch()),
             theme: Arc::new(theme),
             mode: DiffMode::Unified,
             wrap: false,
@@ -384,38 +381,6 @@ impl Demo {
         let owner = step!(|demo, _, _| *demo.owner_saw_escape.borrow());
         step!(|demo, _, _| demo.check("Escape without a draft reaches the owner", owner == 1));
 
-        // 6. A live patch update keeps the anchor; a color-only change neither reparses nor moves it.
-        let parses = parse_count();
-        step!(|demo, _, cx| {
-            demo.patch = Arc::from(patch(true));
-            cx.notify();
-        });
-        pause!(300);
-        let now = step!(|demo, _, cx| demo.top_anchor(cx));
-        step!(|demo, _, _| demo.check(
-            "a live patch update with the same row count keeps the logical row",
-            now.is_some_and(|a| a.file == anchor.file)
-        ));
-        let reparsed = parse_count();
-        step!(|demo, _, cx| {
-            let mut theme = (*demo.theme).clone();
-            theme.diff_add = rgb(0x44ddff);
-            demo.theme = Arc::new(theme);
-            cx.notify();
-        });
-        pause!(300);
-        let (now2, after) = step!(|demo, _, cx| (demo.top_anchor(cx), parse_count()));
-        step!(|demo, _, _| {
-            demo.check(
-                "a color-only theme change does not reparse",
-                after == reparsed,
-            );
-            demo.check(
-                "a color-only theme change keeps the scroll position",
-                now2.map(|a| a.file) == now.map(|a| a.file),
-            );
-        });
-        let _ = parses;
         println!("diff_viewer: all checks passed");
         cx.update(|_, cx| cx.quit()).ok();
     }

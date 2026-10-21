@@ -523,10 +523,7 @@ fn a5_sticky_header_follows_the_first_visible_row_and_is_pushed_by_the_next_head
     scroll_to(&mut rig, header1 - 1, bottom_pad_height - 20.);
     let sticky = rig.read(|state| state.sticky()).expect("sticky");
     assert_eq!(sticky.0, 0);
-    assert!(
-        (sticky.1 - -16.).abs() < 0.5 || sticky.1 <= 0.,
-        "{sticky:?}"
-    );
+    assert!((sticky.1 - -16.).abs() < 0.5, "{sticky:?}");
     // With the header row scrolled out of view the overlay is what paints its path.
     scroll_to(&mut rig, 8, 0.);
     let count = |rig: &mut Rig| {
@@ -549,10 +546,16 @@ fn a5_sticky_frost_uses_a_backdrop_blur_and_opaque_themes_flatten() {
     config.frosted = true;
     let mut rig = Rig::new(config, (400., 300.));
     scroll_to(&mut rig, 6, 0.);
-    let image = rig.host.screenshot_image().unwrap();
-    assert!(image.width() > 0);
+    let frosted = rig.host.screenshot_image().unwrap();
     rig.set(|config| config.frosted = false);
-    assert!(rig.read(|state| state.sticky()).is_some());
+    let flat = rig.host.screenshot_image().unwrap();
+    // Rows of alternating deleted and added lines scroll under the header: the frost shows them
+    // through the blur, the opaque flatten hides them behind the background.
+    let differs = (0..80).any(|i| {
+        let (x, y) = (100. + i as f32 * 3., 24.);
+        diff_rig::image_pixel(&frosted, x, y) != diff_rig::image_pixel(&flat, x, y)
+    });
+    assert!(differs, "frosting must differ from the flat fill");
 }
 
 // --- R26: folding ---
