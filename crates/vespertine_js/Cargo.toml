@@ -30,3 +30,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 vespertine = { workspace = true, features = ["font-kit", "wayland", "x11", "test-support"] }
+vespertine_test_host = { path = "../vespertine_test_host", features = ["offscreen"] }

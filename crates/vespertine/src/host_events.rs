@@ -835,13 +835,22 @@ impl HostNode {
     /// every render of the host tree; it registers only the element listeners
     /// the node's subscriptions need.
     pub fn element(&self, window: &mut Window, cx: &mut App) -> HostElement {
+        self.wrap(div().id(self.id.clone()), window, cx)
+    }
+
+    /// Like [`Self::element`], but for a leaf element rendered in the node's
+    /// place, such as an image: wires the node's focus, scroll, pointer, key
+    /// and drop subscriptions and its geometry reports onto `element`, which
+    /// should carry the node's element id.
+    pub fn wrap<E>(&self, mut element: E, window: &mut Window, cx: &mut App) -> HostElement<E>
+    where
+        E: Styled + StatefulInteractiveElement,
+    {
         self.bind(window, cx);
         self.request_autofocus(window);
         let node = self.inner.clone();
         let inner = self.inner.borrow();
         let listeners = &inner.listeners;
-
-        let mut element = div().id(self.id.clone());
 
         if inner.effective_tab_index().is_some() {
             inner.sync_focus_handle();
@@ -1169,35 +1178,35 @@ impl HostNode {
 // ---------------------------------------------------------------------------
 
 /// The element of a [`HostNode`] for one render. It delegates to a stateful
-/// [`Div`] (so it takes the usual style, interactivity and child builders)
-/// and, after the node has painted, schedules the node's layout and
-/// scroll-change reports.
-pub struct HostElement {
-    element: Stateful<Div>,
+/// [`Div`] by default (so it takes the usual style, interactivity and child
+/// builders), or to the leaf given to [`HostNode::wrap`], and, after the node
+/// has painted, schedules the node's layout and scroll-change reports.
+pub struct HostElement<E = Stateful<Div>> {
+    element: E,
     node: Rc<RefCell<NodeInner>>,
 }
 
-impl Styled for HostElement {
+impl<E: Styled> Styled for HostElement<E> {
     fn style(&mut self) -> &mut StyleRefinement {
         self.element.style()
     }
 }
 
-impl InteractiveElement for HostElement {
+impl<E: InteractiveElement> InteractiveElement for HostElement<E> {
     fn interactivity(&mut self) -> &mut Interactivity {
         self.element.interactivity()
     }
 }
 
-impl StatefulInteractiveElement for HostElement {}
+impl<E: StatefulInteractiveElement> StatefulInteractiveElement for HostElement<E> {}
 
-impl ParentElement for HostElement {
+impl<E: ParentElement> ParentElement for HostElement<E> {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.element.extend(elements);
     }
 }
 
-impl IntoElement for HostElement {
+impl<E: Element> IntoElement for HostElement<E> {
     type Element = Self;
 
     fn into_element(self) -> Self::Element {
@@ -1209,7 +1218,7 @@ fn differs(a: Pixels, b: Pixels) -> bool {
     (f32::from(a) - f32::from(b)).abs() >= REPORT_EPSILON
 }
 
-impl HostElement {
+impl<E> HostElement<E> {
     /// Compares the painted geometry and scroll offset against the retained
     /// report state and defers the notifications that are due until the frame
     /// has been painted.
@@ -1273,9 +1282,9 @@ impl HostElement {
     }
 }
 
-impl Element for HostElement {
-    type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
-    type PrepaintState = <Stateful<Div> as Element>::PrepaintState;
+impl<E: Element> Element for HostElement<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         Element::id(&self.element)

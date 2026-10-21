@@ -23,7 +23,8 @@ use vespertine::motion::{
 use vespertine::{
     AnyElement, App, Bounds, CustomElementRegistry, DeclarativeAria, ElementId, HostStyle,
     ImageHostState, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
-    ParentElement, Pixels, Styled, SvgHostState, Window, div, list, point, px,
+    ParentElement, Pixels, StatefulInteractiveElement, Styled, SvgHostState, Window, div, list,
+    point, px,
 };
 use vespertine::{HostId, KeyboardFocusPath, RenderContext, SharedString, Subscription};
 use vespertine_host_tree::{HostTree, NodeId, NodeRef};
@@ -39,6 +40,35 @@ pub type EmitEvent = Rc<dyn Fn(&App, u64, &str, Value)>;
 
 /// Called with the painted border-box of a node, after it painted.
 pub type PaintedHook = Rc<dyn Fn(u64, Bounds<Pixels>, &mut App)>;
+
+/// Applies a node's style with its state refinements, its role and `aria-*` properties and the
+/// painted-bounds hook to the node's element.
+fn decorate<E>(
+    mut host: HostElement<E>,
+    style: Option<&HostStyle>,
+    node: NodeRef<'_>,
+    painted: Option<PaintedHook>,
+    id: NodeId,
+) -> HostElement<E>
+where
+    E: Styled + StatefulInteractiveElement,
+{
+    if let Some(style) = style {
+        host = style.apply(host);
+    }
+    if let Some(role) = node.prop("role").and_then(Value::as_str) {
+        host = host.dom_role(role);
+    }
+    for (key, value) in node.props() {
+        if key.starts_with("aria-") {
+            host = host.aria_attribute(key, value);
+        }
+    }
+    if let Some(painted) = painted {
+        host = host.on_painted(move |bounds, _, cx| painted(id, bounds, cx));
+    }
+    host
+}
 
 /// A search wash a text run painted: the owning node, the run's full text, the UTF-16 range and
 /// one rectangle `(x, y, width, height)` per visual row.
@@ -882,65 +912,55 @@ impl HostScene {
         let Some(scene_node) = self.nodes.get_mut(&id) else {
             return div().into_any_element();
         };
-        let mut host = scene_node.host.element(window, cx);
-        if let Some(style) = &style {
-            host = style.apply(host);
-        }
-        if let Some(role) = node.prop("role").and_then(Value::as_str) {
-            host = host.dom_role(role);
-        }
-        for (key, value) in node.props() {
-            if key.starts_with("aria-") {
-                host = host.aria_attribute(key, value);
-            }
-        }
-        if let Some(painted) = painted {
-            host = host.on_painted(move |bounds, _, cx| painted(id, bounds, cx));
-        }
-
+        // An image or vector image renders as a leaf in the node's place. The leaf carries the
+        // node's subscriptions, style, role and accessibility properties like any host element.
+        let media_style = || {
+            style
+                .as_ref()
+                .map(|style| style.to_refinement())
+                .unwrap_or_default()
+        };
         match element_type {
             "img" => {
                 if let Some(image) = scene_node.image.as_mut() {
-                    let refinement = style
-                        .as_ref()
-                        .map(|style| style.to_refinement())
-                        .unwrap_or_default();
-                    let mut element = image.element(ElementId::Integer(id), refinement, window, cx);
-                    // The image element carries the host's identity for bounds tracking.
-                    if let Some(painted) = self.painted.clone() {
-                        element = element.on_painted(move |bounds, _, cx| painted(id, bounds, cx));
-                    }
-                    return element.into_any_element();
+                    let leaf = image.element(ElementId::Integer(id), media_style(), window, cx);
+                    let host = scene_node.host.wrap(leaf, window, cx);
+                    return decorate(host, style.as_deref(), node, painted, id).into_any_element();
                 }
             }
             "svg" => {
                 if let Some(svg) = scene_node.svg.as_mut() {
-                    let refinement = style
-                        .as_ref()
-                        .map(|style| style.to_refinement())
-                        .unwrap_or_default();
-                    return svg.render(ElementId::Integer(id), refinement, cx);
-                }
-            }
-            "virtual-list" => {
-                if let Some(list_host) = scene_node.list.as_ref() {
-                    let source = self.tree.clone();
-                    let scene = self.me.clone();
-                    let rows = list(list_host.state.clone(), move |ix, window, cx| {
-                        let mut row = None;
-                        if let Some(scene) = scene.upgrade() {
-                            source.read(&mut |tree| {
-                                let child = tree.node(id).and_then(|list| list.children().nth(ix));
-                                row = child
-                                    .map(|child| scene.borrow_mut().build(tree, child, window, cx));
-                            });
-                        }
-                        row.unwrap_or_else(|| div().into_any_element())
-                    });
-                    return self.with_motion(id, node, host.child(rows.w_full().h_full()));
+                    let leaf = svg.element(ElementId::Integer(id), media_style(), cx);
+                    let host = scene_node.host.wrap(leaf, window, cx);
+                    return decorate(host, style.as_deref(), node, painted, id).into_any_element();
                 }
             }
             _ => {}
+        }
+        let mut host = decorate(
+            scene_node.host.element(window, cx),
+            style.as_deref(),
+            node,
+            painted,
+            id,
+        );
+
+        if element_type == "virtual-list"
+            && let Some(list_host) = scene_node.list.as_ref()
+        {
+            let source = self.tree.clone();
+            let scene = self.me.clone();
+            let rows = list(list_host.state.clone(), move |ix, window, cx| {
+                let mut row = None;
+                if let Some(scene) = scene.upgrade() {
+                    source.read(&mut |tree| {
+                        let child = tree.node(id).and_then(|list| list.children().nth(ix));
+                        row = child.map(|child| scene.borrow_mut().build(tree, child, window, cx));
+                    });
+                }
+                row.unwrap_or_else(|| div().into_any_element())
+            });
+            return self.with_motion(id, node, host.child(rows.w_full().h_full()));
         }
 
         if let Some(text) = node.text() {
