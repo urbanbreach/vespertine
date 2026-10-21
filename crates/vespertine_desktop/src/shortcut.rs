@@ -376,11 +376,6 @@ impl ShortcutService {
         Self::new(Shortcut::parse_or(text, default), enabled)
     }
 
-    /// Validates a combination text.
-    pub fn validate_combination(text: &str) -> Result<(), ShortcutParseError> {
-        Shortcut::validate(text)
-    }
-
     pub fn preferences(&self) -> ShortcutPreferences {
         self.state.lock().preferences.clone()
     }

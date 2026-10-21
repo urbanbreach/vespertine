@@ -200,10 +200,6 @@ mod zbus_portal {
             Ok(Self { connection })
         }
 
-        pub fn with_connection(connection: Connection) -> Self {
-            Self { connection }
-        }
-
         async fn screenshot_proxy(&self) -> Result<zbus::Proxy<'static>, PortalError> {
             zbus::Proxy::new(
                 &self.connection,
