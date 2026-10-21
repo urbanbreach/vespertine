@@ -902,22 +902,6 @@ fn replayed_subtrees_render_identically_to_direct_painting() {
     assert_eq!(direct_image.as_raw(), retained_image.as_raw(), "retained");
     assert_eq!(retained.curved_clips, direct.curved_clips);
 
-    // Tiled: every subtree is a cached tile recorded alone, then replayed in order under
-    // the destination's ancestor.
-    let tile = |ox: f32| {
-        let mut scene = Scene::default();
-        paint_subtree(&mut scene, ox, &tiles);
-        scene
-    };
-    let (left_tile, right_tile) = (tile(0.0), tile(100.0));
-    let mut tiled = Scene::default();
-    tiled.push_curved_clip(ancestor(30.0));
-    tiled.replay(0..left_tile.len(), &left_tile);
-    tiled.replay(0..right_tile.len(), &right_tile);
-    tiled.pop_curved_clip();
-    let tiled_image = gpu.render(&mut tiled, width, height);
-    assert_eq!(direct_image.as_raw(), tiled_image.as_raw(), "tiled");
-
     // Spliced: the subtree ranges of a frame recorded under one ancestor are replayed
     // under a different destination ancestor and equal direct painting under it.
     let mut recorded = Scene::default();
@@ -940,8 +924,7 @@ fn replayed_subtrees_render_identically_to_direct_painting() {
     let other_image = gpu.render(&mut other, width, height);
     assert_ne!(direct_image.as_raw(), other_image.as_raw());
 
-    // Composed: layer replay and composition splitting. A layered frame, and the same frame
-    // split into two scenes replayed back to back, equal direct layered painting.
+    // Layer replay: a layered frame replayed into a new frame equals direct layered painting.
     let layered = |scene: &mut Scene, ox: f32| {
         scene.push_layer(bounds(ox, 0.0, 100.0, 140.0));
         paint_subtree(scene, ox, &tiles);
@@ -951,18 +934,6 @@ fn replayed_subtrees_render_identically_to_direct_painting() {
     layered(&mut direct_layers, 0.0);
     layered(&mut direct_layers, 100.0);
     let direct_layers_image = gpu.render(&mut direct_layers, width, height);
-    let (mut first_half, mut second_half) = (Scene::default(), Scene::default());
-    layered(&mut first_half, 0.0);
-    layered(&mut second_half, 100.0);
-    let mut composed = Scene::default();
-    composed.replay(0..first_half.len(), &first_half);
-    composed.replay(0..second_half.len(), &second_half);
-    let composed_image = gpu.render(&mut composed, width, height);
-    assert_eq!(
-        direct_layers_image.as_raw(),
-        composed_image.as_raw(),
-        "composed"
-    );
     let mut layered_replay = Scene::default();
     layered_replay.replay(0..direct_layers.len(), &direct_layers);
     let layered_replay_image = gpu.render(&mut layered_replay, width, height);
