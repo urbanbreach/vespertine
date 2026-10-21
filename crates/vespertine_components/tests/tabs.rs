@@ -220,11 +220,45 @@ fn clicking_a_tab_selects_it_and_enter_or_space_activates_the_focused_tab(cx: &m
     assert_eq!(focused.as_deref(), Some("a"));
     press(cx, "enter");
     assert_eq!(selected(&fixture, cx).as_deref(), Some("a"));
-    cx.update(|window, app| window.focus_next(app));
+    // The next tab stop after a chip is its close slot, then the next chip.
+    cx.update(|window, app| {
+        window.focus_next(app);
+        window.focus_next(app);
+    });
     redraw(cx);
     press(cx, "space");
     assert_eq!(selected(&fixture, cx).as_deref(), Some("b"));
     assert_eq!(log_of(&fixture), ["select:b", "select:a", "select:b"]);
+}
+
+#[vespertine::test]
+fn keyboard_users_reach_and_activate_the_close_slot_and_the_add_button(cx: &mut TestAppContext) {
+    let (fixture, cx) = setup(cx, &["a", "b"], Some("a"), 600.0, |strip, log| {
+        let log = log.clone();
+        strip.on_add(move |_, _| log.borrow_mut().push("add".into()))
+    });
+    // Tab from the first chip reaches its close slot; Enter closes the tab.
+    cx.update(|window, app| {
+        window.blur(app);
+        window.focus_next(app);
+        window.focus_next(app);
+    });
+    redraw(cx);
+    press(cx, "enter");
+    assert_eq!(order(&fixture, cx), ["b"]);
+    assert!(log_of(&fixture).contains(&"close:a".to_owned()));
+
+    // Past the last chip and its close slot, Tab reaches the add button; Space activates it.
+    cx.update(|window, app| {
+        window.blur(app);
+        window.focus_next(app);
+        window.focus_next(app);
+        window.focus_next(app);
+    });
+    redraw(cx);
+    press(cx, "space");
+    assert_eq!(log_of(&fixture).last().map(String::as_str), Some("add"));
+    assert_eq!(order(&fixture, cx), ["b"], "the add button closes nothing");
 }
 
 #[vespertine::test]

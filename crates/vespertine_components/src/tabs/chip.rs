@@ -109,8 +109,8 @@ impl TabSpec {
 }
 
 /// The opacities of the two stacked layers of the close slot (R6): `(dot, glyph)`. The dirty
-/// dot shows while the tab is not hovered; on hover of the whole tab the dot hides and the
-/// glyph shows. A clean tab shows the glyph only on hover.
+/// dot shows while the tab is not hovered; on hover of the whole tab (or keyboard focus on the
+/// close slot) the dot hides and the glyph shows. A clean tab shows the glyph only then.
 pub fn close_slot_opacity(dirty: bool, tab_hovered: bool) -> (f32, f32) {
     if tab_hovered {
         (0.0, 1.0)
@@ -166,6 +166,7 @@ pub struct TabChip {
     theme: NavTheme,
     selected: bool,
     focus: Option<FocusHandle>,
+    close_focus: Option<(FocusHandle, bool)>,
     on_close: Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
 }
 
@@ -180,6 +181,7 @@ pub fn tab_chip(
         theme: theme.clone(),
         selected: false,
         focus: None,
+        close_focus: None,
         on_close: Box::new(on_close),
     }
 }
@@ -197,6 +199,13 @@ impl TabChip {
         self
     }
 
+    /// Makes the close slot a keyboard tab stop tracking `focus`: Enter or Space on it closes
+    /// the tab, and while it has focus the close glyph shows as it does on hover.
+    pub fn track_close_focus(mut self, focus: &FocusHandle, window: &Window) -> Self {
+        self.close_focus = Some((focus.clone(), focus.is_focused(window)));
+        self
+    }
+
     /// The chip element. Its debug selector is `tab:<id>`, its close slot `tab-close:<id>`.
     pub fn into_element(self) -> Stateful<Div> {
         let Self {
@@ -204,12 +213,14 @@ impl TabChip {
             theme,
             selected,
             focus,
+            close_focus,
             on_close,
         } = self;
         let group = group_name(&spec.id);
         let id = spec.id.clone();
         let label = spec.label();
-        let (dot, glyph) = close_slot_opacity(spec.dirty, false);
+        let close_focused = close_focus.as_ref().is_some_and(|(_, focused)| *focused);
+        let (dot, glyph) = close_slot_opacity(spec.dirty, close_focused);
         let text_color = if selected { theme.text } else { theme.muted };
 
         let icon = spec.icon.clone().map(|icon| {
@@ -254,9 +265,19 @@ impl TabChip {
                 move |style| style.bg(wash)
             })
             .tooltip(tooltip(CLOSE_LABEL.into(), &theme))
+            .when_some(close_focus, |slot, (focus, _)| {
+                slot.track_focus(&focus.tab_stop(true)).focus_visible({
+                    let accent = theme.accent;
+                    move |style| style.border_2().border_color(accent)
+                })
+            })
             // The slot claims the primary press: the tab behind it never sees it, so pressing
-            // the slot neither starts a drag nor selects the tab.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // the slot neither starts a drag nor selects the tab, and the press does not move
+            // focus away from the tab content.
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
             .on_click(on_close)
             .child(
                 div()

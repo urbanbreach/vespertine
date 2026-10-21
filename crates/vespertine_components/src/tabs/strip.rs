@@ -10,9 +10,9 @@ use crate::nav_theme::NavTheme;
 use std::{collections::HashMap, rc::Rc};
 use vespertine::{
     App, AppContext, Bounds, ClickEvent, Context, DragMoveEvent, ElementId, Entity, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, MotionClock, ParentElement, Pixels, Point, Render,
-    Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    actions, div, point, prelude::FluentBuilder, px,
+    InteractiveElement, IntoElement, KeyBinding, MotionClock, MouseButton, ParentElement, Pixels,
+    Point, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, actions, div, point, prelude::FluentBuilder, px,
 };
 
 actions!(
@@ -140,6 +140,7 @@ pub struct TabStrip {
     history: VisitHistory,
     scroll: ScrollHandle,
     focus: HashMap<TabId, FocusHandle>,
+    close_focus: HashMap<TabId, FocusHandle>,
     content_focus: HashMap<TabId, FocusHandle>,
     primary_focus: Option<FocusHandle>,
     pending_close: Option<TabId>,
@@ -164,6 +165,7 @@ impl TabStrip {
             history: VisitHistory::new(),
             scroll: ScrollHandle::new(),
             focus: HashMap::new(),
+            close_focus: HashMap::new(),
             content_focus: HashMap::new(),
             primary_focus: None,
             pending_close: None,
@@ -348,6 +350,7 @@ impl TabStrip {
             }
         }
         self.focus.retain(|id, _| live.contains(id));
+        self.close_focus.retain(|id, _| live.contains(id));
         if let Some(selected) = self.selected.clone()
             && !live.contains(&selected)
         {
@@ -518,6 +521,7 @@ impl TabStrip {
         self.tabs.remove(index);
         self.history.forget(&self.key, id);
         self.focus.remove(id);
+        self.close_focus.remove(id);
         self.content_focus.remove(id);
         if self.pending_close.as_ref() == Some(id) {
             self.pending_close = None;
@@ -721,6 +725,11 @@ impl Render for TabStrip {
                 .entry(spec.id.clone())
                 .or_insert_with(|| cx.focus_handle().tab_stop(true))
                 .clone();
+            let close_focus = self
+                .close_focus
+                .entry(spec.id.clone())
+                .or_insert_with(|| cx.focus_handle())
+                .clone();
             let selected = self.selected.as_ref() == Some(&spec.id);
             let id = spec.id.clone();
             let dragged = self.drag.as_ref().is_some_and(|drag| drag.source == ix);
@@ -742,6 +751,7 @@ impl Render for TabStrip {
             )
             .selected(selected)
             .track_focus(&focus)
+            .track_close_focus(&close_focus, window)
             .into_element()
             .on_click(cx.listener({
                 let id = id.clone();
@@ -814,8 +824,17 @@ impl Render for TabStrip {
                 .text_size(px(14.))
                 .text_color(theme.muted)
                 .cursor_pointer()
+                .focusable()
+                .tab_stop(true)
                 .hover(move |style| style.bg(wash))
+                .focus_visible({
+                    let accent = theme.accent;
+                    move |style| style.border_2().border_color(accent)
+                })
                 .tooltip(tooltip("New tab".into(), &theme))
+                // Like a chip, a press never takes focus away from the tab content; keyboard
+                // users reach the button through the tab order.
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                 .on_click(cx.listener(|this: &mut Self, _: &ClickEvent, window, cx| {
                     this.outbox.push(Notice::Add);
                     this.flush_soon(window, cx);
