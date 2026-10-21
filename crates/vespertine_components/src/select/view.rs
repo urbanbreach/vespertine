@@ -16,6 +16,7 @@ use crate::floating::{
     rows_max_height,
 };
 use crate::tokens::ComponentTokens;
+use crate::tooltip::text::TextTooltipExt;
 use std::rc::Rc;
 use vespertine::{
     App, Bounds, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
@@ -573,6 +574,9 @@ impl Select {
                     .when(selected, |slot| slot.child("\u{2713}")),
             )
             .children(self.observe(MenuPart::Row(ix)))
+            .when_some(option.tooltip.clone(), |row, tooltip| {
+                row.text_tooltip(tooltip)
+            })
     }
 
     fn skeleton_rows(&self, tokens: &ComponentTokens) -> Vec<impl IntoElement + use<>> {

@@ -522,6 +522,32 @@ fn an_open_select_disabled_by_its_owner_does_not_commit_a_row_click() {
 }
 
 #[test]
+fn an_option_tooltip_shows_when_its_row_is_hovered() {
+    require_backend!();
+    let mut opts = options(3);
+    opts[1] = opts[1].clone().tooltip("Lorem ipsum");
+    let mut f = fixture(Spec::new(opts));
+    f.host.click(300.0, 36.0, 0, "").unwrap();
+    f.host.flush();
+    f.settle();
+    let row = f.rect(MenuPart::Row(1)).expect("row 1");
+    f.host
+        .mouse_move(row.0 + 10.0, row.1 + 10.0, None, "")
+        .unwrap();
+    f.host.flush();
+    f.settle();
+    f.settle();
+    assert!(
+        f.host
+            .painted_text()
+            .iter()
+            .any(|text| text == "Lorem ipsum"),
+        "{:?}",
+        f.host.painted_text()
+    );
+}
+
+#[test]
 fn the_heading_stays_fixed_while_only_the_rows_scroll() {
     require_backend!();
     let mut f = fixture(Spec {
