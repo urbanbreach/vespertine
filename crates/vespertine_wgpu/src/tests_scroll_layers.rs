@@ -11,9 +11,9 @@ use std::sync::Arc;
 use vespertine::{
     AnyWindowHandle, App, AppContext as _, BoxShadow, Context, Entity, HeadlessAppContext,
     InputEvent as _, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _,
-    PathBuilder, Render, RequestFrameOptions, ScrollDelta, ScrollWheelEvent,
-    StatefulInteractiveElement as _, Styled as _, TouchPhase, Window, canvas, div, hsla, point, px,
-    rgb, size,
+    PathBuilder, Render, RenderImage, RequestFrameOptions, ScrollDelta, ScrollWheelEvent,
+    StatefulInteractiveElement as _, Styled as _, TouchPhase, Window, canvas, div, hsla, img,
+    point, px, rgb, size,
 };
 
 const ROWS: usize = 70;
@@ -112,26 +112,38 @@ impl Render for Page {
     }
 }
 
-struct Host {
+/// Two windows showing the same page over the shared state `S`: one composites scroll layers,
+/// the other draws directly.
+struct Host<S: 'static = Tint> {
     cx: HeadlessAppContext,
-    tint: Entity<Tint>,
+    state: Entity<S>,
     layered: AnyWindowHandle,
     direct: AnyWindowHandle,
 }
 
 impl Host {
     fn new() -> Self {
+        Self::open(Tint(0), |tint| Page { tint })
+    }
+
+    fn tint(&mut self) {
+        self.change(|tint| tint.0 += 1);
+    }
+}
+
+impl<S: 'static> Host<S> {
+    fn open<V: Render>(state: S, page: impl Fn(Entity<S>) -> V + Clone + 'static) -> Self {
         let text_system = Arc::new(CosmicTextSystem::new("Noto Sans"));
         let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
             Ok(Some(Box::new(WgpuHeadlessRenderer::new()?)
                 as Box<dyn vespertine::PlatformHeadlessRenderer>))
         });
-        let tint = cx.update(|cx: &mut App| cx.new(|_| Tint(0)));
+        let state = cx.update(|cx: &mut App| cx.new(|_| state));
         let mut open = |layers: bool| {
-            let tint = tint.clone();
+            let (state, page) = (state.clone(), page.clone());
             let handle: AnyWindowHandle = cx
                 .open_window(size(px(WINDOW.0), px(WINDOW.1)), move |_, cx| {
-                    cx.new(|_| Page { tint })
+                    cx.new(|_| page(state))
                 })
                 .expect("open window")
                 .into();
@@ -146,7 +158,7 @@ impl Host {
         let direct = open(false);
         let mut host = Self {
             cx,
-            tint,
+            state,
             layered,
             direct,
         };
@@ -187,11 +199,12 @@ impl Host {
         self.frame();
     }
 
-    fn tint(&mut self) {
-        let tint = self.tint.clone();
+    /// Changes the shared state, notifies the pages and draws both windows.
+    fn change(&mut self, change: impl FnOnce(&mut S)) {
+        let state = self.state.clone();
         self.cx.update(|cx| {
-            tint.update(cx, |tint, cx| {
-                tint.0 += 1;
+            state.update(cx, |state, cx| {
+                change(state);
                 cx.notify();
             })
         });
@@ -284,5 +297,129 @@ fn a2_tiled_scroll_layers_draw_the_pixels_of_direct_drawing() {
         ),
         (0, 0, 0),
         "the direct window used no layer"
+    );
+}
+
+/// A picture the page shows in some of its rows, and the scroller's background.
+struct Picture {
+    image: Arc<RenderImage>,
+    background: u32,
+}
+
+/// Rows narrower than the scroller, so that its background shows beside them.
+struct PicturePage {
+    picture: Entity<Picture>,
+}
+
+impl Render for PicturePage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let picture = self.picture.read(cx);
+        let image = picture.image.clone();
+        div().size_full().bg(rgb(0xeeeeee)).child(
+            div()
+                .id("scroller")
+                .absolute()
+                .left(px(20.))
+                .top(px(20.))
+                .w(px(400.))
+                .h(px(220.))
+                .bg(rgb(picture.background))
+                .overflow_y_scroll()
+                .children((0..ROWS).map(move |ix| {
+                    let row =
+                        div()
+                            .flex_none()
+                            .w(px(300.))
+                            .h(px(40.))
+                            .bg(rgb(if ix.is_multiple_of(2) {
+                                0xffffff
+                            } else {
+                                0xf7f7f7
+                            }));
+                    if ix % 3 == 0 {
+                        row.child(img(image.clone()).w(px(40.)).h(px(30.)))
+                    } else {
+                        row
+                    }
+                })),
+        )
+    }
+}
+
+fn solid_frames(pixel: [u8; 4]) -> Vec<image::Frame> {
+    vec![image::Frame::new(image::RgbaImage::from_pixel(
+        8,
+        8,
+        image::Rgba(pixel),
+    ))]
+}
+
+impl Host<Picture> {
+    /// Gives the picture new pixels in place in both windows.
+    fn update_image_in_place(&mut self, pixel: [u8; 4]) -> Arc<RenderImage> {
+        let image = self
+            .state
+            .read_with(&self.cx, |picture, _| picture.image.clone());
+        let updated = Arc::new(image.with_updated_frames(solid_frames(pixel)));
+        for window in [self.layered, self.direct] {
+            let updated = updated.clone();
+            self.cx
+                .update_window(window, move |_, window, _| {
+                    assert!(window.update_image(&updated).expect("update"));
+                })
+                .expect("window");
+        }
+        updated
+    }
+}
+
+/// Tiles of a layer show what its content looks like now: an image updated in place and a
+/// changed background of the scroller reach them, whether the frame is presented again or the
+/// layer is repainted.
+#[test]
+fn a2_scroll_layer_tiles_follow_images_updated_in_place_and_a_new_background() {
+    let mut host = Host::open(
+        Picture {
+            image: Arc::new(RenderImage::new(solid_frames([220, 40, 40, 255]))),
+            background: 0xffffff,
+        },
+        |picture| PicturePage { picture },
+    );
+    for _ in 0..6 {
+        host.wheel(-7.3);
+    }
+    host.assert_same_pixels("scrolled");
+
+    // The cached frame is presented again with the new pixels.
+    host.update_image_in_place([40, 40, 220, 255]);
+    for window in [host.layered, host.direct] {
+        host.cx
+            .update_window(window, |_, window, _| {
+                assert!(window.present_cached_frame());
+            })
+            .expect("window");
+    }
+    host.assert_same_pixels("image updated in place, cached frame presented");
+
+    // The page is painted again after another update in place.
+    let updated = host.update_image_in_place([40, 160, 40, 255]);
+    host.change(|picture| picture.image = updated);
+    host.assert_same_pixels("image updated in place, page repainted");
+
+    // The background changes while the layer is in use.
+    host.wheel(-7.3);
+    host.wheel(-7.3);
+    host.change(|picture| picture.background = 0xdde8ff);
+    host.assert_same_pixels("scroller background changed");
+    for step in 0..3 {
+        host.wheel(-7.3);
+        host.assert_same_pixels(&format!("scroll after the background change, frame {step}"));
+    }
+
+    let layered = host.layered;
+    let layered = host.stats(layered);
+    assert!(
+        layered.layer_composites > 0,
+        "the layered window composited tiles: {layered:?}"
     );
 }

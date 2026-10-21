@@ -1570,8 +1570,8 @@ impl WgpuRendererCore {
             self.max_texture_size
         );
 
-        self.atlas.before_frame();
-        self.rasterize_tiles(scene, premultiplied_alpha)?;
+        let updated_in_place = self.atlas.before_frame();
+        self.rasterize_tiles(scene, &updated_in_place, premultiplied_alpha)?;
         let drawable = (size.width.0 as u32, size.height.0 as u32);
         self.resources.blur.drawable_changed(drawable);
         self.upload_globals(size, premultiplied_alpha);

@@ -3,7 +3,9 @@
 
 use super::{WgpuRendererCore, recording::TextureKey};
 use anyhow::Result;
-use vespertine::{DevicePixels, Scene, Size, TILE_SIZE, TileCache, TileNeed, tile_identity};
+use vespertine::{
+    AtlasTile, DevicePixels, Scene, Size, TILE_SIZE, TileCache, TileNeed, tile_identity,
+};
 
 /// A tile texture and the identity its bind group is cached under. Reusing a pooled texture for
 /// another tile keeps the serial: the bind group refers to the texture, not to the tile.
@@ -74,14 +76,26 @@ impl WgpuRendererCore {
 
     /// Rasterizes the shown tiles of the scene's layer frames that are missing or changed
     /// (PRF-004 R4). Each tile is drawn by the ordinary pipelines into its own texture; the
-    /// frame's globals are uploaded again by the caller afterwards.
+    /// frame's globals are uploaded again by the caller afterwards. Cached tiles that sample an
+    /// atlas tile in `updated_in_place` are rasterized again; those of layers this frame does
+    /// not show are marked as well, as their content is unknown here.
     pub(super) fn rasterize_tiles(
         &mut self,
         scene: &Scene,
+        updated_in_place: &[AtlasTile],
         premultiplied_alpha: bool,
     ) -> Result<()> {
         if scene.layers.is_empty() && self.tiles.cache.is_empty() {
             return Ok(());
+        }
+        if !updated_in_place.is_empty() {
+            let frames = scene.layers.frames();
+            self.tiles.cache.invalidate_layers(|layer| {
+                frames
+                    .iter()
+                    .find(|frame| frame.id() == layer)
+                    .is_none_or(|frame| frame.content().samples_any(updated_in_place))
+            });
         }
         self.tiles.cache.begin_frame();
         let tile_size = Size {

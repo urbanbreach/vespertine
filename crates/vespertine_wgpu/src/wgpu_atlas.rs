@@ -36,6 +36,8 @@ struct WgpuAtlasTextures {
     storage: WgpuAtlasStorage,
     pending_uploads: Vec<PendingUpload>,
     next_texture_generation: u64,
+    /// Tiles whose pixels were replaced in place since the previous frame.
+    updated_in_place: Vec<AtlasTile>,
 }
 
 pub struct WgpuTextureInfo {
@@ -60,6 +62,7 @@ impl WgpuAtlas {
             storage: WgpuAtlasStorage::default(),
             pending_uploads: Vec::new(),
             next_texture_generation: 0,
+            updated_in_place: Vec::new(),
         })))
     }
 
@@ -71,9 +74,12 @@ impl WgpuAtlas {
         )
     }
 
-    pub fn before_frame(&self) {
+    /// Submits the pending uploads and returns the tiles updated in place since the previous
+    /// frame: whatever cached their pixels elsewhere (scroll-layer tiles) is out of date.
+    pub fn before_frame(&self) -> Vec<AtlasTile> {
         let mut lock = self.0.lock();
         lock.backend.flush_uploads();
+        std::mem::take(&mut lock.backend.updated_in_place)
     }
 
     /// Live atlas textures and the bytes of their allocations (DEV-002): the texture allocation
@@ -202,6 +208,9 @@ impl AtlasBackend for WgpuAtlasTextures {
         self.pending_uploads
             .retain(|upload| upload.id != tile.texture_id || upload.bounds != tile.bounds);
         self.upload_texture(tile.texture_id, tile.bounds, bytes);
+        if !self.updated_in_place.contains(&tile) {
+            self.updated_in_place.push(tile);
+        }
         Ok(true)
     }
 }

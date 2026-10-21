@@ -397,6 +397,28 @@ impl LayerContent {
         self.overlay_count
     }
 
+    /// Whether a baked primitive samples one of the atlas `tiles`.
+    pub fn samples_any(&self, tiles: &[AtlasTile]) -> bool {
+        let sampled = |tile: &AtlasTile| {
+            tiles.iter().any(|updated| {
+                updated.texture_id == tile.texture_id && updated.tile_id == tile.tile_id
+            })
+        };
+        let baked = &self.baked;
+        baked
+            .polychrome_sprites
+            .iter()
+            .any(|sprite| sampled(&sprite.tile))
+            || baked
+                .monochrome_sprites
+                .iter()
+                .any(|sprite| sampled(&sprite.tile))
+            || baked
+                .subpixel_sprites
+                .iter()
+                .any(|sprite| sampled(&sprite.tile))
+    }
+
     /// The baked primitives touching `coord`, moved into tile-local coordinates and clipped to
     /// the tile, in order.
     fn tile_primitives(&self, coord: TileCoord) -> impl Iterator<Item = Primitive> + '_ {
@@ -707,6 +729,8 @@ struct TileEntry<T> {
     hash: u64,
     generation: u64,
     used: u64,
+    /// Pixels the texture sampled changed after it was rasterized.
+    stale: bool,
 }
 
 /// The tile cache a renderer keeps, generic in its texture type so that the bookkeeping is
@@ -799,7 +823,9 @@ impl<T> TileCache<T> {
             return TileNeed::Rasterize;
         };
         entry.used = used;
-        // Rasterized for this generation already (the same scene drawn again).
+        if entry.stale {
+            return TileNeed::Rasterize;
+        }
         if entry.generation == frame.generation() {
             return TileNeed::Reuse;
         }
@@ -811,6 +837,17 @@ impl<T> TileCache<T> {
             return TileNeed::Reuse;
         }
         TileNeed::Rasterize
+    }
+
+    /// Marks every cached tile of the layers `affected` selects as needing rasterization:
+    /// pixels its content samples changed outside of the layer, for instance an image updated
+    /// in place in the atlas.
+    pub fn invalidate_layers(&mut self, affected: impl Fn(LayerId) -> bool) {
+        for ((layer, _), entry) in &mut self.entries {
+            if affected(*layer) {
+                entry.stale = true;
+            }
+        }
     }
 
     /// The cached texture of a tile.
@@ -835,6 +872,7 @@ impl<T> TileCache<T> {
                 hash,
                 generation: frame.generation(),
                 used,
+                stale: false,
             },
         ) {
             self.release(old.texture);
