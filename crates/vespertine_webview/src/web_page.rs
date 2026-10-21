@@ -12,7 +12,6 @@ use crate::input::{
 use crate::page::NativePage;
 use crate::protocol::Command;
 use crate::state::{ERROR_OPEN_PREFIX, MenuRequest, PageEvent, PageState, Presentation};
-use image::{Frame as ImageFrame, RgbaImage};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::sync::Arc;
@@ -61,11 +60,6 @@ struct FrameView {
     slot: Option<crate::gpu::TextureSlot>,
 }
 
-fn wrap_image(width: u32, height: u32, bgra: Vec<u8>) -> Option<Arc<RenderImage>> {
-    let buffer = RgbaImage::from_raw(width, height, bgra)?;
-    Some(Arc::new(RenderImage::new(vec![ImageFrame::new(buffer)])))
-}
-
 impl FrameView {
     /// Replaces the shown frame with `frame`, uploading it. The previous frame's image is
     /// evicted from the window's image caches so the atlas space is reclaimed.
@@ -93,7 +87,9 @@ impl FrameView {
                     top_left,
                     texture: None,
                     shadow: None,
-                    image: RefCell::new(wrap_image(width, height, pixels)),
+                    image: RefCell::new(
+                        RenderImage::from_bgra(width, height, pixels).map(Arc::new),
+                    ),
                 }
             }
             (Frame::Buffer(buffer), None) => {
@@ -107,7 +103,9 @@ impl FrameView {
                     top_left,
                     texture: None,
                     shadow: None,
-                    image: RefCell::new(wrap_image(width, height, packed)),
+                    image: RefCell::new(
+                        RenderImage::from_bgra(width, height, packed).map(Arc::new),
+                    ),
                 }
             }
             (Frame::Buffer(buffer), Some((device, queue))) => {
@@ -805,7 +803,8 @@ impl WebPage {
                     if cached.is_none()
                         && let Some(shadow) = &shown.shadow
                     {
-                        *cached = wrap_image(shown.width, shown.height, shadow.clone());
+                        *cached = RenderImage::from_bgra(shown.width, shown.height, shadow.clone())
+                            .map(Arc::new);
                     }
                     cached.clone()
                 };
