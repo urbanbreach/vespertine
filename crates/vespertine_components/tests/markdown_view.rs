@@ -618,10 +618,10 @@ fn a8_ending_the_stream_shows_the_unrepaired_source() {
     require_backend!();
     let document = MarkdownDocument::from_source("alpha\n\nbeta **open");
     let streaming = Rc::new(std::cell::Cell::new(true));
-    let (shared, flag) = (document.clone(), streaming.clone());
+    let flag = streaming.clone();
     let mut host = host(400., 200., move || {
         div()
-            .child(Markdown::document("md", shared.clone()).streaming(flag.get()))
+            .child(Markdown::document("md", document.clone()).streaming(flag.get()))
             .into_any_element()
     });
     host.paint_frame();
