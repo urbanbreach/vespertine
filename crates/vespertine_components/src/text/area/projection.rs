@@ -174,47 +174,11 @@ impl Projection {
 
     /// The source ranges of the atomic replacements, in order.
     pub fn atomic_ranges(&self) -> Vec<Range<usize>> {
-        self.atomic_iter().collect()
-    }
-
-    fn atomic_iter(&self) -> impl Iterator<Item = Range<usize>> + '_ {
         self.replacements
             .iter()
             .filter(|replacement| replacement.atomic)
             .map(|replacement| replacement.range.clone())
-    }
-
-    /// The atomic range that `offset` is strictly inside, if any.
-    fn atomic_strictly_containing(&self, offset: usize) -> Option<Range<usize>> {
-        self.atomic_iter()
-            .find(|range| range.start < offset && offset < range.end)
-    }
-
-    /// Snaps a caret strictly inside an atomic range to the nearer end: the start when before the
-    /// midpoint, the end at or after it. Other offsets are unchanged.
-    pub fn normalize_caret(&self, offset: usize) -> usize {
-        match self.atomic_strictly_containing(offset) {
-            Some(range) if (offset - range.start) * 2 < range.end - range.start => range.start,
-            Some(range) => range.end,
-            None => offset,
-        }
-    }
-
-    /// Normalizes a selection: an empty range is a caret ([`normalize_caret`](Self::normalize_caret));
-    /// a non-empty range with an end strictly inside an atomic range is widened to cover it whole.
-    /// Ends exactly at a boundary are not widened.
-    pub fn normalize_selection(&self, range: Range<usize>) -> Range<usize> {
-        if range.start >= range.end {
-            let caret = self.normalize_caret(range.start);
-            return caret..caret;
-        }
-        let start = self
-            .atomic_strictly_containing(range.start)
-            .map_or(range.start, |atomic| atomic.start);
-        let end = self
-            .atomic_strictly_containing(range.end)
-            .map_or(range.end, |atomic| atomic.end);
-        start..end
+            .collect()
     }
 }
 
@@ -273,7 +237,6 @@ mod tests {
         assert_eq!(projection.source_to_display(3), 3);
         assert_eq!(projection.display_to_source("héllo", 3), 3);
         assert!(projection.atomic_ranges().is_empty());
-        assert_eq!(projection.normalize_caret(2), 2);
     }
 
     #[test]
@@ -392,13 +355,6 @@ mod tests {
         assert_eq!(projection.display_range_to_source(source, 4..7), 4..10);
     }
 
-    /// Source "ab[chip....]cd" with the chip at 2..12 (10 bytes) shown as "C".
-    fn chip() -> (String, Projection) {
-        let source = "ab0123456789cd".to_owned();
-        let projection = Projection::new(&source, vec![replacement(2..12, "C", true)]);
-        (source, projection)
-    }
-
     #[test]
     fn atomic_ranges_are_listed() {
         let source = "a0123b4567c";
@@ -407,45 +363,5 @@ mod tests {
             vec![replacement(1..5, "A", true), replacement(6..10, "B", false)],
         );
         assert_eq!(projection.atomic_ranges(), vec![1..5]);
-    }
-
-    #[test]
-    fn caret_inside_a_chip_snaps_to_the_nearer_end() {
-        let (_, projection) = chip();
-        // 40% of 2..12 is 6, 60% is 8.
-        assert_eq!(projection.normalize_caret(6), 2);
-        assert_eq!(projection.normalize_caret(8), 12);
-        // The exact midpoint snaps to the end.
-        assert_eq!(projection.normalize_caret(7), 12);
-        assert_eq!(projection.normalize_caret(3), 2);
-        assert_eq!(projection.normalize_caret(11), 12);
-        // Boundaries and outside offsets are unchanged.
-        for offset in [0, 1, 2, 12, 13, 14] {
-            assert_eq!(projection.normalize_caret(offset), offset);
-        }
-        assert_eq!(projection.normalize_selection(6..6), 2..2);
-        assert_eq!(projection.normalize_selection(8..8), 12..12);
-    }
-
-    #[test]
-    fn selection_touching_a_chip_is_widened() {
-        let (_, projection) = chip();
-        assert_eq!(projection.normalize_selection(0..5), 0..12);
-        assert_eq!(projection.normalize_selection(5..14), 2..14);
-        assert_eq!(projection.normalize_selection(4..9), 2..12);
-        assert_eq!(projection.normalize_selection(0..14), 0..14);
-        // Ends exactly at the chip boundaries are not widened.
-        assert_eq!(projection.normalize_selection(0..2), 0..2);
-        assert_eq!(projection.normalize_selection(2..12), 2..12);
-        assert_eq!(projection.normalize_selection(12..14), 12..14);
-        assert_eq!(projection.normalize_selection(1..2), 1..2);
-    }
-
-    #[test]
-    fn non_atomic_replacements_do_not_normalize() {
-        let (_, projection) = a9();
-        assert!(projection.atomic_ranges().is_empty());
-        assert_eq!(projection.normalize_caret(4), 4);
-        assert_eq!(projection.normalize_selection(3..5), 3..5);
     }
 }
