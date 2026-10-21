@@ -44,7 +44,6 @@ use crate::{
     ShapedRun, SharedString, Size, SvgRenderer, SystemWindowTab, Task, Window, WindowControlArea,
     hash, point, px, size,
 };
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
 use anyhow::{Context as _, Result};
 use async_task::Runnable;

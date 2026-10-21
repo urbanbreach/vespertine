@@ -206,6 +206,10 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --all-targets --release
+# The macOS and Windows backends type-check from Linux
+# (rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc):
+cargo check -p vespertine_windows --lib --no-default-features --target x86_64-pc-windows-msvc
+cargo check -p vespertine_macos --lib --features font-kit,runtime_shaders --target aarch64-apple-darwin
 ./scripts/check-features --no-run-examples
 ./scripts/check-features --spec RND-006        # one specification, including running its example
 ```
@@ -283,14 +287,14 @@ The crate README describes the modes, how to add a scene and how to profile.
 | --- | --- |
 | Linux, Wayland | Verified: test suite, examples, scenes. |
 | Linux, X11 | Verified: test suite, examples, scenes. Explicit toolkit scale is supported. |
-| macOS | Upstream backend (`vespertine_macos`, `vespertine_apple`) preserved. Not built or verified in this repository. |
-| Windows | Upstream backend (`vespertine_windows`) preserved. Not built or verified in this repository. |
+| macOS | Upstream backend (`vespertine_macos`, `vespertine_apple`) preserved. Type-checks from Linux (see [Build and test](#build-and-test)); not run or verified. |
+| Windows | Upstream backend (`vespertine_windows`) preserved. Type-checks from Linux (see [Build and test](#build-and-test)); not run or verified. |
 | iOS, browser/WebAssembly | Excluded. |
 
-The embedded web view exists only on Linux. When a
-cross-platform trait was extended, the macOS and Windows code was edited to follow it without being
-compiled. [UPSTREAM.md](UPSTREAM.md) records why cross-target checks cannot complete on the Linux
-host.
+The embedded web view exists only on Linux. When a cross-platform trait was extended, the macOS and
+Windows code was edited to follow it. Both backends type-check on a Linux host, but crates that
+compile C code for the target need that target's toolchain, so full builds and runs need the target
+operating system; [UPSTREAM.md](UPSTREAM.md) has the details.
 
 ## Licensing
 

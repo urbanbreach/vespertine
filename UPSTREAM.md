@@ -164,15 +164,21 @@ source pin even when resolving the Linux build.
 
 ## Cross-target verification limitations
 
-The macOS (`aarch64-apple-darwin`, with `vespertine_platform/runtime_shaders`) and Windows
-(`x86_64-pc-windows-msvc`) standard-library targets can be installed with `rustup`, but at
-import time `cargo check --workspace --target <target>` could not complete on the Linux host:
-the C build scripts of `ring`, `zstd-sys` and `aws-lc-sys` need a target C toolchain (an
-Apple SDK and cross compiler, or MSVC's `lib.exe`) that the host lacks. These are toolchain
-failures, not Rust diagnostics in the preserved backends; no dependency or build-script
-behavior was disabled to bypass them. Library-only checks fail for the same reason because
-`vespertine_http_client_tls`, `vespertine_reqwest_client` and `vespertine_util_core` pull
-those crates into every workspace graph. Neither backend is claimed to type-check or run.
+The macOS (`aarch64-apple-darwin`) and Windows (`x86_64-pc-windows-msvc`) backend libraries
+type-check on the Linux host once `rustup` has installed both standard-library targets:
+
+```sh
+cargo check -p vespertine_windows --lib --no-default-features --target x86_64-pc-windows-msvc
+cargo check -p vespertine_macos --lib --features font-kit,runtime_shaders --target aarch64-apple-darwin
+```
+
+With `runtime_shaders` the `vespertine_apple` build script stitches the Metal source for compilation
+at run time; precompiled Metal shaders need Xcode on macOS. The Windows build script compiles HLSL
+only on Windows (release builds; debug builds compile it at run time). Crates whose dependencies
+compile C code for the target (`ring` and `aws-lc-sys` through the HTTP client, `zstd-sys`, and
+`onig_sys` through syntax coloring) need that target's C toolchain (an Apple SDK, or MSVC), so
+`cargo check --workspace --target <target>` does not complete on Linux. Neither backend has been
+run.
 
 ## Linux verification
 

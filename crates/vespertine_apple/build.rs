@@ -1,11 +1,12 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    apple_build::run();
+    // Check the target, not the host, so a macOS check from another OS generates the shaders too.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        apple_build::run();
+    }
 }
 
-#[cfg(target_os = "macos")]
 mod apple_build {
     use std::{
         env,

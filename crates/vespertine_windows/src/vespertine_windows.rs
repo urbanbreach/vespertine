@@ -33,7 +33,7 @@ pub(crate) use keyboard::*;
 pub(crate) use platform::*;
 pub(crate) use system_notifications::*;
 pub(crate) use system_settings::*;
-pub(crate) use vespertine_util_core::*;
+pub(crate) use util::*;
 pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
