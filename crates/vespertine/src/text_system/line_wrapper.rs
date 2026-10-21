@@ -56,6 +56,21 @@ impl LineWrapper {
         wrap_width: Pixels,
         indent_adjustment: IndentAdjustment,
     ) -> impl Iterator<Item = Boundary> + 'a {
+        self.wrap_line_with_runs(fragments, &[], wrap_width, indent_adjustment)
+    }
+
+    /// Wrap a line of text like [`Self::wrap_line`], with the letter spacing of `runs`, which
+    /// cover the bytes of the fragments (an element counts its `len_utf8` bytes). As in the
+    /// shaped line (TXT-010), every grapheme cluster but the last of the line is followed by
+    /// its run's spacing, so the boundaries match those of the text shaped with these runs.
+    pub fn wrap_line_with_runs<'a>(
+        &'a mut self,
+        fragments: &'a [LineFragment],
+        runs: &'a [TextRun],
+        wrap_width: Pixels,
+        indent_adjustment: IndentAdjustment,
+    ) -> impl Iterator<Item = Boundary> + 'a {
+        let mut spacing = RunSpacing::new(runs);
         let mut width = px(0.);
         let mut first_non_whitespace_ix = None;
         let mut base_indent = None;
@@ -69,12 +84,16 @@ impl LineWrapper {
             .flat_map(move |fragment| fragment.wrap_boundary_candidates())
             .peekable();
         iter::from_fn(move || {
-            for candidate in candidates.by_ref() {
+            while let Some(candidate) = candidates.next() {
                 let ix = index;
                 index += candidate.len_utf8();
                 let new_prev_c;
                 let item_width = match candidate {
-                    WrapBoundaryCandidate::Char { character: c } => {
+                    WrapBoundaryCandidate::Char {
+                        character: c,
+                        fragment,
+                        end,
+                    } => {
                         if c == '\n' {
                             prev_c = None;
                             continue;
@@ -91,7 +110,21 @@ impl LineWrapper {
 
                         new_prev_c = Some(c);
 
-                        self.width_for_char(c)
+                        // Spacing follows the character when another cluster follows it on
+                        // the line; a fragment boundary ends a cluster.
+                        let spacing = spacing.at(ix);
+                        let followed = spacing != Pixels::ZERO
+                            && match candidates.peek() {
+                                None
+                                | Some(WrapBoundaryCandidate::Char {
+                                    character: '\n', ..
+                                }) => false,
+                                Some(_) => {
+                                    end == fragment.len() || is_grapheme_boundary(fragment, end)
+                                }
+                            };
+
+                        self.width_for_char(c) + if followed { spacing } else { Pixels::ZERO }
                     }
                     WrapBoundaryCandidate::Element {
                         width: element_width,
@@ -892,33 +925,45 @@ impl<'a> LineFragment<'a> {
         LineFragment::Element { width, len_utf8 }
     }
 
-    fn wrap_boundary_candidates(&self) -> impl Iterator<Item = WrapBoundaryCandidate> {
-        let text = match self {
+    fn wrap_boundary_candidates(&self) -> impl Iterator<Item = WrapBoundaryCandidate<'a>> {
+        let text: &'a str = match self {
             LineFragment::Text { text } => text,
             LineFragment::Element { .. } => "\0",
         };
-        text.chars().map(move |character| {
+        text.char_indices().map(move |(ix, character)| {
             if let LineFragment::Element { width, len_utf8 } = self {
                 WrapBoundaryCandidate::Element {
                     width: *width,
                     len_utf8: *len_utf8,
                 }
             } else {
-                WrapBoundaryCandidate::Char { character }
+                WrapBoundaryCandidate::Char {
+                    character,
+                    fragment: text,
+                    end: ix + character.len_utf8(),
+                }
             }
         })
     }
 }
 
-enum WrapBoundaryCandidate {
-    Char { character: char },
-    Element { width: Pixels, len_utf8: usize },
+enum WrapBoundaryCandidate<'a> {
+    /// A character of `fragment`, ending at its byte `end`.
+    Char {
+        character: char,
+        fragment: &'a str,
+        end: usize,
+    },
+    Element {
+        width: Pixels,
+        len_utf8: usize,
+    },
 }
 
-impl WrapBoundaryCandidate {
+impl WrapBoundaryCandidate<'_> {
     pub fn len_utf8(&self) -> usize {
         match self {
-            WrapBoundaryCandidate::Char { character } => character.len_utf8(),
+            WrapBoundaryCandidate::Char { character, .. } => character.len_utf8(),
             WrapBoundaryCandidate::Element { len_utf8: len, .. } => *len,
         }
     }

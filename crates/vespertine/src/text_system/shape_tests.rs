@@ -1588,3 +1588,54 @@ mod letter_spacing_truncation {
         );
     }
 }
+
+mod letter_spacing_wrap {
+    use super::*;
+    use crate::{IndentAdjustment, LineFragment};
+
+    #[test]
+    fn wrap_line_breaks_where_the_spaced_shaped_text_does() {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let window = WindowTextSystem::new(system.clone());
+        let font = font("Test Sans");
+        let spaced = |text: &str, spacing: f32| TextRun {
+            letter_spacing: px(spacing),
+            ..run_of(text, &font)
+        };
+        let cases = [
+            ("aa bb cc dd", vec![spaced("aa bb cc dd", 4.)], 80.),
+            // Exactly 80 px wide, because nothing follows the last character.
+            ("aa bbbb", vec![spaced("aa bbbb", 4.)], 80.),
+            (
+                "lorem ipsum dolor",
+                vec![spaced("lorem ", 0.), spaced("ipsum dolor", 3.)],
+                90.,
+            ),
+        ];
+        for (text, runs, width) in cases {
+            let lines = window
+                .shape_text(text.into(), px(16.), &runs, Some(px(width)), None)
+                .unwrap();
+            let layout = &lines[0].layout;
+            let shaped: Vec<usize> = layout
+                .wrap_boundaries()
+                .iter()
+                .map(|boundary| {
+                    layout.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index
+                })
+                .collect();
+            let mut wrapper = system.line_wrapper(font.clone(), px(16.));
+            let wrapped: Vec<usize> = wrapper
+                .wrap_line_with_runs(
+                    &[LineFragment::text(text)],
+                    &runs,
+                    px(width),
+                    IndentAdjustment::NoIndent,
+                )
+                .map(|boundary| boundary.ix)
+                .collect();
+            assert_eq!(wrapped, shaped, "{text:?} at {width} px");
+        }
+    }
+}
