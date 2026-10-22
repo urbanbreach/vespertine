@@ -692,6 +692,14 @@ impl DispatchTree {
         self.node_stack.last().copied()
     }
 
+    /// The focus handle tracked by the innermost open node that tracks one.
+    pub fn innermost_open_focus_id(&self) -> Option<FocusId> {
+        self.node_stack
+            .iter()
+            .rev()
+            .find_map(|node_id| self.nodes[node_id.0].focus_id)
+    }
+
     /// The parent of `node_id` in this tree.
     pub fn parent_of(&self, node_id: DispatchNodeId) -> Option<DispatchNodeId> {
         self.nodes[node_id.0].parent

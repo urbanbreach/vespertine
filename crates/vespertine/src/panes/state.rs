@@ -8,7 +8,7 @@ use super::fit::{
     fit,
 };
 use crate::{
-    Bounds, Context, EventEmitter, Pixels, Size,
+    Bounds, Context, EventEmitter, FocusId, Pixels, Size,
     motion::{MotionDescription, MotionProps, MotionTrack, MotionTransition},
 };
 
@@ -189,6 +189,9 @@ pub(super) struct PaneRuntime {
     pub content_valid: bool,
     pub last_open: bool,
     pub last_adjustment: u64,
+    /// The window focus the pane's content tracked the last time it was prepainted
+    /// open (not closing, not empty).
+    pub held_focus: Option<FocusId>,
 }
 
 /// Transition bookkeeping for a whole group.

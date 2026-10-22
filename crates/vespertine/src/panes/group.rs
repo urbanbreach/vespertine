@@ -31,6 +31,9 @@ pub fn pane_group(id: impl Into<ElementId>, state: &Entity<PaneGroupState>) -> P
 /// prepaint; each child is laid out with a definite size so that content does
 /// not reflow while a slot grows or shrinks. Seams between panes are
 /// [`ResizeHandle`]s placed on the pane edges.
+///
+/// A closing pane stays painted but takes no input. Keyboard focus inside it moves to
+/// the innermost focusable element enclosing the group, or is cleared when there is none.
 pub struct PaneGroup {
     id: ElementId,
     state: Entity<PaneGroupState>,
@@ -159,6 +162,7 @@ fn advance_slots(
                 content_valid: target > 0.0,
                 last_open: open,
                 last_adjustment: entry.state.adjustment,
+                held_focus: None,
             });
         let flag_changed = rt.last_open != open;
         let snap = reduce_motion || ((viewport_changed || any_direct) && !flag_changed);
@@ -396,6 +400,19 @@ impl Element for PaneGroup {
                 PaneSide::Bottom => placement.slot.size.height,
                 _ => placement.slot.size.width,
             };
+            let open = along > Pixels::ZERO && !placement.closing;
+            if !open {
+                // A closing or empty pane registers no focus handle, so keyboard focus it
+                // held would be stranded on an element that takes no input (INP-007 R2).
+                let held = runtime
+                    .borrow_mut()
+                    .panes
+                    .get_mut(id)
+                    .and_then(|rt| rt.held_focus.take());
+                if let Some(held) = held {
+                    window.release_focus(held, cx);
+                }
+            }
             if along <= Pixels::ZERO {
                 continue;
             }
@@ -412,6 +429,9 @@ impl Element for PaneGroup {
                     size(slot.size.width, extent),
                 ),
             };
+            // The focused element registers itself once per frame; registering it while
+            // this pane is prepainted means the pane holds the focus.
+            let focus_registered = window.next_frame.focus.is_some();
             window.with_content_mask(mask(slot), |window| {
                 window.with_inert(placement.closing, |window| {
                     child.prepaint_as_root(
@@ -429,6 +449,9 @@ impl Element for PaneGroup {
                     window.insert_hitbox(slot, HitboxBehavior::BlockMouse);
                 }
             });
+            if open && let Some(rt) = runtime.borrow_mut().panes.get_mut(id) {
+                rt.held_focus = window.next_frame.focus.filter(|_| !focus_registered);
+            }
             pane_paints.push(PanePaint {
                 child: child_index,
                 bounds: slot,

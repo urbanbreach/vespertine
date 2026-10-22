@@ -7,7 +7,7 @@
 //! the rendered frame and otherwise falls back to a handle that is, such as the
 //! pane or window root.
 
-use crate::{App, FocusHandle, InteractiveElement, WeakFocusHandle, Window};
+use crate::{App, FocusHandle, FocusId, InteractiveElement, WeakFocusHandle, Window};
 
 impl Window {
     /// Requests that focus return to `target`, taking effect on the next
@@ -47,6 +47,31 @@ impl Window {
             .dispatch_tree
             .focusable_node_id(handle.id())
             .is_some()
+    }
+
+    /// Moves keyboard focus off `held`, whose element just left the input tree of the
+    /// frame being prepainted (a closing pane, say). Once the frame is drawn, focus goes
+    /// to the innermost focusable element enclosing the current one when that element is
+    /// mounted, or is cleared otherwise. Focus that moved elsewhere in the meantime stays.
+    pub(crate) fn release_focus(&self, held: FocusId, cx: &mut App) {
+        let fallback = self
+            .next_frame
+            .dispatch_tree
+            .innermost_open_focus_id()
+            .and_then(|id| FocusHandle::for_id(id, &cx.focus_handles))
+            .map(|handle| handle.downgrade());
+        self.defer(cx, move |window, cx| {
+            if window.focus != Some(held) {
+                return;
+            }
+            match fallback
+                .and_then(|fallback| fallback.upgrade())
+                .filter(|fallback| window.is_focus_mounted(fallback))
+            {
+                Some(fallback) => window.focus(&fallback, cx),
+                None => window.blur(cx),
+            }
+        });
     }
 }
 

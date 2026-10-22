@@ -261,6 +261,8 @@ struct Root {
     bottom: Rc<Probe>,
     surface: Option<SurfaceSetup>,
     seam_top_inset: Pixels,
+    /// When set, a focusable element tracking it encloses the group.
+    scope: RefCell<Option<FocusHandle>>,
 }
 
 impl Render for Root {
@@ -295,7 +297,14 @@ impl Render for Root {
             };
             group = group.pane(entry.descriptor.id.clone(), probe_element(probe));
         }
-        group
+        match self.scope.borrow().as_ref() {
+            Some(scope) => div()
+                .size_full()
+                .track_focus(scope)
+                .child(group)
+                .into_any_element(),
+            None => group.into_any_element(),
+        }
     }
 }
 
@@ -347,6 +356,7 @@ impl Harness {
                     focus: cx.focus_handle(),
                 }),
                 seam_top_inset,
+                scope: RefCell::default(),
             }
         });
         let root = window.root(&mut cx).unwrap();
@@ -832,6 +842,77 @@ fn closing_pane_takes_no_keyboard_input() {
         1,
         "a closing pane is inert"
     );
+}
+
+/// Encloses the group in a focus scope when `scope` is set, tracks a focus handle on the
+/// probe `probe` picks, focuses it and draws.
+fn focus_probe(
+    h: &mut Harness,
+    scope: Option<&FocusHandle>,
+    probe: impl FnOnce(&Root) -> &Rc<Probe>,
+) -> FocusHandle {
+    let focus = h.vcx.update(|_, cx| cx.focus_handle());
+    h.probe(|r| {
+        *r.scope.borrow_mut() = scope.cloned();
+        *probe(r).focus.borrow_mut() = Some(focus.clone());
+    });
+    h.vcx.update(|window, cx| {
+        window.focus(&focus, cx);
+        window.refresh();
+    });
+    h.draw();
+    focus
+}
+
+#[test]
+fn keyboard_focus_leaves_a_closing_pane_for_the_enclosing_focus_scope() {
+    let mut h = Harness::new(size(px(1000.), px(700.)), leading_trailing());
+    let scope = h.vcx.update(|_, cx| cx.focus_handle());
+    focus_probe(&mut h, Some(&scope), |r| &r.leading);
+
+    h.set_collapsed("leading", true);
+    h.draw();
+    assert!(h.placement("leading").closing);
+    h.draw();
+    h.vcx.update(|window, _| {
+        assert!(
+            scope.is_focused(window),
+            "focus moves while the pane closes"
+        );
+        assert!(window.is_focus_mounted(&scope));
+    });
+
+    h.advance(400);
+    h.draw();
+    assert_eq!(h.slot("leading").size.width, px(0.));
+    h.vcx
+        .update(|window, _| assert!(scope.is_focused(window), "and stays after it closed"));
+}
+
+#[test]
+fn keyboard_focus_is_cleared_when_a_closing_pane_has_no_enclosing_focus_scope() {
+    let mut h = Harness::new(size(px(1000.), px(700.)), leading_trailing());
+    focus_probe(&mut h, None, |r| &r.leading);
+
+    h.set_collapsed("leading", true);
+    h.draw();
+    h.draw();
+    assert!(h.placement("leading").closing);
+    h.vcx
+        .update(|window, cx| assert_eq!(window.focused(cx), None, "no stranded focus"));
+}
+
+#[test]
+fn closing_a_pane_keeps_focus_held_outside_it() {
+    let mut h = Harness::new(size(px(1000.), px(700.)), leading_trailing());
+    let scope = h.vcx.update(|_, cx| cx.focus_handle());
+    let main = focus_probe(&mut h, Some(&scope), |r| &r.main);
+
+    h.set_collapsed("leading", true);
+    h.draw();
+    h.draw();
+    assert!(h.placement("leading").closing);
+    h.vcx.update(|window, _| assert!(main.is_focused(window)));
 }
 
 // ---------------------------------------------------------------------------
