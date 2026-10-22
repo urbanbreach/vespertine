@@ -82,6 +82,11 @@ impl LineLayout {
 
         for run in self.runs.iter() {
             for glyph in run.glyphs.iter() {
+                // A glyph continuing the previous one's cluster (a mark, drawn at its own
+                // offset) is no character boundary.
+                if glyph.index == prev_index {
+                    continue;
+                }
                 if glyph.position.x >= x {
                     if glyph.position.x - x < x - prev_x {
                         return glyph.index;

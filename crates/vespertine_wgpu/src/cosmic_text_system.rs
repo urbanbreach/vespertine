@@ -1938,6 +1938,27 @@ mod tests {
         Ok(())
     }
 
+    /// A mark's offset moves only its drawing: carets and hit testing step over the marked
+    /// cluster by its advance.
+    #[test]
+    fn carets_on_marked_text_follow_advances() -> Result<()> {
+        let text_system = text_system()?;
+        let marked = layout_text(&text_system, "x\u{301}y")?;
+        let advance = layout_text(&text_system, "xy")?.x_for_index(1);
+        assert_eq!(marked.x_for_index(0), Pixels::ZERO);
+        assert_eq!(marked.x_for_index(1), advance);
+        assert_eq!(marked.x_for_index(3), advance);
+        let mut x = Pixels::ZERO;
+        while x < advance {
+            assert_eq!(marked.index_for_x(x), Some(0), "at {x:?}");
+            let closest = if x * 2. < advance { 0 } else { 3 };
+            assert_eq!(marked.closest_index_for_x(x), closest, "at {x:?}");
+            x += vespertine::px(0.25);
+        }
+        assert_eq!(marked.index_for_x(advance), Some(3));
+        Ok(())
+    }
+
     /// cosmic-text sums word widths to get a line's width but accumulates glyph
     /// advances to position glyphs, so a trailing zero-advance glyph (here a
     /// zero-width space) can land a few ulps past the width. When that glyph is a
