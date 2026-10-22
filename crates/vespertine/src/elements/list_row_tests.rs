@@ -10,7 +10,11 @@ use crate::{
     ScrollWheelEvent, StatefulInteractiveElement as _, Style, Styled as _, TestAppContext,
     TouchPhase, UniformListScrollHandle, Window, div, list, point, px, size, uniform_list,
 };
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    rc::Rc,
+};
 
 const ROW_HEIGHT: f32 = 20.0;
 const VIEWPORT: f32 = 160.0;
@@ -41,6 +45,8 @@ struct Env {
     created: Log,
     /// Mouse-down listeners that fired: row, position.
     downs: Rc<RefCell<Vec<(usize, i32, i32)>>>,
+    /// State every row shows that no entity owns: it takes effect when the owner is notified.
+    untracked: Rc<Cell<u32>>,
 }
 
 /// An element with an element state of its own, whose lifetime the tests observe.
@@ -201,7 +207,8 @@ fn row_element(
             ));
         })
         .child(format!(
-            "row {ix} value {value} seen {seen} variant {variant}"
+            "row {ix} value {value} seen {seen} variant {variant} {}",
+            "+".repeat(env.untracked.get() as usize)
         ));
     if spec.probe {
         row = row.child(Probe {
@@ -417,12 +424,7 @@ fn click(cx: &mut TestAppContext, win: &Win, x: f32, y: f32) {
 fn set_offset(cx: &mut TestAppContext, win: &Win, y: f32) {
     win.root.as_ref().unwrap().update(cx, |view, cx| {
         match view.kind {
-            Kind::Uniform => view
-                .scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(point(px(0.), px(-y))),
+            Kind::Uniform => view.scroll.set_offset_from_scrollbar(point(px(0.), px(-y))),
             Kind::Variable => view.state.set_offset_from_scrollbar(point(px(0.), px(-y))),
         }
         cx.notify();
@@ -862,6 +864,46 @@ fn a4_scrollbar_round_trip_reuses_layout_nodes_and_keeps_hit_tests(cx: &mut Test
             3,
             "{kind:?}: every click reached a row"
         );
+    }
+}
+
+/// R5: a programmatic scroll does not explain the notification of the owner that comes with
+/// it, so rows showing state no entity owns show its new value, as ordinary virtualization
+/// does.
+#[crate::test]
+fn a_programmatic_scroll_leaves_the_owners_notification_unexplained(cx: &mut TestAppContext) {
+    for kind in KINDS {
+        let fixture = Fixture::new(cx, kind, 300);
+        let retained = fixture.window(cx, true);
+        let full = fixture.window(cx, false);
+        for step in 1..=4u32 {
+            // The direct window builds every view on every frame; only the retained window is
+            // notified, so its frame sees one notification.
+            for (win, notify) in [(&full, false), (&retained, true)] {
+                win.env.untracked.set(step);
+                win.root.as_ref().unwrap().update(cx, |view, cx| {
+                    match view.kind {
+                        Kind::Uniform => view
+                            .scroll
+                            .0
+                            .borrow()
+                            .base_handle
+                            .set_offset(point(px(0.), px(-30. * step as f32))),
+                        Kind::Variable => view.state.scroll_by(px(30.)),
+                    }
+                    if notify {
+                        cx.notify();
+                    }
+                });
+                draw(cx, win);
+            }
+            assert_same(
+                cx,
+                &retained,
+                &full,
+                &format!("{kind:?}: scrolled and notified, step {step}"),
+            );
+        }
     }
 }
 

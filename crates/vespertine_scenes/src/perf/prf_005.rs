@@ -215,7 +215,7 @@ impl Scene for RowList {
                 if self.variable {
                     self.state.set_offset_from_scrollbar(offset);
                 } else {
-                    self.scroll.0.borrow().base_handle.set_offset(offset);
+                    self.scroll.set_offset_from_scrollbar(offset);
                 }
             }
             _ => {}

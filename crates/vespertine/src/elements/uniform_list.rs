@@ -98,6 +98,8 @@ struct RowSource<'a> {
     item_count: usize,
     render_type: TypeId,
     render_items: &'a RenderItems,
+    /// The scrollbar offsets set on the list's handle so far.
+    scroll_marks: u64,
 }
 
 fn type_of<T: 'static>(_: &T) -> TypeId {
@@ -180,6 +182,9 @@ pub struct UniformListScrollState {
     pub last_item_size: Option<ItemSize>,
     /// Whether the list was vertically flipped during last layout.
     pub y_flipped: bool,
+    /// Offsets set through [`UniformListScrollHandle::set_offset_from_scrollbar`]; each
+    /// explains one notification of the list's owner (PRF-005 R5).
+    pub scroll_marks: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -200,6 +205,7 @@ impl UniformListScrollHandle {
             deferred_scroll_to_item: None,
             last_item_size: None,
             y_flipped: false,
+            scroll_marks: 0,
         })))
     }
 
@@ -271,6 +277,16 @@ impl UniformListScrollHandle {
             offset,
             scroll_strict: true,
         });
+    }
+
+    /// Sets the offset the way a scrollbar drag does: the notification of the list's owner that
+    /// comes with it counts as scrolling, not as a content change, so retained rows keep
+    /// replaying (PRF-005 R5). An offset set any other way leaves every notification of the
+    /// owner to rebuild the visible rows.
+    pub fn set_offset_from_scrollbar(&self, offset: Point<Pixels>) {
+        let mut state = self.0.borrow_mut();
+        state.scroll_marks += 1;
+        state.base_handle.set_offset(offset);
     }
 
     /// Check if the list is flipped vertically.
@@ -568,6 +584,10 @@ impl Element for UniformList {
                                     item_count: self.item_count,
                                     render_type: self.render_type,
                                     render_items: &*self.render_items,
+                                    scroll_marks: self
+                                        .scroll_handle
+                                        .as_ref()
+                                        .map_or(0, |handle| handle.0.borrow().scroll_marks),
                                 },
                                 list,
                                 bounds,
@@ -769,6 +789,14 @@ impl UniformList {
         self
     }
 
+    /// The scrollbar offsets set on the tracked handle so far (see
+    /// [`UniformListScrollHandle::set_offset_from_scrollbar`]).
+    fn scroll_marks(&self) -> u64 {
+        self.scroll_handle
+            .as_ref()
+            .map_or(0, |handle| handle.0.borrow().scroll_marks)
+    }
+
     /// Measures the item that gives the list its size, reusing the sample of an earlier frame
     /// while the content, the item count and the constraints it was measured under are
     /// unchanged (PRF-005 R7).
@@ -781,15 +809,10 @@ impl UniformList {
         let Some(list) = list.filter(|_| self.item_count > 0 && window.rows_enabled()) else {
             return self.measure_item(None, window, cx);
         };
-        // A changed scroll offset explains the notification that came with it.
-        let last_top = window.row_store(list).last_scroll_top;
-        let scrolled = self.scroll_handle.as_ref().map_or(0, |handle| {
-            let top = -window
-                .pixel_snap(handle.0.borrow().base_handle.offset().y)
-                .to_f64();
-            u64::from(top != last_top)
-        });
-        let ambiguous = window.rows_owner_ambiguous_with(scrolled);
+        let scrolls = self
+            .scroll_marks()
+            .saturating_sub(window.row_store(list).scroll_marks);
+        let ambiguous = window.rows_owner_ambiguous_with(scrolls);
         let cached = window
             .row_store(list)
             .measure
@@ -1186,14 +1209,18 @@ fn prepaint_rows(
     {
         window.row_store_clear(list);
     }
-    // A changed scroll offset explains the notification that came with it.
-    let scrolled = u64::from(window.row_store(list).last_scroll_top != scroll_top);
-    let ambiguous = window.rows_owner_ambiguous_with(scrolled)
+    // Each scrollbar offset explains one notification of the owner; a wheel scroll notifies
+    // as a scroll already.
+    let scrolls = source
+        .scroll_marks
+        .saturating_sub(window.row_store(list).scroll_marks);
+    let ambiguous = window.rows_owner_ambiguous_with(scrolls)
         || window.row_store(list).render_type != Some(source.render_type);
     let (mut rows, constructed, last_top, was_moving_down) = {
         let store = window.row_store(list);
         store.geometry = Some(geometry);
         store.render_type = Some(source.render_type);
+        store.scroll_marks = source.scroll_marks;
         (
             std::mem::take(&mut store.rows),
             store.constructed,

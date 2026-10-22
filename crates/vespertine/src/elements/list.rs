@@ -146,8 +146,9 @@ struct StateInner {
     /// Mounted rows remeasured since the retained rows were last opened: only their records
     /// are obsolete.
     remeasured: Vec<Range<usize>>,
-    /// Scroll mutations made through the state (scrollbar offsets, programmatic scrolls);
-    /// each explains one notification of the list's owner.
+    /// Offsets set through the scrollbar setter; each explains one notification of the list's
+    /// owner (PRF-005 R5). Programmatic scrolls explain none: the owner may be notified for
+    /// state the rows read outside tracked sources.
     scroll_marks: u64,
     /// Version of the at-end answer: bumped only when [`ListState::is_scrolled_to_end`]
     /// gives a different answer than before, so readers depend on the Boolean rather than on
@@ -887,7 +888,6 @@ impl ListState {
 
         let current_offset = self.logical_scroll_top();
         let state = &mut *self.edit();
-        state.scroll_marks += 1;
 
         if distance < px(0.) {
             state.follow_state.stop_following();
@@ -916,7 +916,6 @@ impl ListState {
     /// growing (e.g. during streaming).
     pub fn scroll_to_end(&self) {
         let state = &mut *self.edit();
-        state.scroll_marks += 1;
         let item_count = state.logical_count();
         state.pending_scroll = None;
         state.logical_scroll_top = Some(ListOffset {
@@ -988,7 +987,6 @@ impl ListState {
     /// An index at or beyond the row count normalizes to the end of the list with offset zero.
     pub fn scroll_to(&self, mut scroll_top: ListOffset) {
         let state = &mut *self.edit();
-        state.scroll_marks += 1;
         let item_count = state.logical_count();
         if scroll_top.item_ix >= item_count {
             scroll_top.item_ix = item_count;
@@ -1007,7 +1005,6 @@ impl ListState {
     /// little as possible.
     pub fn scroll_to_reveal_item(&self, ix: usize) {
         let state = &mut *self.edit();
-        state.scroll_marks += 1;
         if state.logical_count() == 0 {
             return;
         }
@@ -1068,7 +1065,10 @@ impl ListState {
         self.0.borrow().scrollbar_drag_start_height.is_some()
     }
 
-    /// Set the offset from the scrollbar
+    /// Set the offset from the scrollbar: the notification of the list's owner that comes with
+    /// it counts as scrolling, not as a content change, so retained rows keep replaying
+    /// (PRF-005 R5). After any other scroll, every notification of the owner rebuilds the
+    /// visible rows.
     pub fn set_offset_from_scrollbar(&self, point: Point<Pixels>) {
         self.edit().set_offset_from_scrollbar(point);
     }

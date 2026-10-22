@@ -64,7 +64,7 @@ pub(crate) struct RowStore {
     pub measure: Option<MeasureSample>,
     /// The list's structural revision the rows were recorded at (variable-height list).
     pub revision: u64,
-    /// The list's count of scroll mutations as of the previous frame (variable-height list).
+    /// The list's count of scrollbar offsets as of the previous frame.
     pub scroll_marks: u64,
 }
 
@@ -199,9 +199,9 @@ impl Window {
     }
 
     /// Whether the owner of the list was rebuilt for a reason nothing tracked explains (PRF-005
-    /// R5), for a list that knows `scrolls` scroll mutations (scrollbar offsets and
-    /// programmatic scrolls) since the previous frame: each explains one notification of the
-    /// owner.
+    /// R5), for a list that knows `scrolls` scrollbar offsets since the previous frame: each
+    /// explains one notification of the owner. Any other notification may come with state the
+    /// rows read outside tracked sources, scrolled programmatically or not.
     ///
     /// The owner is rebuilt for an unexplained reason when it was notified itself (rather than
     /// being rebuilt only because a row nested in it changed) while some notification is
