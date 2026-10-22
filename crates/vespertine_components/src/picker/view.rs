@@ -1435,8 +1435,9 @@ impl Render for Picker {
 impl Picker {
     /// Reports that the list is scrolled to its end once per arrival at the end (R15). The
     /// source set additionally allows at most one outstanding page request per generation.
-    /// New rows rearm the report: a list that still ends in view after they arrive (a page
-    /// shorter than the viewport) reports again, measured once layout has placed them.
+    /// New rows or a settled page request rearm the report: a list that still ends in view
+    /// afterwards (a page shorter than the viewport, or an empty page that reports more)
+    /// reports again, measured once layout has placed the rows.
     fn signal_scrolled_to_end(
         &mut self,
         results: &Results,
@@ -1451,7 +1452,9 @@ impl Picker {
             .rows()
             .map(|row| &row.key)
             .eq(self.results.rows().map(|row| &row.key));
-        if !rows_unchanged {
+        let page_settled =
+            self.results.footer == Footer::LoadingMore && results.footer != Footer::LoadingMore;
+        if !rows_unchanged || page_settled {
             // The scroll extent of the new rows is known after this frame's layout.
             self.at_end = false;
             cx.on_next_frame(window, |_, _, cx| cx.notify());

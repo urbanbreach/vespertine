@@ -1002,6 +1002,13 @@ fn pages_too_short_to_scroll_keep_requesting_the_next_page() {
         vec![0, 1, 2],
         "the list still ends in view, so the next page is requested"
     );
+    f.reply(2, page(&[]));
+    f.settle_replies();
+    assert_eq!(
+        pages_requested(&f),
+        vec![0, 1, 2, 3],
+        "an empty page that still reports more leaves the end in view: the next page is requested"
+    );
 }
 
 #[test]
