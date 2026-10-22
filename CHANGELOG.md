@@ -16,6 +16,11 @@ and examples that verify each one.
   `register_layer` and `LayerRegistration::new` take a `dismiss` argument. The components that
   open layers supply theirs; a dialog closes without its cancel callback, also when it ignores
   Escape, the picker closes at any depth and a lightbox runs its close callback.
+- The README lists the `[patch.crates-io]` entries an application that depends on Vespertine
+  must repeat: Cargo applies patches only from the workspace being built, so without them an
+  application builds against the crates.io releases of `async-process`, `async-task`, `calloop`,
+  `khronos-egl` and `windows-capture` instead of Zed's forks. The README also describes the
+  keyboard-focus dim (ELM-006).
 - `docs/key_dispatch.md` and the docs of `Context::on_focus_lost` and
   `Window::focus_lost_restore_target` explain that focus stays on an element that unmounted, so
   dispatch starts at the root, and how a focus-lost listener moves focus to the closest

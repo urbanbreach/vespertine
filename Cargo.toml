@@ -721,6 +721,9 @@ nonminimal_bool = "allow"
 level = "allow"
 priority = -1
 
+# Cargo applies these patches only while this repository is the workspace being built, so an
+# application that depends on Vespertine must repeat them; README.md ("Using Vespertine") lists
+# them for that. Change both together.
 [patch.crates-io.async-process]
 git = "https://github.com/zed-industries/async-process.git"
 rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d"

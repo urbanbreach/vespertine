@@ -104,7 +104,10 @@ iOS/browser branches. Check licenses before expanding the dependency closure.
 Preserve upstream dependency versions and necessary source patches; start with
 upstream's lockfile and let Cargo prune it instead of broadly updating.
 The `windows-capture` patch preserves `scap`'s upstream target-only transitive
-source pin even when resolving the Linux build.
+source pin even when resolving the Linux build. Cargo applies these
+`[patch.crates-io]` entries only in this workspace, so applications that depend
+on Vespertine repeat them; README.md ("Using Vespertine") lists them and changes
+with them.
 
 ## Intentional deviations
 

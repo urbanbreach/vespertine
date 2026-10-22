@@ -233,6 +233,30 @@ vespertine_platform = { git = "https://github.com/urbanbreach/vespertine", tag =
 vespertine_components = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.2", default-features = false, features = ["diagram", "math"] }
 ```
 
+The application's workspace root `Cargo.toml` also needs the source patches of this repository's
+root `Cargo.toml`. Cargo applies `[patch]` only from the workspace being built, so without them an
+application builds against the crates.io releases of five crates that Vespertine uses Zed's forks
+of: the `calloop` fork bounds the time an event-loop iteration spends on idle callbacks, the
+`async-task` fork fixes the task waker's vtable identity, `khronos-egl` handles failed EGL calls
+that report no error, `async-process` adds the child-process adoption that `vespertine_util_core`
+uses on macOS, and `windows-capture` fixes display name detection for Windows screen capture.
+Copy the entries from the root `Cargo.toml` of the tag you depend on into the application's
+`[patch.crates-io]` table:
+
+```toml
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/zed-industries/async-task.git", rev = "015845a19fc31752c02367567d3b8900a406f9da" }
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
+khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }
+windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
+```
+
+When the application's `Cargo.lock` already holds a newer crates.io release of one of them, Cargo
+warns that the patch "was not used in the crate graph"; `cargo update -p <crate>` (for example
+`cargo update -p calloop`) moves that crate to the fork, after which `cargo tree -i calloop` shows
+the Git source.
+
 Use the same tag for every Vespertine crate. The application builds with the toolchain in
 `rust-toolchain.toml` or a newer one, and needs the system packages under
 [Requirements](#requirements). `crates/vespertine/examples/hello_world.rs` is a complete
