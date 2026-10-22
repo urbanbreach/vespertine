@@ -80,7 +80,7 @@ impl TestApp {
         let arc_dispatcher = Arc::new(dispatcher.clone());
         let background_executor = BackgroundExecutor::new(arc_dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(arc_dispatcher);
-        let platform = match platform_text_system.clone() {
+        let platform = match platform_text_system {
             Some(ts) => TestPlatform::with_text_system(
                 background_executor.clone(),
                 foreground_executor.clone(),
@@ -89,12 +89,11 @@ impl TestApp {
             None => TestPlatform::new(background_executor.clone(), foreground_executor.clone()),
         };
         let http_client = vespertine_http_client::FakeHttpClient::with_404_response();
-        let text_system = Arc::new(TextSystem::new(
-            platform_text_system.unwrap_or_else(|| platform.text_system.clone()),
-        ));
 
         let app = App::new_app(platform.clone(), asset_source, http_client);
         app.borrow_mut().mode = GpuiMode::test();
+        // The text system windows render with: fonts added through it reach them.
+        let text_system = app.borrow().text_system().clone();
 
         Self {
             app,

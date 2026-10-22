@@ -69,12 +69,12 @@ impl VisualTestAppContext {
         let background_executor = platform.background_executor();
         let foreground_executor = platform.foreground_executor();
 
-        let text_system = Arc::new(TextSystem::new(platform.text_system()));
-
         let http_client = vespertine_http_client::FakeHttpClient::with_404_response();
 
-        let mut app = App::new_app(platform.clone(), asset_source, http_client);
+        let app = App::new_app(platform.clone(), asset_source, http_client);
         app.borrow_mut().mode = GpuiMode::test();
+        // The text system windows render with: fonts added through it reach them.
+        let text_system = app.borrow().text_system().clone();
 
         Self {
             app,

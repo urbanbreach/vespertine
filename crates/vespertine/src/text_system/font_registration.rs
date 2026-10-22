@@ -647,4 +647,40 @@ mod tests {
             "a registered font repaints windows"
         );
     }
+
+    struct Empty;
+
+    impl Render for Empty {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[test]
+    fn fonts_registered_through_a_test_context_reach_its_windows() {
+        let resolves = |window: &Window| window.text_system().font_id(&font("Late Family")).is_ok();
+        let bytes = TestFontBuilder::new("Late Family").build();
+
+        let mut cx = TestAppContext::build_with_text_system(
+            crate::TestDispatcher::new(0),
+            None,
+            Arc::new(MockPlatform::default()),
+        );
+        let (_, cx) = cx.add_window_view(|_, _| Empty);
+        assert!(!cx.update(|window, _| resolves(window)));
+        cx.text_system().register_font(&bytes).unwrap();
+        assert!(
+            cx.update(|window, _| resolves(window)),
+            "a font registered through the visual test context reaches its window"
+        );
+
+        let mut app = crate::TestApp::with_text_system(Arc::new(MockPlatform::default()));
+        let mut window = app.open_window(|_, _| Empty);
+        assert!(!window.update(|_, window, _| resolves(window)));
+        app.text_system().register_font(&bytes).unwrap();
+        assert!(
+            window.update(|_, window, _| resolves(window)),
+            "a font registered through the test app reaches its window"
+        );
+    }
 }
