@@ -2121,33 +2121,44 @@ impl Element for Div {
 
         let mut child_min = point(Pixels::MAX, Pixels::MAX);
         let mut child_max = Point::default();
+        // How far the absolutely positioned children reach from this element's origin. They
+        // are placed against the padding box, so the padding is not added to them.
+        let mut positioned_extent = Size::default();
         if let Some(handle) = self.interactivity.scroll_anchor.as_ref() {
             *handle.last_origin.borrow_mut() = bounds.origin - window.element_offset();
         }
-        let content_size = if request_layout.child_layout_ids.is_empty() {
-            bounds.size
-        } else if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
-            let mut state = scroll_handle.0.borrow_mut();
-            state.child_bounds = Vec::with_capacity(request_layout.child_layout_ids.len());
-            for child_layout_id in &request_layout.child_layout_ids {
-                let child_bounds = window.layout_bounds(*child_layout_id);
+        let mut tracked_state =
+            self.interactivity
+                .tracked_scroll_handle
+                .as_ref()
+                .map(|scroll_handle| {
+                    let mut state = scroll_handle.0.borrow_mut();
+                    state.child_bounds = Vec::with_capacity(request_layout.child_layout_ids.len());
+                    state
+                });
+        for child_layout_id in &request_layout.child_layout_ids {
+            let child_bounds = window.layout_bounds(*child_layout_id);
+            if window.layout_is_absolutely_positioned(*child_layout_id) {
+                positioned_extent =
+                    positioned_extent.max(&(child_bounds.bottom_right() - bounds.origin).into());
+            } else {
                 child_min = child_min.min(&child_bounds.origin);
                 child_max = child_max.max(&child_bounds.bottom_right());
-                state.child_bounds.push(child_bounds);
             }
-            (child_max - child_min).into()
+            match tracked_state.as_mut() {
+                Some(state) => state.child_bounds.push(child_bounds),
+                None if has_prepaint_listener => children_bounds.push(child_bounds),
+                None => {}
+            }
+        }
+        drop(tracked_state);
+        // The extent of the in-flow children, which span the content box.
+        let content_size = if child_min.x == Pixels::MAX {
+            Size::default()
         } else {
-            for child_layout_id in &request_layout.child_layout_ids {
-                let child_bounds = window.layout_bounds(*child_layout_id);
-                child_min = child_min.min(&child_bounds.origin);
-                child_max = child_max.max(&child_bounds.bottom_right());
-
-                if has_prepaint_listener {
-                    children_bounds.push(child_bounds);
-                }
-            }
             (child_max - child_min).into()
         };
+        self.interactivity.positioned_extent = positioned_extent;
 
         if let Some(scroll_handle) = self.interactivity.tracked_scroll_handle.as_ref() {
             scroll_handle.scroll_to_active_item();
@@ -2214,8 +2225,21 @@ impl Element for Div {
                                     bounds,
                                     viewport,
                                     extent: bounds.size
-                                        + scroll_extent(content_size, bounds, style, window).into(),
-                                    scroll_max: scroll_extent(content_size, bounds, style, window),
+                                        + scroll_extent(
+                                            content_size,
+                                            positioned_extent,
+                                            bounds,
+                                            style,
+                                            window,
+                                        )
+                                        .into(),
+                                    scroll_max: scroll_extent(
+                                        content_size,
+                                        positioned_extent,
+                                        bounds,
+                                        style,
+                                        window,
+                                    ),
                                     offset: offset.clone(),
                                     scrollable: (
                                         style.overflow.x == Overflow::Scroll,
@@ -2326,10 +2350,13 @@ impl Element for Div {
     }
 }
 
-/// The largest scroll offset of a scroll container (a non-negative distance): its padded
-/// content size less its bounds.
+/// The largest scroll offset of a scroll container (a non-negative distance): how far its
+/// content reaches past its bounds. In-flow content (`content_size`) gains the padding; the
+/// absolutely positioned children (`positioned_extent`, from the container's origin) are
+/// placed against the padding box and count as they are.
 fn scroll_extent(
     content_size: Size<Pixels>,
+    positioned_extent: Size<Pixels>,
     bounds: Bounds<Pixels>,
     style: &Style,
     window: &Window,
@@ -2355,7 +2382,7 @@ fn scroll_extent(
     // 0.00000x pixels. As we generally don't benefit from a precision that
     // high for the maximum scroll, we round the scroll max to 2 decimal
     // places here.
-    let padded_content_size = content_size + padding_size;
+    let padded_content_size = (content_size + padding_size).max(&positioned_extent);
     Point::from(padded_content_size - bounds.size)
         .map(round_to_two_decimals)
         .max(&Default::default())
@@ -2502,6 +2529,8 @@ pub struct Interactivity {
     pub hovered: Option<bool>,
     pub(crate) tooltip_id: Option<TooltipId>,
     pub(crate) content_size: Size<Pixels>,
+    /// How far the absolutely positioned children reach from the element's origin.
+    pub(crate) positioned_extent: Size<Pixels>,
     pub(crate) key_context: Option<KeyContext>,
     pub(crate) focusable: bool,
     pub(crate) tracked_focus_handle: Option<FocusHandle>,
@@ -2858,7 +2887,13 @@ impl Interactivity {
                 scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
             }
 
-            let scroll_max = scroll_extent(self.content_size, bounds, style, window);
+            let scroll_max = scroll_extent(
+                self.content_size,
+                self.positioned_extent,
+                bounds,
+                style,
+                window,
+            );
             // Clamp scroll offset in case scroll max is smaller now (e.g., if children
             // were removed or the bounds became larger).
             let mut scroll_offset = scroll_offset.borrow_mut();
@@ -6178,6 +6213,110 @@ mod tests {
             .unwrap();
 
         assert_eq!(scroll_handle.max_offset().y, px(0.));
+    }
+
+    #[vespertine::test]
+    fn empty_padded_scroll_container_is_not_scrollable(cx: &mut TestAppContext) {
+        struct EmptyContainer {
+            scroll_handle: ScrollHandle,
+        }
+
+        impl Render for EmptyContainer {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(
+                    div()
+                        .id("container")
+                        .size(px(100.))
+                        .p(px(8.))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll_handle),
+                )
+            }
+        }
+
+        let scroll_handle = ScrollHandle::new();
+        let window: AnyWindowHandle = cx
+            .add_window({
+                let scroll_handle = scroll_handle.clone();
+                move |_, _| EmptyContainer { scroll_handle }
+            })
+            .into();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+
+        assert_eq!(scroll_handle.max_offset(), Point::default());
+    }
+
+    struct PaddedContainerWithAbsoluteChild {
+        scroll_handle: ScrollHandle,
+        absolute_child_height: crate::Length,
+    }
+
+    impl Render for PaddedContainerWithAbsoluteChild {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div()
+                    .id("container")
+                    .relative()
+                    .size(px(100.))
+                    .p(px(8.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .child(div().w_full().h(px(40.)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w_full()
+                            .h(self.absolute_child_height),
+                    ),
+            )
+        }
+    }
+
+    fn scroll_max_with_absolute_child(
+        absolute_child_height: crate::Length,
+        cx: &mut TestAppContext,
+    ) -> Point<Pixels> {
+        let scroll_handle = ScrollHandle::new();
+        let window: AnyWindowHandle = cx
+            .add_window({
+                let scroll_handle = scroll_handle.clone();
+                move |_, _| PaddedContainerWithAbsoluteChild {
+                    scroll_handle,
+                    absolute_child_height,
+                }
+            })
+            .into();
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        scroll_handle.max_offset()
+    }
+
+    #[vespertine::test]
+    fn absolute_child_filling_the_padding_box_does_not_make_a_padded_container_scrollable(
+        cx: &mut TestAppContext,
+    ) {
+        // An absolutely positioned child sized to 100% of its containing block fills the
+        // padding box exactly, so it creates no overflow.
+        assert_eq!(
+            scroll_max_with_absolute_child(crate::relative(1.).into(), cx),
+            Point::default()
+        );
+    }
+
+    #[vespertine::test]
+    fn absolute_child_overflowing_the_padding_box_scrolls_by_its_overflow(cx: &mut TestAppContext) {
+        // The 150px child ends 50px past the 100px padding box; the padding is not added.
+        assert_eq!(
+            scroll_max_with_absolute_child(px(150.).into(), cx),
+            point(px(0.), px(50.))
+        );
     }
 
     struct ContentSizedGrid;

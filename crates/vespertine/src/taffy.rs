@@ -1013,6 +1013,15 @@ impl TaffyLayoutEngine {
         self.taffy.get_node_context(self.node_of(id)).is_some()
     }
 
+    /// Whether the node is absolutely positioned, i.e. out of its parent's flow.
+    pub(crate) fn is_absolutely_positioned(&self, id: LayoutId) -> bool {
+        self.taffy
+            .style(self.node_of(id))
+            .expect(EXPECT_MESSAGE)
+            .position
+            == taffy::style::Position::Absolute
+    }
+
     /// Forces every style fingerprint to `fingerprint`, simulating collisions.
     #[cfg(test)]
     pub(crate) fn override_style_fingerprint(&mut self, fingerprint: Option<u64>) {

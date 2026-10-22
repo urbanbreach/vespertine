@@ -6927,6 +6927,14 @@ impl Window {
         bounds
     }
 
+    /// Whether the layout node is absolutely positioned, i.e. out of its parent's flow.
+    pub(crate) fn layout_is_absolutely_positioned(&self, layout_id: LayoutId) -> bool {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .is_absolutely_positioned(layout_id)
+    }
+
     /// Ends the layout frame: persistent layout nodes nothing claimed or kept alive are
     /// released, temporary nodes are released, and the layout key path starts over.
     pub(crate) fn layout_end_frame(&mut self) {
