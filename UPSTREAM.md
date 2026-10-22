@@ -114,8 +114,9 @@ source pin even when resolving the Linux build.
   browser threading/tracing features, and WebGL-specific instance transport.
 - Included only required font fixtures (Lilex and IBM Plex Sans under `assets/fonts/`),
   preserving their original licenses. Vespertine adds the six math faces bundled by
-  `vespertine_components` (`crates/vespertine_components/src/math/fonts/`); THIRD_PARTY.md
-  lists them with their licenses.
+  `vespertine_components` (`crates/vespertine_components/src/math/fonts/`) and the variable test
+  face `assets/fonts/test-sans-var/` (a renamed ASCII subset of IBM Plex Sans Var, as its Reserved
+  Font Name requires); THIRD_PARTY.md lists them with their licenses.
 - Preserved macOS/Windows tests, `windows-manifest`, and runtime Metal shaders.
 - Vendored taffy 0.13.0 under `third_party/taffy` (MIT; a path dependency rather than a
   `[patch.crates-io]` entry, so projects that depend on Vespertine build it too), changed in
@@ -126,14 +127,36 @@ source pin even when resolving the Linux build.
   size fixed. Its `Cargo.toml` also declares an empty `[workspace]`, so the crate is its own
   workspace root even when this checkout sits inside another workspace. Taffy 0.14 was not
   adopted because it changes flex/grid/block results.
-- Linux dispatcher timers (`vespertine_linux/src/linux/dispatcher.rs`) are kernel timers (`timerfd`)
-  armed by the calling thread and registered with the timer thread's epoll set, instead of messages
-  to a timer thread that arms them itself; `BackgroundExecutor::timer` completes on the thread that
+- Linux dispatcher timers (`vespertine_linux/src/linux/timers.rs`) are kept in one deadline queue
+  behind a single kernel timer (`timerfd`) registered with the timer thread's epoll set. The calling
+  thread arms that kernel timer itself whenever its deadline comes first, instead of sending a
+  message to a timer thread that arms it; `BackgroundExecutor::timer` completes on the thread that
   fires the timer (`Task::from_timer`) instead of on a background worker, except under the test
   scheduler. A timer therefore wakes one thread, the timer thread when it fires, instead of the
-  timer thread twice and a worker twice.
+  timer thread twice and a worker twice, and pending timers hold no file descriptor each.
   The desktop HTTP client's tokio runtime (`vespertine_reqwest_client`) is created by its first
   request instead of when the client is built.
+- The Linux text backend (`vespertine_wgpu/src/cosmic_text_system.rs`) gives a variable face one
+  font id per `wght` instance and passes that instance's variation coordinates to metrics, glyph
+  metrics and the scaler; upstream loads every face at `Weight::NORMAL` without coordinates.
+  `PlatformTextSystem` gains `shapes_ascii_words_independently` and `shapes_pairwise` (both `false`
+  by default; the Linux backend answers them from cosmic-text's per-segment shaping and the font's
+  own tables) so the shaping shortcuts run only where they are exact.
+- Text style and layout types carry letter spacing: `TextStyle::letter_spacing`,
+  `TextRun::letter_spacing`, `TextStyle::to_run(len, rem_size)`,
+  `LineWrapper::wrap_line_with_runs` and a `runs` parameter of `LineWrapper::should_truncate_line`;
+  `StyledText::with_default_highlights` builds its runs at layout time, when the rem size is known.
+  `Style` gains `backdrop_blur`, painted by `Style::paint` before shadows and background.
+- `App::set_text_rendering_mode` refreshes every window when the mode changes, and
+  `DispatchTree::available_actions` / `is_action_available` leave out handlers above a modal
+  scope, as dispatch does. `Window::focused_input_is_composing` reports whether the focused input
+  holds marked text.
+- The headless test context (`HeadlessAppContext`) keeps its test platform (`opened_urls()`) and
+  returns the application's own text system from `text_system()`, so fonts registered through it
+  reach its windows.
+- `UniformListScrollHandle::set_offset_from_scrollbar` sets an offset that retained list rows count
+  as scrolling; other programmatic offset changes leave an owner's notification to rebuild the
+  visible rows.
 - Removed features `vespertine_platform/multithreaded`,
   `vespertine_scheduler/wasm-threads`, and `vespertine_ztracing/web`.
 - Removed only these browser-transport tests:

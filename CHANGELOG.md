@@ -4,6 +4,132 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
+## Unreleased
+
+### Changed
+
+- `backdrop_blur(sigma)` is a style (RND-010): an element blurs what was painted behind it,
+  inside its bounds and corner radii, before its own shadows, background, children and border, so
+  a frosted panel no longer needs a hand-placed `canvas`. The `backdrop_blur` example uses it.
+- Backdrop blur follows opacity (RND-003, RND-010): a blur painted under an element opacity blends
+  linearly between the sharp and the blurred backdrop, with no blur at opacity 0 and unchanged
+  output at opacity 1. `BackdropBlur` scene records carry the opacity.
+- Letter spacing (TXT-010): the inherited text style property `letter_spacing`
+  (`Styled::letter_spacing`) takes px, rems or a fraction of the font size; negative values
+  tighten. It is added after every grapheme cluster except the last one of a line, and widths,
+  wrapping (`LineWrapper::wrap_line_with_runs`), truncation, hit testing, carets, selection and
+  painted glyphs follow it, in plain text and in `vespertine_richtext` (so in Markdown documents
+  too). `TextStyle::to_run` takes the rem size, `TextRun` has a `letter_spacing` field and
+  `LineWrapper::should_truncate_line` takes the runs.
+- Variable fonts render at the requested weight on Linux (TXT-011): a weight selects that point of
+  a variable face's `wght` axis, clamped to its range, for shaping, metrics and rasterization;
+  before, every weight rendered the default instance. Static faces are unchanged; `ital` and
+  `slnt` axes are not applied. The test face `assets/fonts/test-sans-var/` is an ASCII subset of
+  IBM Plex Sans Var, renamed "Vespertine Test Sans Var" as its license requires of modified
+  versions.
+- The appended-text and numeric shaping shortcuts are exact by construction (PRF-013, PRF-017):
+  they run only where the backend guarantees the result equals full shaping, and their sampled
+  validation, tolerances and disabled-size bookkeeping are gone. `PlatformTextSystem` gains
+  `shapes_ascii_words_independently` and `shapes_pairwise`, both `false` by default; the Linux
+  backend answers them from cosmic-text's per-segment shaping and from each font's own tables
+  (numbers in fonts with code ligatures or a legacy `kern` table keep full shaping). Streaming
+  keeps its speed. Median UI-thread CPU per frame against 0.2.0-alpha.1, interleaved runs on the
+  same machine in its power-saver profile: PERF-STREAM 3220 → 2977 µs and PERF-QUADS 6598 → 6667
+  µs (15 runs each); PERF-TEXT 3473 → 3464, PERF-LIST 1991 → 1996, PERF-FLEX 12208 → 12198 and
+  PERF-IDLE 2122 → 2151 µs (7 runs each), all within the run-to-run spread.
+- `MarkdownOptions::row_key` is an `Option`; without one, every document gets a key of its own
+  (CMP-011). `LinkOptions::navigation` replaces `navigation_allowed`, and `LinkActivation` carries
+  the resolved `navigation` address (TXT-008).
+- Dismissal layers belong to their owner (CMP-002): `LayerHandle` unregisters its layer when its
+  last clone drops, and `LayerRegistration`, `WeakLayerHandle`, `ESCAPE_OWNER_CONTEXT` and
+  `TabChip::track_close_focus` are new. `Window::focused_input_is_composing` reports marked text in
+  the focused input.
+- The picker's Retry is a focusable button, and the rebindable `Retry` action (Ctrl-R) presses the
+  visible one (CMP-006).
+- `HostElement` is generic over the element it wraps, and `HostNode::wrap` attaches a host node's
+  subscriptions and geometry reports to any leaf element (ELM-004). The test-support
+  `HeadlessAppContext` exposes `opened_urls()`.
+- The `svg()` docs say an SVG renders as a mask tinted by the text color and point to `img()` for
+  SVGs that keep their colors.
+
+### Fixed
+
+- Retained frames (PRF-001, PLT-002): a global change rebuilds the views that read it in every
+  window, not only in the first one drawn. Views nested in a group keep group hover and active
+  styling, and controls in a disabled group stay disabled, when their own view is rebuilt alone.
+  Present callbacks of later views are no longer lost or duplicated when a spliced view changes how
+  many it registers. Changing the text rendering mode redraws every window.
+- Fonts registered after text is on screen are used by that text without its string changing:
+  carried text measurements and retained replay follow the font generation (TXT-003).
+  `TestHost::register_font` registers with the text system its window renders with (DEV-006).
+- Scroll layers (PRF-004): cached tiles show images updated in place and a changed scroller
+  background, and a layer whose owner is nested in a replayed view shows the current offset when
+  it is wheeled past its recorded region, instead of the previous frame.
+- Retained list rows (PRF-005) rebuild when their owner is notified after a programmatic scroll
+  (`set_offset`, `scroll_by`, `scroll_to`, ...), so data changed in the same frame shows instead
+  of stale rows; only offsets set through a scrollbar setter count as scrolling (new
+  `UniformListScrollHandle::set_offset_from_scrollbar`), and a wheel step is no longer counted
+  twice. A programmatic scroll with a notification now rebuilds the visible rows: in `vsp-bench`
+  (release, mean UI-thread CPU per frame, retention on) `list-uniform-scroll` went from 0.31 to
+  0.48 ms and `list-uniform-live` from 0.31 to 0.62 ms, the latter having shown stale rows before.
+- Two layout styles that differ only in their last enum fields no longer share a fingerprint, so
+  a changed style is always applied in release builds (LAY-001). Clearing a trailing viewport
+  reservation after walking up a row-retained list leaves no extra scroll extent (LAY-002).
+- Panes (LAY-004): closing panes take no keyboard input, focus or accessibility actions; enabling
+  reduced motion settles running slot transitions at once; a route glide that starts after an idle
+  period starts from rest instead of jumping. A pane focus restore no longer takes focus from a
+  dialog focused before the next frame (INP-007).
+- Floating positions, gaps, offsets and snap margins too large for `f32` pixels fall back to the
+  defaults instead of producing NaN placement (LAY-005). Changing the motion preference while the
+  system asks for reduced motion switches activity indicators at once (ANM-004). Restoring a window
+  whose minimum size exceeds the work area keeps its titlebar on screen (PLT-008).
+- Dark file-icon palette remapping no longer panics on SVG text with non-ASCII characters.
+- Accessibility and input: retained host nodes with a click listener expose an accessible Click
+  action (INP-006); a queued screen-reader focus request no longer focuses an element that became
+  inert; action-availability queries leave out handlers above a modal scope, so menus and command
+  palettes no longer offer blocked actions (CMP-003); host `img` and `svg` nodes keep their role,
+  `aria-*` properties, hover and active styles and listeners (ELM-004).
+- Linux: pending timers share one deadline queue instead of holding a file descriptor each, so
+  many long timers can no longer exhaust descriptors. On X11, text a legacy owner answers as
+  Latin-1 `STRING` pastes again (PLT-009). `vespertine_linux`, and so `cargo test -p
+  vespertine_test_host`, builds without the `wayland` and `x11` features.
+- Composition surfaces (PLT-001): dropping or removing a surface also removes surfaces only its
+  handlers owned; surfaces with only a wheel handler receive scroll events; a second button
+  pressed during a press goes to the surface that owns the press; files dropped on an overlay
+  surface reach the owning window (in window coordinates on Wayland, through the overlay window on
+  X11).
+- Markdown (CMP-011, CMP-013): messages under one text root keep their own selectable text, so
+  selection and copy work across a transcript; a document that stops streaming shows its
+  canonical text instead of the auto-closed repair; task markers of loose list items render; while
+  streaming, an unfinished code fence inside a quote or list gains no repair characters and
+  reference links render resolved; nested Mermaid fences get distinct frame ids.
+- Text editing: a composition that completes a file mention keeps the typed prefix (CMP-010); word
+  movement keeps a full stop with its combining marks, ending a composition leaves the caret on a
+  grapheme boundary, and an edit after an interrupted composition is its own undo step (CMP-007);
+  Enter during a composition in the picker query no longer activates a row, and paging resumes
+  after an indexing refresh and for lists shorter than the viewport (CMP-006); a select disabled
+  while open no longer commits, and option tooltips show (CMP-005); assistive technology can
+  increment, decrement and set a slider (CMP-001).
+- Floating and chrome: releasing an open dialog, menu or focus tooltip without closing it no
+  longer leaves a layer that swallows every later Escape, and Escape stays with an input that is
+  composing and with a review draft inside a dialog (CMP-002, CMP-003, CMP-028); a hover card
+  hides on Escape before the layer below it (CMP-004); the popup menu trigger is a tab stop
+  (CMP-002); keyboard users can close and add tabs, and closing one moves focus to a surviving tab
+  (CMP-017); a toast swipe that leaves the card still dismisses it (CMP-018); Enter or Space
+  activates a status action once, badge actions are keyboard-operable, and focus rings no longer
+  change a button's size (CMP-023, CMP-028).
+- Diffs, code and trees: git-quoted target paths show unquoted and match their documents; a new
+  patch or a wider viewer no longer leaves code panned out of view; a click on the old side of a
+  split row reports the old line; a reversed file fold turns around at its current height
+  (CMP-015). Unchanged code blocks keep their highlight instead of looking it up every frame
+  (CMP-014). Revealing a tree entry hidden by the ignored filter reports it missing (CMP-016).
+- Rich text: links open the address their policy resolved, so relative file links open under
+  their root; releasing on a neighboring link activates neither; an Escape-dismissed disclosure
+  stays dismissed while other links are visited (TXT-008). Explicit ranges and query matches are
+  never both active (TXT-009). A cached highlight is never served past a stricter span limit
+  (TXT-007).
+- Duplicating a theme as editable never overwrites the file of a removed copy (THM-004).
+
 ## 0.2.0-alpha.1 - 2026-10-22
 
 The first public release, an early alpha: the API changes between releases without deprecation.
