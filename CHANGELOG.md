@@ -4,7 +4,12 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
-## Unreleased
+## 0.2.0-alpha.2 - 2026-10-22
+
+The second early alpha. It fixes the defects a code audit found in retained frames, layout, input,
+accessibility, the Linux platform and the components, adds letter spacing, variable-font weights on
+Linux and an element-level backdrop blur, and makes the streaming shaping shortcuts exact. Every
+crate and JavaScript package carries `0.2.0-alpha.2`.
 
 ### Changed
 

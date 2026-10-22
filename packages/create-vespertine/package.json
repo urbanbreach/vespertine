@@ -1,6 +1,6 @@
 {
   "name": "create-vespertine",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "description": "Creates a new Vespertine project from the published starter",
   "license": "Apache-2.0",
   "type": "module",
