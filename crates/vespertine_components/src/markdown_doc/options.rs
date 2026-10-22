@@ -73,7 +73,8 @@ pub struct MarkdownOptions {
     /// The theme.
     pub theme: DocumentTheme,
     /// A stable prefix for element identifiers. `None` (the default) uses a key unique to the
-    /// rendered document, so documents sharing a text root keep distinct selection keys.
+    /// rendered document and the view, so documents and views sharing a text root keep distinct
+    /// selection keys.
     pub row_key: Option<SharedString>,
     /// Link routing and policy.
     pub link_options: LinkOptions,

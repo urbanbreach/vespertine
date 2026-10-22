@@ -415,6 +415,23 @@ fn a7_a_drag_selects_across_documents_with_default_keys() {
     assert_eq!(text.as_deref(), Some("alpha text\nbeta text"));
 }
 
+#[test]
+fn a7_a_drag_selects_across_two_views_of_one_document_with_default_keys() {
+    require_backend!();
+    let shared = MarkdownDocument::from_source("alpha text");
+    let mut host = host(400., 200., move || {
+        div()
+            .p(px(10.))
+            .flex()
+            .flex_col()
+            .child(Markdown::document("upper", shared.clone()))
+            .child(Markdown::document("lower", shared.clone()))
+            .into_any_element()
+    });
+    let text = docs_support::drag(&mut host, (11., 20.), (300., 43.));
+    assert_eq!(text.as_deref(), Some("alpha text\nalpha text"));
+}
+
 fn service_text(host: &mut TestHost) -> Option<String> {
     docs_support::service(host).selected_text()
 }

@@ -28,7 +28,7 @@ pub struct Ctx<'a> {
     pub top: usize,
     /// Whether this is the last top-level block (the streaming fade applies to it).
     pub last: bool,
-    /// The row key (the view fills an absent one with its document's key).
+    /// The row key (the view fills an absent one with its document's and its own key).
     row_key: SharedString,
     elem: Cell<usize>,
 }

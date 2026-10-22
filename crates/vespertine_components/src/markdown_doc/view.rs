@@ -39,7 +39,7 @@ struct Inner {
     key: DocumentKey,
 }
 
-/// A row key unique to one document: the default row key of its views.
+/// A key unique to one document: the default row key of its views starts with it.
 struct DocumentKey(SharedString);
 
 impl Default for DocumentKey {
@@ -244,7 +244,8 @@ impl Markdown {
         self
     }
 
-    /// A stable prefix for element identifiers (defaults to a key unique to the document).
+    /// A stable prefix for element identifiers (defaults to a key unique to the document and
+    /// this view).
     pub fn row_key(mut self, key: impl Into<SharedString>) -> Self {
         self.options.row_key = Some(key.into());
         self
@@ -302,7 +303,12 @@ impl RenderOnce for Markdown {
         let (blocks, generations) = document.display_blocks(self.options.streaming);
         let mut options = self.options.clone();
         if options.row_key.is_none() {
-            options.row_key = Some(document.inner.borrow().key.0.clone());
+            // The document's key alone is shared by every view of the document; the view's
+            // global element id tells views of one document apart under one text root.
+            let document_key = document.inner.borrow().key.0.clone();
+            options.row_key = Some(window.with_global_id(self.id.clone(), |view, _| {
+                format!("{document_key}@{view}").into()
+            }));
         }
         options.cache = Some(document.flatten_cache());
         options.generations = generations;
