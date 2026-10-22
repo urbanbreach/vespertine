@@ -1051,9 +1051,14 @@ impl CosmicTextSystemState {
                 continue;
             }
 
+            // The offsets are in ems and point up; they move the glyph's drawing from its pen
+            // position (marks onto their base, for one), as in `LayoutGlyph::physical`.
             let shaped_glyph = ShapedGlyph {
                 id: GlyphId(glyph.glyph_id as u32),
-                position: point(glyph.x.into(), glyph.y.into()),
+                position: point(
+                    (glyph.x + glyph.font_size * glyph.x_offset).into(),
+                    (glyph.y - glyph.font_size * glyph.y_offset).into(),
+                ),
                 index: glyph.start,
                 is_emoji,
             };
@@ -1872,6 +1877,64 @@ mod tests {
             assert!(layout.width > Pixels::ZERO, "{text:?}");
         }
 
+        Ok(())
+    }
+
+    /// The ink of each glyph of `text` at 40 px, in line coordinates: `(left, top, right, bottom)`
+    /// with y growing down from the baseline.
+    fn glyph_ink(text_system: &CosmicTextSystem, text: &str) -> Result<Vec<[f32; 4]>> {
+        let font_id = text_system.font_id(&vespertine::font("IBM Plex Sans"))?;
+        let runs = [FontRun {
+            len: text.len(),
+            font_id,
+        }];
+        let layout = text_system.layout_line(text, vespertine::px(40.0), &runs);
+        let mut ink = Vec::new();
+        for run in &layout.runs {
+            for glyph in &run.glyphs {
+                let bounds = text_system.glyph_raster_bounds(&RenderGlyphParams {
+                    font_id: run.font_id,
+                    glyph_id: glyph.id,
+                    font_size: layout.font_size,
+                    subpixel_variant: Default::default(),
+                    scale_factor: 1.0,
+                    is_emoji: false,
+                    subpixel_rendering: false,
+                    dilation: 0,
+                })?;
+                let left = f32::from(glyph.position.x) + bounds.origin.x.0 as f32;
+                let top = f32::from(glyph.position.y) + bounds.origin.y.0 as f32;
+                ink.push([
+                    left,
+                    top,
+                    left + bounds.size.width.0 as f32,
+                    top + bounds.size.height.0 as f32,
+                ]);
+            }
+        }
+        Ok(ink)
+    }
+
+    /// Combining marks are placed by the font's mark positioning: the shaper moves each mark
+    /// by its own offset from the pen position, horizontally over its base and vertically
+    /// clear of a tall one.
+    #[test]
+    fn combining_marks_are_drawn_at_their_shaped_offsets() -> Result<()> {
+        let text_system = text_system()?;
+        let center = |ink: [f32; 4]| (ink[0] + ink[2]) / 2.0;
+
+        // A macron over a symmetric base is centered on it.
+        let ink = glyph_ink(&text_system, "x\u{304}")?;
+        assert_eq!(ink.len(), 2, "{ink:?}");
+        assert!(
+            (center(ink[1]) - center(ink[0])).abs() <= 1.5,
+            "base and mark ink: {ink:?}"
+        );
+
+        // A ring above a capital is raised clear of it.
+        let ink = glyph_ink(&text_system, "Q\u{30a}")?;
+        assert_eq!(ink.len(), 2, "{ink:?}");
+        assert!(ink[1][3] <= ink[0][1], "base and mark ink: {ink:?}");
         Ok(())
     }
 

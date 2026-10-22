@@ -93,10 +93,22 @@ fn assert_same_up_to_rounding(actual: &LineLayout, expected: &LineLayout, text: 
     }
 }
 
-/// Words with kerning pairs, ligatures and code ligatures on both sides of every junction.
-const WORDS: [&str; 12] = [
-    "AVATAR", "office", "Wave", "To", "fiord", "x->y", "a==b", "Lorem", "ipsum", "Yacht", "ffl",
+/// Words with kerning pairs, ligatures, code ligatures and combining marks (drawn at their own
+/// offsets) on both sides of every junction.
+const WORDS: [&str; 13] = [
+    "AVATAR",
+    "office",
+    "Wave",
+    "To",
+    "fiord",
+    "x->y",
+    "a==b",
+    "Lorem",
+    "ipsum",
+    "Yacht",
+    "ffl",
     "T.V.",
+    "Q\u{30a}x\u{304}",
 ];
 
 #[test]
