@@ -297,20 +297,75 @@ fn controls_a4_disabled_group_reaches_a_nested_view_built_on_its_own() {
     host.flush();
     assert_eq!(resolved.get(), Some(true), "the rebuilt button is disabled");
 
-    // Only the group changes.
-    resolved.set(None);
-    host.app().update(|cx| {
-        form.update(cx, |form, cx| {
-            form.disabled = false;
-            cx.notify();
-        })
-    });
+    // Only the group changes, each way.
+    for disabled in [false, true] {
+        resolved.set(None);
+        host.app().update(|cx| {
+            form.update(cx, |form, cx| {
+                form.disabled = disabled;
+                cx.notify();
+            })
+        });
+        host.flush();
+        assert_eq!(
+            resolved.get(),
+            Some(disabled),
+            "the button is rendered again with its group"
+        );
+    }
+}
+
+/// A disabled group that is built again unchanged replays the views nested in it.
+#[test]
+fn controls_a4_unchanged_disabled_group_replays_its_nested_views() {
+    use vespertine::AppContext as _;
+    require_backend!();
+    let resolved = Rc::new(Cell::new(None));
+    let form = Rc::new(std::cell::RefCell::new(None));
+    let mut host = vespertine_test_host::TestHost::with_view(
+        vespertine_test_host::HostOptions {
+            complete_frames: false,
+            ..vespertine_test_host::HostOptions::with_size(300.0, 120.0)
+        },
+        {
+            let (resolved, form) = (resolved.clone(), form.clone());
+            move |_, cx| {
+                let button = cx.new(|_| GroupedButton {
+                    resolved,
+                    label: "Alpha",
+                });
+                let view = cx.new(|_| DisabledForm {
+                    disabled: true,
+                    button,
+                });
+                *form.borrow_mut() = Some(view.clone());
+                view
+            }
+        },
+    )
+    .unwrap();
+    let form = form.borrow_mut().take().unwrap();
+    let rebuild_form = |host: &mut vespertine_test_host::TestHost| {
+        host.app().update(|cx| form.update(cx, |_, cx| cx.notify()));
+        host.flush();
+    };
     host.flush();
-    assert_eq!(
-        resolved.get(),
-        Some(false),
-        "the button is rendered again, enabled with its group"
-    );
+    assert_eq!(resolved.get(), Some(true));
+    // The control state the button creates on its first render is newer than that render, so
+    // the button's view is built once more the first time its parent is.
+    rebuild_form(&mut host);
+
+    for frame in 0..3 {
+        resolved.set(None);
+        rebuild_form(&mut host);
+        assert_eq!(
+            resolved.get(),
+            None,
+            "frame {frame}: the button's view is replayed inside its unchanged group"
+        );
+    }
+    let button = node(&mut host, "button", Some("Alpha"));
+    assert!(button.disabled(), "the replayed button stays disabled");
 }
 
 #[test]

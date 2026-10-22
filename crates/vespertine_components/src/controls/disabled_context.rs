@@ -8,29 +8,49 @@
 //! disabled_group(form_locked, div().child(Button::new("save")).child(Switch::new("auto")))
 //! ```
 //!
-//! The context exists while the group lays out its subtree, which is when component children
-//! render, so it applies to every control built lazily inside the group (including controls
-//! inside nested components and views). A control reads it once, at render time, and keeps the
-//! result for the frame; nothing is read during paint.
+//! The context exists while the group lays out and prepaints its subtree, which is when
+//! component children and nested views render, so it applies to every control built lazily
+//! inside the group (including controls inside nested components and views). A control reads it
+//! once, at render time, and keeps the result for the frame; nothing is read during paint.
+
+use std::cell::Cell;
 
 use vespertine::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, Window,
 };
 
-/// Number of enclosing disabled groups of the subtree currently being laid out.
-#[derive(Default)]
-struct DisabledDepth(usize);
-
-impl vespertine::Global for DisabledDepth {}
+thread_local! {
+    /// Number of enclosing disabled groups of the subtree being laid out or prepainted.
+    ///
+    /// The count is scoped to a group's own layout and prepaint calls, so it is not state that
+    /// changes between frames, and it is not an app global: a global write would mark every
+    /// view nested in the group as reading changed state, so they would be built again
+    /// whenever the group is instead of replayed. The views' dependency on the group is carried
+    /// by the group's retention context and whole-view rebuild instead (see [`DisabledGroup`]).
+    static DISABLED_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
 
 /// The retention context token of the subtree of a disabled group.
 const DISABLED_CONTEXT: u64 = 0x6469_7361_626c_6564;
 
-/// Whether the subtree being laid out sits inside a disabled control group.
-pub fn group_disabled(cx: &App) -> bool {
-    cx.try_global::<DisabledDepth>()
-        .is_some_and(|depth| depth.0 > 0)
+/// Whether the subtree being rendered sits inside a disabled control group. `cx` is the context
+/// the control renders with.
+pub fn group_disabled(_cx: &App) -> bool {
+    DISABLED_DEPTH.get() > 0
+}
+
+/// Runs `f` inside one more disabled group, restoring the depth even if `f` unwinds.
+fn in_disabled_group<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DISABLED_DEPTH.set(DISABLED_DEPTH.get() - 1);
+        }
+    }
+    DISABLED_DEPTH.set(DISABLED_DEPTH.get() + 1);
+    let _restore = Restore;
+    f()
 }
 
 /// Whether a control whose own disabled flag is `own` is effectively disabled: it or an
@@ -86,13 +106,15 @@ impl Element for DisabledGroup {
             return (self.child.request_layout(window, cx), ());
         }
         // Views nested in the group read the context while they render. They are built together
-        // with the group, never on their own around it, and replayed only inside a disabled group.
+        // with the group, never on their own around it, and replayed only inside a disabled
+        // group: the retention context is compared when a view is prepainted, and a view whose
+        // context changed is rendered again there, so prepaint runs inside the group too.
         window.require_whole_view_rebuild();
-        cx.default_global::<DisabledDepth>().0 += 1;
-        let layout_id = window.with_retention_context(DISABLED_CONTEXT, |window| {
-            self.child.request_layout(window, cx)
+        let layout_id = in_disabled_group(|| {
+            window.with_retention_context(DISABLED_CONTEXT, |window| {
+                self.child.request_layout(window, cx)
+            })
         });
-        cx.default_global::<DisabledDepth>().0 -= 1;
         (layout_id, ())
     }
 
@@ -105,7 +127,14 @@ impl Element for DisabledGroup {
         window: &mut Window,
         app: &mut App,
     ) {
-        self.child.prepaint(window, app);
+        if !self.disabled {
+            self.child.prepaint(window, app);
+            return;
+        }
+        in_disabled_group(|| {
+            window
+                .with_retention_context(DISABLED_CONTEXT, |window| self.child.prepaint(window, app))
+        });
     }
 
     fn paint(
