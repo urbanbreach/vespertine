@@ -534,7 +534,7 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets whether the element dims while another control has keyboard focus.
+    /// Sets whether the element dims while another control (a tab stop) has keyboard focus.
     /// Enabled by default; the flag is not inherited.
     fn keyboard_focus_dim(mut self, enabled: bool) -> Self {
         self.style().keyboard_focus_dim = Some(enabled);

@@ -65,6 +65,12 @@ with the tests and examples that verify each one. In summary:
 - Image fitting with element-space rounded corners, asynchronous images and media hosts,
   color-preserving vector icons, cached source-space image treatments, serializable layout and
   interactive styling, persistent custom-element adapters, and layout-neutral outlines.
+- A keyboard-focus dim (ELM-006), on by default: while a tab stop has keyboard focus, every
+  focusable element that does not contain it is drawn at 40% opacity. A view that tracks focus only
+  for its actions and key bindings is not a tab stop and dims nothing. The `keyboard_focus_dim`
+  field of `WindowOptions`, `Window::set_keyboard_focus_dim_enabled` and the `keyboardFocusDim`
+  option of the React and Solid roots switch it off for a window; the `keyboard_focus_dim(false)`
+  style (`keyboardFocusDim: false` in a host style) switches it off for one element.
 - Native declarative motion with retargeting and interruption, and presence management with
   exit-animation completion.
 

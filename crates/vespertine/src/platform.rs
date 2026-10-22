@@ -3051,7 +3051,9 @@ pub struct WindowOptions {
     /// Whether to render the window using the Display P3 color space on macOS.
     pub use_display_p3: bool,
 
-    /// Whether focusable elements dim while another control has keyboard focus (ELM-006 R20).
+    /// Whether focusable elements dim while another control has keyboard focus (ELM-006 R20):
+    /// while a tab stop has focus from the keyboard, every focusable element off the focus path is
+    /// drawn at 40% opacity (see [`Window::keyboard_focus_dim_active`]).
     /// Enabled by default; individual elements opt out with the `keyboard_focus_dim` style flag.
     pub keyboard_focus_dim: bool,
 }

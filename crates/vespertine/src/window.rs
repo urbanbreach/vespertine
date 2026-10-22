@@ -3963,9 +3963,15 @@ impl Window {
     /// Whether the keyboard-focus dim is in effect right now: the feature is enabled, a control
     /// has focus, the most recent input was from the keyboard, and the focused control is not a
     /// text editor (so typing never dims the rest of the window).
+    ///
+    /// A control is a tab stop of the most recently rendered frame. An element that tracks focus
+    /// without being a tab stop (a view or pane holding focus for its actions and key bindings)
+    /// dims nothing while it is focused, and neither does focus on an element that is not mounted.
     pub fn keyboard_focus_dim_active(&self) -> bool {
         self.keyboard_focus_dim_enabled
-            && self.focus.is_some()
+            && self
+                .focus
+                .is_some_and(|focus| self.rendered_frame.tab_stops.is_tab_stop(&focus))
             && self.last_input_was_keyboard()
             && self.focused_text_input != self.focus
     }

@@ -2,9 +2,10 @@
 //!
 //! Press Tab: the focused control shows its focus-visible outline and every other focusable
 //! control is multiplied by an opacity of 0.4. Clicking a control focuses it without dimming
-//! anything and without showing the outline. Focusing the text field and typing dims nothing.
-//! The "Third" control opts out with `keyboardFocusDim: false`, and the "Dim" toggle switches
-//! the window option off and on. Layout never changes.
+//! anything and without showing the outline. Focusing the text field and typing dims nothing, and
+//! neither does typing while the window's root view holds focus: it tracks focus for its actions
+//! but is not a tab stop. The "Third" control opts out with `keyboardFocusDim: false`, and the
+//! "Dim" toggle switches the window option off and on. Layout never changes.
 
 #[path = "example_support/fonts.rs"]
 mod example_support;

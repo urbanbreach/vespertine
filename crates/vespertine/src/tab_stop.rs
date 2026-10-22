@@ -283,6 +283,11 @@ impl TabStopMap {
         self.by_id.values().filter(|node| node.tab_stop).count()
     }
 
+    /// Whether `focus_id` was registered as a tab stop (not merely as a focusable element).
+    pub(crate) fn is_tab_stop(&self, focus_id: &FocusId) -> bool {
+        self.by_id.get(focus_id).is_some_and(|node| node.tab_stop)
+    }
+
     fn focus_handle_for_order(&self, order: &TabStopNode) -> Option<FocusHandle> {
         let handle = self.insertion_history[order.node_insertion_index].focus_handle();
         debug_assert!(

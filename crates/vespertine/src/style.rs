@@ -335,7 +335,8 @@ pub struct Style {
     /// The mouse hit policy of this element. `None` keeps the upstream behavior.
     pub pointer_events: Option<PointerEvents>,
 
-    /// Whether this element dims while another control has keyboard focus. Not inherited.
+    /// Whether this element dims while another control (a tab stop) has keyboard focus. Not
+    /// inherited.
     pub keyboard_focus_dim: bool,
 
     /// Whether to draw a red debugging outline around this element

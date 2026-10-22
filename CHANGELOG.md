@@ -4,6 +4,14 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
+## Unreleased
+
+### Fixed
+
+- The keyboard-focus dim (ELM-006) applies only while a tab stop has keyboard focus. A view or
+  pane that tracks focus for its actions and key bindings, or focus left on an element that is
+  no longer mounted, no longer dims every control after the first key press.
+
 ## 0.2.0-alpha.2 - 2026-10-22
 
 The second early alpha. It fixes the defects a code audit found in retained frames, layout, input,

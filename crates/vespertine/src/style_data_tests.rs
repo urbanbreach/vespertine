@@ -1167,6 +1167,8 @@ fn text_properties_cascade_and_text_hosts_accept_layout_styles(cx: &mut TestAppC
 // ----------------------------------------------------------------------------------------
 
 struct DimView {
+    /// The view's own focus: a container that is not a tab stop (it holds focus for key handling).
+    root: FocusHandle,
     controls: Vec<(FocusHandle, HostStyle)>,
     editor: FocusHandle,
     editor_style: HostStyle,
@@ -1176,7 +1178,13 @@ impl Render for DimView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let editor_focus = self.editor.clone();
-        let mut row = div().size_full().flex().flex_row().gap(px(12.)).p(px(24.));
+        let mut row = div()
+            .size_full()
+            .track_focus(&self.root)
+            .flex()
+            .flex_row()
+            .gap(px(12.))
+            .p(px(24.));
         for (index, (handle, style)) in self.controls.iter().enumerate() {
             let selector: &'static str = ["c0", "c1", "c2"][index];
             let id: SharedString = selector.into();
@@ -1293,6 +1301,7 @@ fn control_style(extra: Value) -> HostStyle {
 struct DimHarness {
     cx: TestAppContext,
     window: AnyWindowHandle,
+    root: FocusHandle,
     handles: Vec<FocusHandle>,
     editor: FocusHandle,
 }
@@ -1303,6 +1312,7 @@ impl DimHarness {
         let handles: Vec<FocusHandle> = (0..3)
             .map(|_| cx.update(|cx| cx.focus_handle().tab_stop(true)))
             .collect();
+        let root = cx.update(|cx| cx.focus_handle());
         let editor = cx.update(|cx| cx.focus_handle());
         let window = cx.add_window({
             let controls: Vec<(FocusHandle, HostStyle)> = handles
@@ -1318,8 +1328,10 @@ impl DimHarness {
                     (handle, style)
                 })
                 .collect();
+            let root = root.clone();
             let editor = editor.clone();
             move |_, _| DimView {
+                root,
                 controls,
                 editor,
                 editor_style: control_style(json!({ "width": 100, "backgroundColor": "#101010" })),
@@ -1328,6 +1340,7 @@ impl DimHarness {
         let mut harness = Self {
             cx,
             window: window.into(),
+            root,
             handles,
             editor,
         };
@@ -1544,6 +1557,19 @@ fn focused_text_editor_dims_nothing(_cx: &mut TestAppContext) {
     assert_opacities(h.opacities(), [1., 0.4, 0.4]);
     h.focus(&h.editor.clone());
     assert_opacities(h.opacities(), [1., 1., 1.]);
+}
+
+/// A4: a focused container that is not a tab stop (a view holding focus for its actions and key
+/// bindings) does not count as keyboard focus either; tabbing from it to a control starts the dim.
+#[vespertine::test]
+fn focused_container_that_is_not_a_tab_stop_dims_nothing(_cx: &mut TestAppContext) {
+    let mut h = DimHarness::new(json!({}));
+    h.focus(&h.root.clone());
+    h.key_press("a");
+    assert_opacities(h.opacities(), [1., 1., 1.]);
+    h.tab();
+    assert!(h.handles[0].is_focused_in(&mut h.cx, h.window));
+    assert_opacities(h.opacities(), [1., 0.4, 0.4]);
 }
 
 /// A4: a per-element opt-out stays at full opacity, and the window option switches the dim off.
