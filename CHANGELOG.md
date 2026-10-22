@@ -6,6 +6,13 @@ and examples that verify each one.
 
 ## Unreleased
 
+### Changed
+
+- `docs/key_dispatch.md` and the docs of `Context::on_focus_lost` and
+  `Window::focus_lost_restore_target` explain that focus stays on an element that unmounted, so
+  dispatch starts at the root, and how a focus-lost listener moves focus to the closest
+  focusable ancestor instead (INP-007).
+
 ### Fixed
 
 - The keyboard-focus dim (ELM-006) applies only while a tab stop has keyboard focus. A view or

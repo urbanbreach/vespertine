@@ -633,6 +633,11 @@ impl<'a, T: 'static> Context<'a, T> {
     /// This typically happens when the node that was focused is removed from the tree,
     /// and this callback lets you chose a default place to restore the users focus.
     /// Returns a subscription and persists until the subscription is dropped.
+    ///
+    /// The window does not move focus by itself: until an element is focused again, key events
+    /// and actions dispatch from the root element only, so the key contexts and listeners below
+    /// it receive nothing. [`Window::focus_lost_restore_target`] names the closest focusable
+    /// ancestor of the element that went away (see `docs/key_dispatch.md`).
     pub fn on_focus_lost(
         &mut self,
         window: &mut Window,

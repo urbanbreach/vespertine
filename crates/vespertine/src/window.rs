@@ -2757,6 +2757,10 @@ impl Window {
     /// While focus-lost listeners are being dispatched, returns the closest ancestor of the
     /// previously focused element that can still receive focus, making it a suitable target
     /// for focus restoration. Returns `None` at all other times, or when no such ancestor exists.
+    ///
+    /// Focus it from a [`Context::on_focus_lost`](crate::Context::on_focus_lost) listener so that
+    /// the key contexts and listeners of that ancestor keep receiving input after the focused
+    /// element unmounts.
     pub fn focus_lost_restore_target(&self, cx: &App) -> Option<FocusHandle> {
         let (_leaf, ancestors) = self.focus_lost_path.split_last()?;
         ancestors.iter().rev().find_map(|id| {

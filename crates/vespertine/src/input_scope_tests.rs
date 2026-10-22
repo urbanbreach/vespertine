@@ -139,6 +139,72 @@ fn restore_focus_never_focuses_a_dropped_handle(cx: &mut TestAppContext) {
     assert_eq!(focused_id(cx), Some(root.id()));
 }
 
+/// A pane with a key listener and a focusable child that can unmount.
+struct FocusLostView {
+    pane: FocusHandle,
+    child: FocusHandle,
+    child_mounted: bool,
+    keys: Rc<Cell<u32>>,
+}
+
+impl Render for FocusLostView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let keys = self.keys.clone();
+        div().size_full().child(
+            div()
+                .size_full()
+                .track_focus(&self.pane)
+                .on_key_down(move |_: &KeyDownEvent, _, _| keys.set(keys.get() + 1))
+                .when(self.child_mounted, |pane| {
+                    pane.child(div().size(px(20.)).track_focus(&self.child))
+                }),
+        )
+    }
+}
+
+/// The recovery documented in `docs/key_dispatch.md`: a focus-lost listener that focuses
+/// `focus_lost_restore_target` keeps the pane receiving keys once its focused child unmounts.
+#[crate::test]
+fn focus_lost_listener_restores_key_dispatch_through_the_closest_mounted_ancestor(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        cx.on_focus_lost(window, |_, window, cx| {
+            if let Some(target) = window.focus_lost_restore_target(cx) {
+                window.focus(&target, cx);
+            }
+        })
+        .detach();
+        FocusLostView {
+            pane: cx.focus_handle(),
+            child: cx.focus_handle(),
+            child_mounted: true,
+            keys: Rc::default(),
+        }
+    });
+    let (pane, child, keys) = view.read_with(cx, |view, _| {
+        (view.pane.clone(), view.child.clone(), view.keys.clone())
+    });
+    focus_and_draw(cx, &child);
+    cx.simulate_keystrokes("a");
+    assert_eq!(keys.get(), 1, "the focused child's pane receives keys");
+
+    view.update(cx, |view, cx| {
+        view.child_mounted = false;
+        cx.notify();
+    });
+    draw(cx);
+    assert_eq!(
+        focused_id(cx),
+        Some(pane.id()),
+        "focus moved to the closest mounted ancestor"
+    );
+    cx.simulate_keystrokes("a");
+    assert_eq!(keys.get(), 2, "the pane receives keys again");
+    // The target is only answered while focus-lost listeners run.
+    cx.update(|window, cx| assert!(window.focus_lost_restore_target(cx).is_none()));
+}
+
 struct ScopeView {
     scope: FocusHandle,
     input: FocusHandle,

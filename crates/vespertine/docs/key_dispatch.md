@@ -98,3 +98,38 @@ If you had opted for the more complex type definition, you'd provide the seriali
   }
 }
 ```
+
+## Where dispatch starts, and losing focus
+
+Key events and actions dispatch along the path from the focused element (one that tracks a focus
+handle, `track_focus`) up to the root of the window. The key contexts on that path select the
+bindings, and the `on_action` and `on_key_down` listeners on it receive the event.
+
+When the focused element leaves the element tree (an inline editor commits and unmounts, a popover
+closes), the window's focus keeps pointing at it and dispatch starts at the root element instead:
+the key contexts and listeners of every element below the root stop receiving input until an
+element is focused again. The framework does not move focus by itself, as in upstream GPUI.
+Register a focus-lost listener once, on a view near the root, that focuses the closest focusable
+ancestor the element had, or the view itself:
+
+```rust
+impl Workspace {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.on_focus_lost(window, |this, window, cx| {
+            let target = window
+                .focus_lost_restore_target(cx)
+                .unwrap_or_else(|| this.focus_handle.clone());
+            window.focus(&target, cx);
+        })
+        .detach();
+        Self {
+            focus_handle: cx.focus_handle(),
+        }
+    }
+}
+```
+
+`Window::focus_lost_restore_target` answers only while focus-lost listeners run. Give every
+element whose key context or listeners must keep working (a pane, a list) a focus handle with
+`track_focus`, so that it can become that target; the view's own handle must be tracked by its
+root element.
