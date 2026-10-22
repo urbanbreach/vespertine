@@ -138,22 +138,33 @@ source pin even when resolving the Linux build.
   request instead of when the client is built.
 - The Linux text backend (`vespertine_wgpu/src/cosmic_text_system.rs`) gives a variable face one
   font id per `wght` instance and passes that instance's variation coordinates to metrics, glyph
-  metrics and the scaler; upstream loads every face at `Weight::NORMAL` without coordinates.
-  `PlatformTextSystem` gains `shapes_ascii_words_independently` and `shapes_pairwise` (both `false`
-  by default; the Linux backend answers them from cosmic-text's per-segment shaping and the font's
-  own tables) so the shaping shortcuts run only where they are exact.
+  metrics and the scaler; upstream loads every face at `Weight::NORMAL` without coordinates. Glyph
+  positions include each glyph's shaped offset (`x_offset`, `y_offset`), which upstream drops, so
+  combining marks sit on their base. `PlatformTextSystem` gains `shapes_ascii_words_independently`
+  and `shapes_pairwise` (both `false` by default; the Linux backend answers them from cosmic-text's
+  per-segment shaping and the font's own tables) so the shaping shortcuts run only where they are
+  exact.
 - Text style and layout types carry letter spacing: `TextStyle::letter_spacing`,
   `TextRun::letter_spacing`, `TextStyle::to_run(len, rem_size)`,
   `LineWrapper::wrap_line_with_runs` and a `runs` parameter of `LineWrapper::should_truncate_line`;
   `StyledText::with_default_highlights` builds its runs at layout time, when the rem size is known.
+  Truncation cuts only between grapheme clusters, and `LineLayout::closest_index_for_x` skips glyphs
+  that continue the previous glyph's cluster, so a marked cluster splits at its advance midpoint.
   `Style` gains `backdrop_blur`, painted by `Style::paint` before shadows and background.
 - `App::set_text_rendering_mode` refreshes every window when the mode changes, and
   `DispatchTree::available_actions` / `is_action_available` leave out handlers above a modal
-  scope, as dispatch does. `Window::focused_input_is_composing` reports whether the focused input
-  holds marked text.
-- The headless test context (`HeadlessAppContext`) keeps its test platform (`opened_urls()`) and
-  returns the application's own text system from `text_system()`, so fonts registered through it
-  reach its windows.
+  scope, as dispatch does. A keystroke whose interceptor stops propagation reaches no key
+  listener; upstream still ran the first capture listener. `Window::focused_input_is_composing`
+  reports whether the focused input holds marked text.
+- A div's scroll extent measures absolutely positioned children from the container's origin
+  without adding its padding again (in-flow content still gets the padding), and a container
+  without in-flow children has no content size; upstream added the padding to the union of all
+  child bounds, so a full-size absolute child made a padded container scroll by its padding.
+- X11 windows set `XdndAware` with the predefined `ATOM` type; upstream used an atom interned under
+  the name `XA_ATOM`.
+- The test contexts (`HeadlessAppContext`, `TestAppContext`, `TestApp`, `VisualTestContext`,
+  `VisualTestAppContext`) return the application's own text system, so fonts registered through
+  them reach their windows; `HeadlessAppContext` also keeps its test platform (`opened_urls()`).
 - `UniformListScrollHandle::set_offset_from_scrollbar` sets an offset that retained list rows count
   as scrolling; other programmatic offset changes leave an owner's notification to rebuild the
   visible rows.

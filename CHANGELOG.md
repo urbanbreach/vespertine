@@ -56,12 +56,15 @@ and examples that verify each one.
 
 - Retained frames (PRF-001, PLT-002): a global change rebuilds the views that read it in every
   window, not only in the first one drawn. Views nested in a group keep group hover and active
-  styling, and controls in a disabled group stay disabled, when their own view is rebuilt alone.
-  Present callbacks of later views are no longer lost or duplicated when a spliced view changes how
-  many it registers. Changing the text rendering mode redraws every window.
+  styling, and controls in a disabled group stay disabled, when their own view is rebuilt alone;
+  views nested in an unchanged disabled group are replayed instead of rebuilt each time the group
+  is built. Present callbacks of later views are no longer lost or duplicated when a spliced view
+  changes how many it registers. Changing the text rendering mode redraws every window.
 - Fonts registered after text is on screen are used by that text without its string changing:
   carried text measurements and retained replay follow the font generation (TXT-003).
-  `TestHost::register_font` registers with the text system its window renders with (DEV-006).
+  `TestHost::register_font` registers with the text system its window renders with (DEV-006), and
+  so do fonts registered through `TestAppContext`, `VisualTestContext`, `TestApp` and
+  `VisualTestAppContext`.
 - Scroll layers (PRF-004): cached tiles show images updated in place and a changed scroller
   background, and a layer whose owner is nested in a replayed view shows the current offset when
   it is wheeled past its recorded region, instead of the previous frame.
@@ -74,11 +77,16 @@ and examples that verify each one.
   0.48 ms and `list-uniform-live` from 0.31 to 0.62 ms, the latter having shown stale rows before.
 - Two layout styles that differ only in their last enum fields no longer share a fingerprint, so
   a changed style is always applied in release builds (LAY-001). Clearing a trailing viewport
-  reservation after walking up a row-retained list leaves no extra scroll extent (LAY-002).
-- Panes (LAY-004): closing panes take no keyboard input, focus or accessibility actions; enabling
-  reduced motion settles running slot transitions at once; a route glide that starts after an idle
-  period starts from rest instead of jumping. A pane focus restore no longer takes focus from a
-  dialog focused before the next frame (INP-007).
+  reservation after walking up a row-retained list leaves no extra scroll extent, and a list whose
+  viewport is no taller than its padding keeps its last row's reservation (LAY-002). A padded
+  scroll container no longer scrolls by its padding when it holds a full-size absolutely
+  positioned child or no children: absolutely positioned children count only as far as they reach
+  past the padding box.
+- Panes (LAY-004): closing panes take no keyboard input, focus or accessibility actions, and a
+  closing pane that holds keyboard focus hands it to the enclosing focusable element (or clears
+  it); enabling reduced motion settles running slot transitions at once; a route glide that starts
+  after an idle period starts from rest instead of jumping. A pane focus restore no longer takes
+  focus from a dialog focused before the next frame (INP-007).
 - Floating positions, gaps, offsets and snap margins too large for `f32` pixels fall back to the
   defaults instead of producing NaN placement (LAY-005). Changing the motion preference while the
   system asks for reduced motion switches activity indicators at once (ANM-004). Restoring a window
@@ -86,30 +94,41 @@ and examples that verify each one.
 - Dark file-icon palette remapping no longer panics on SVG text with non-ASCII characters.
 - Accessibility and input: retained host nodes with a click listener expose an accessible Click
   action (INP-006); a queued screen-reader focus request no longer focuses an element that became
-  inert; action-availability queries leave out handlers above a modal scope, so menus and command
+  inert; a keystroke consumed by an interceptor, such as the Escape that dismisses a floating layer
+  or a key captured by the shortcut recorder, no longer reaches a key listener (INP-007);
+  action-availability queries leave out handlers above a modal scope, so menus and command
   palettes no longer offer blocked actions (CMP-003); host `img` and `svg` nodes keep their role,
-  `aria-*` properties, hover and active styles and listeners (ELM-004).
+  `aria-*` properties, hover and active styles and listeners, and apply the `motion` property like
+  any host element (ELM-004, ANM-002).
 - Linux: pending timers share one deadline queue instead of holding a file descriptor each, so
   many long timers can no longer exhaust descriptors. On X11, text a legacy owner answers as
-  Latin-1 `STRING` pastes again (PLT-009). `vespertine_linux`, and so `cargo test -p
-  vespertine_test_host`, builds without the `wayland` and `x11` features.
+  Latin-1 `STRING` pastes again (PLT-009), and windows announce XDND drop support with the
+  predefined `ATOM` property type, so drag sources that check it see them as drop targets. Text
+  draws each glyph at its shaped offset, so combining marks sit on their base letter, and the
+  up/down caret lookup splits a marked cluster at its advance midpoint. `vespertine_linux`, and so
+  `cargo test -p vespertine_test_host`, builds without the `wayland` and `x11` features.
 - Composition surfaces (PLT-001): dropping or removing a surface also removes surfaces only its
   handlers owned; surfaces with only a wheel handler receive scroll events; a second button
   pressed during a press goes to the surface that owns the press; files dropped on an overlay
   surface reach the owning window (in window coordinates on Wayland, through the overlay window on
   X11).
 - Markdown (CMP-011, CMP-013): messages under one text root keep their own selectable text, so
-  selection and copy work across a transcript; a document that stops streaming shows its
-  canonical text instead of the auto-closed repair; task markers of loose list items render; while
-  streaming, an unfinished code fence inside a quote or list gains no repair characters and
-  reference links render resolved; nested Mermaid fences get distinct frame ids.
+  selection and copy work across a transcript, also when two views show the same document; a
+  document that stops streaming shows its canonical text instead of the auto-closed repair; task
+  markers of loose list items render; while streaming, an unfinished code fence inside a quote or
+  list gains no repair characters and reference links render resolved; nested Mermaid fences get
+  distinct frame ids.
 - Text editing: a composition that completes a file mention keeps the typed prefix (CMP-010); word
   movement keeps a full stop with its combining marks, ending a composition leaves the caret on a
   grapheme boundary, and an edit after an interrupted composition is its own undo step (CMP-007);
   Enter during a composition in the picker query no longer activates a row, and paging resumes
-  after an indexing refresh and for lists shorter than the viewport (CMP-006); a select disabled
-  while open no longer commits, and option tooltips show (CMP-005); assistive technology can
-  increment, decrement and set a slider (CMP-001).
+  after an indexing refresh, for lists shorter than the viewport and after an empty page that
+  still reports more results (CMP-006); disabling an open select closes its menu and commits
+  nothing (`Select::set_disabled` takes the window), and option tooltips show (CMP-005); assistive
+  technology can increment, decrement and set a slider (CMP-001).
+- Truncation measures the line it paints (TXT-010): cuts fall only between grapheme clusters, the
+  ellipsis takes the letter spacing of the run where the trimmed text ends, and the last kept
+  cluster is spaced before the ellipsis even at a line break.
 - Floating and chrome: releasing an open dialog, menu or focus tooltip without closing it no
   longer leaves a layer that swallows every later Escape, and Escape stays with an input that is
   composing and with a review draft inside a dialog (CMP-002, CMP-003, CMP-028); a hover card
@@ -126,8 +145,10 @@ and examples that verify each one.
 - Rich text: links open the address their policy resolved, so relative file links open under
   their root; releasing on a neighboring link activates neither; an Escape-dismissed disclosure
   stays dismissed while other links are visited (TXT-008). Explicit ranges and query matches are
-  never both active (TXT-009). A cached highlight is never served past a stricter span limit
-  (TXT-007).
+  never both active, also across views that share one `Numbering`, whose explicit ranges now
+  number after all their query matches in document order (`Numbering::join` and `SpecCount` are
+  new, and `retained_ordinal` loses its `native_matches` parameter) (TXT-009). A cached highlight
+  is never served past a stricter span limit (TXT-007).
 - Duplicating a theme as editable never overwrites the file of a removed copy (THM-004).
 
 ## 0.2.0-alpha.1 - 2026-10-22
