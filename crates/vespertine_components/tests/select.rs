@@ -496,7 +496,7 @@ fn a_disabled_select_is_not_focusable_and_ignores_input() {
 }
 
 #[test]
-fn an_open_select_disabled_by_its_owner_does_not_commit_a_row_click() {
+fn an_open_select_disabled_by_its_owner_closes_its_menu_and_commits_nothing() {
     require_backend!();
     let mut f = fixture(Spec {
         selected: Some("opt1"),
@@ -508,10 +508,21 @@ fn an_open_select_disabled_by_its_owner_does_not_commit_a_row_click() {
     assert!(f.open_state());
     let row = f.rect(MenuPart::Row(2)).expect("row 2");
     let select = f.select.clone();
+    let window = f.host.window();
     f.host
         .app()
-        .update(|cx| select.update(cx, |select, cx| select.set_disabled(true, cx)));
+        .update_window(window, |_, window, cx| {
+            select.update(cx, |select, cx| select.set_disabled(true, window, cx))
+        })
+        .unwrap();
     f.host.flush();
+    f.settle();
+    assert!(!f.open_state(), "disabling closes the menu");
+    assert!(
+        !f.host.painted_text().iter().any(|text| text == "Option 2"),
+        "the menu rows are gone: {:?}",
+        f.host.painted_text()
+    );
     f.host.click(row.0 + 10.0, row.1 + 10.0, 0, "").unwrap();
     f.host.flush();
     assert!(f.selections().is_empty());

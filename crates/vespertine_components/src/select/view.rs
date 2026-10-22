@@ -240,9 +240,13 @@ impl Select {
         cx.notify();
     }
 
-    /// Enables or disables the select.
-    pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
+    /// Enables or disables the select. Disabling closes an open menu (R15: a disabled select
+    /// is not interactive); the close restores focus like Escape.
+    pub fn set_disabled(&mut self, disabled: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.disabled = disabled;
+        if disabled {
+            self.close(window, cx);
+        }
         cx.notify();
     }
 
@@ -385,7 +389,7 @@ impl Select {
     }
 
     fn commit(&mut self, id: &OptionId, window: &mut Window, cx: &mut Context<Self>) {
-        // A menu that stayed open while its owner disabled the select commits nothing.
+        // A disabled select commits nothing, even from rows still painted in the exit phase.
         let enabled = !self.disabled
             && position_of(&self.options, id).is_some_and(|ix| !self.options[ix].disabled);
         if !enabled {
