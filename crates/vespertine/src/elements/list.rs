@@ -2434,9 +2434,14 @@ impl StateInner {
         while leading_overdraw < overdraw && top_ix > 0 {
             let prev_ix = top_ix - 1;
             leading_overdraw += if let Some(item) = self.mounted_item(prev_ix) {
-                let size = item.size().unwrap_or_else(|| {
-                    self.measure_row(prev_ix, available_item_space, render_item, window, cx)
-                });
+                // As in the other passes, the reserved last row is always remeasured: its
+                // stored size includes the reservation extra.
+                let size = item
+                    .size()
+                    .filter(|_| !(reservation_active && prev_ix + 1 == count))
+                    .unwrap_or_else(|| {
+                        self.measure_row(prev_ix, available_item_space, render_item, window, cx)
+                    });
                 measured_items.push_front(ListItem::Measured {
                     size,
                     focus_handle: item.focus_handle(),

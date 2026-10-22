@@ -493,3 +493,22 @@ fn clearing_the_reservation_after_a_retained_walk_up_leaves_the_natural_extent(
     assert_eq!(total(&state), 20.);
     assert_eq!(state.max_offset_for_scrollbar().y, px(0.));
 }
+
+#[vespertine::test]
+fn leading_overdraw_remeasures_the_reserved_last_row(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let state = ListState::new(1, ListAlignment::Top, px(50.));
+    state.set_trailing_reservation(Some((0, px(0.))));
+    let harness = Harness::fixed(cx, &state, |_| 20.);
+    harness.draw(cx, 100., 100.);
+    assert_eq!((extra(&state), total(&state)), (80., 100.));
+    // The padding leaves no room for rows, so nothing is filled upward from past the last
+    // row: only the leading overdraw reaches the reserved row, which must be measured
+    // naturally rather than taken with its padded height (that would read as a filled
+    // reservation with no extra).
+    harness.set_padding(cx, [0., 50., 0., 50.]);
+    state.scroll_to_end();
+    harness.draw(cx, 100., 100.);
+    assert_eq!((extra(&state), total(&state)), (80., 100.));
+    assert!(!state.trailing_reservation_filled());
+}
