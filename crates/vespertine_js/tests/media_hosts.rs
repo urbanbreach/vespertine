@@ -1,5 +1,5 @@
-//! Image and vector-image hosts keep their node's accessibility properties, style and event
-//! subscriptions when they render as media leaves.
+//! Image and vector-image hosts keep their node's accessibility properties, style, motion and
+//! event subscriptions when they render as media leaves.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc, sync::atomic::AtomicU64};
 
@@ -91,5 +91,36 @@ fn media_hosts_expose_their_accessibility_properties_and_receive_clicks() {
             .map(|event| event.element_id)
             .collect::<Vec<_>>();
         assert_eq!(clicks, [id], "{kind} receives its click");
+    }
+}
+
+#[test]
+fn media_hosts_take_their_motion_style_like_a_div_host() {
+    require_backend!();
+    let (mut host, _) = media_host();
+    let motion = json!({"initial": false, "animate": {"width": 80, "height": 24}});
+    host.apply_batch(
+        &json!([
+            ["createElement", 4, "div"],
+            ["setStyle", 4, {"width": 40, "height": 40}],
+            ["setCustomProp", 4, "testId", "div"],
+            ["appendChild", 1, 4],
+            ["setCustomProp", 2, "motion", motion],
+            ["setCustomProp", 3, "motion", motion],
+            ["setCustomProp", 4, "motion", motion],
+        ])
+        .to_string(),
+    )
+    .expect("the batch is valid");
+    host.flush();
+
+    for kind in ["div", "img", "svg"] {
+        let nodes = host.elements_by_test_id(kind).expect("tree");
+        let bounds = nodes[0].bounds.expect("painted");
+        assert_eq!(
+            (bounds.width, bounds.height),
+            (80.0, 24.0),
+            "{kind} takes the size its motion settles at"
+        );
     }
 }

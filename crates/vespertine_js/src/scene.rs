@@ -21,7 +21,7 @@ use vespertine::motion::{
     Easing, MotionDescription, MotionExt as _, MotionInitial, MotionProps, MotionTransition,
 };
 use vespertine::{
-    AnyElement, App, Bounds, CustomElementRegistry, DeclarativeAria, ElementId, HostStyle,
+    AnyElement, App, Bounds, CustomElementRegistry, DeclarativeAria, Element, ElementId, HostStyle,
     ImageHostState, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
     ParentElement, Pixels, StatefulInteractiveElement, Styled, SvgHostState, Window, div, list,
     point, px,
@@ -913,7 +913,8 @@ impl HostScene {
             return div().into_any_element();
         };
         // An image or vector image renders as a leaf in the node's place. The leaf carries the
-        // node's subscriptions, style, role and accessibility properties like any host element.
+        // node's subscriptions, style, motion, role and accessibility properties like any host
+        // element.
         let media_style = || {
             style
                 .as_ref()
@@ -925,14 +926,16 @@ impl HostScene {
                 if let Some(image) = scene_node.image.as_mut() {
                     let leaf = image.element(ElementId::Integer(id), media_style(), window, cx);
                     let host = scene_node.host.wrap(leaf, window, cx);
-                    return decorate(host, style.as_deref(), node, painted, id).into_any_element();
+                    let host = decorate(host, style.as_deref(), node, painted, id);
+                    return self.with_motion(id, node, host);
                 }
             }
             "svg" => {
                 if let Some(svg) = scene_node.svg.as_mut() {
                     let leaf = svg.element(ElementId::Integer(id), media_style(), cx);
                     let host = scene_node.host.wrap(leaf, window, cx);
-                    return decorate(host, style.as_deref(), node, painted, id).into_any_element();
+                    let host = decorate(host, style.as_deref(), node, painted, id);
+                    return self.with_motion(id, node, host);
                 }
             }
             _ => {}
@@ -1015,7 +1018,10 @@ impl HostScene {
     /// Finishes a node's host element: a node with a `motion` property has its style driven by
     /// a declarative motion track (ANM-002), keyed by the node identity so the track survives
     /// rerenders. Completion reports reach a `motionComplete` listener.
-    fn with_motion(&self, id: NodeId, node: NodeRef<'_>, host: HostElement) -> AnyElement {
+    fn with_motion<E>(&self, id: NodeId, node: NodeRef<'_>, host: HostElement<E>) -> AnyElement
+    where
+        E: Element + Styled,
+    {
         let Some(description) = node.prop("motion").and_then(motion_description) else {
             return host.into_any_element();
         };
