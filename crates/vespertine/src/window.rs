@@ -8021,15 +8021,9 @@ impl Window {
             self.context_stack(),
             cx,
         );
+        // An interceptor that stops propagation consumes the keystroke: no key listener,
+        // binding or observer sees it.
         if !cx.propagate_event {
-            self.finish_dispatch_key_event(
-                event,
-                Some(&keystroke),
-                input_preference,
-                dispatch_path,
-                self.context_stack(),
-                cx,
-            );
             return;
         }
 

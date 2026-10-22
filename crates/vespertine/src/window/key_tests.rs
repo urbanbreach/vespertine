@@ -240,6 +240,30 @@ fn stopping_propagation_skips_every_later_callback() {
 }
 
 #[test]
+fn a_keystroke_consumed_by_an_interceptor_reaches_no_key_listener() {
+    let mut app = TestApp::new();
+    let (mut window, log) = key_window(&mut app, StopAt::Never, vec!["a"], true);
+    let _interceptor = app.update(|cx| {
+        cx.intercept_keystrokes(|event, _, cx| {
+            if event.keystroke.key == "escape" {
+                cx.stop_propagation();
+            }
+        })
+    });
+    key_down(&mut window, "escape");
+    assert!(take(&log).is_empty(), "the interceptor consumed the key");
+
+    let mut app = TestApp::new();
+    let (mut window, log) = key_window(&mut app, StopAt::Never, Vec::new(), true);
+    let _interceptor = app.update(|cx| cx.intercept_keystrokes(|_, _, cx| cx.stop_propagation()));
+    key_down(&mut window, "y");
+    assert!(
+        take(&log).is_empty(),
+        "no path capture listener without root listeners either"
+    );
+}
+
+#[test]
 fn key_up_and_key_down_listeners_are_typed_and_run_without_focus() {
     let mut app = TestApp::new();
     let (mut window, log) = key_window(&mut app, StopAt::Never, vec!["a"], false);
