@@ -20,6 +20,8 @@ and examples that verify each one.
   `Window::focus_lost_restore_target` explain that focus stays on an element that unmounted, so
   dispatch starts at the root, and how a focus-lost listener moves focus to the closest
   focusable ancestor instead (INP-007).
+- `BoxShadow::blur_radius`, and the `blurRadius` of the `boxShadow` host style, are documented as
+  the Gaussian standard deviation: half of a CSS `box-shadow` blur radius.
 
 ### Fixed
 

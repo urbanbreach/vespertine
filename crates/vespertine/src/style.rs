@@ -519,7 +519,9 @@ pub struct BoxShadow {
     pub color: Hsla,
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
-    /// How much should the shadow be blurred?
+    /// How much should the shadow be blurred? The standard deviation of the shadow's Gaussian
+    /// blur, which is half of a CSS `box-shadow` blur radius: CSS `0 4px 16px` is a
+    /// `blur_radius` of `px(8.)`.
     pub blur_radius: Pixels,
     /// How much should the shadow spread?
     pub spread_radius: Pixels,
@@ -541,7 +543,8 @@ impl BoxShadow {
         }
     }
 
-    /// Sets the shadow blur radius.
+    /// Sets the shadow blur radius: the standard deviation of the Gaussian blur, half of a CSS
+    /// `box-shadow` blur radius.
     pub fn blur_radius(mut self, blur_radius: Pixels) -> Self {
         self.blur_radius = blur_radius;
         self

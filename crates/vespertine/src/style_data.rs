@@ -816,6 +816,8 @@ fn parse_gradient(gradient: &Map<String, Value>) -> FillOutcome {
     }
 }
 
+/// The `boxShadow` property. `blurRadius` is the shadow's `BoxShadow::blur_radius` as is, the
+/// Gaussian standard deviation: half of the blur radius of a CSS `box-shadow`.
 fn parse_shadows(reader: &Reader) -> Parsed<Vec<BoxShadow>> {
     let entry = |value: &Value| -> Option<BoxShadow> {
         let entry = value.as_object()?;
