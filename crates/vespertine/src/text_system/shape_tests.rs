@@ -1587,6 +1587,86 @@ mod letter_spacing_truncation {
             "alpha beta"
         );
     }
+
+    /// Truncates `text` within `width` at 16 px, where letters are 8 px and periods 4 px, and
+    /// returns the line with the width it is painted at.
+    fn truncate_and_paint(
+        text: &str,
+        runs: &[(&str, f32)],
+        width: f32,
+        affix: &str,
+        from: TruncateFrom,
+    ) -> (String, Pixels) {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let font = font("Test Sans");
+        let runs: Vec<TextRun> = runs
+            .iter()
+            .map(|(text, spacing)| TextRun {
+                letter_spacing: px(*spacing),
+                ..run_of(text, &font)
+            })
+            .collect();
+        let (line, runs) = system.line_wrapper(font, px(16.)).truncate_line(
+            text.to_string().into(),
+            px(width),
+            affix,
+            &runs,
+            from,
+        );
+        let painted = WindowTextSystem::new(system).layout_line(&line, px(16.), &runs, None);
+        (line.to_string(), painted.width)
+    }
+
+    /// A closing affix takes the spacing of the run where the trimmed text ends, not of the
+    /// run at the cut: "lorem" and "..." in the period's 20 px run is 40 + 12 + 2 × 20 = 92 px.
+    #[test]
+    fn closing_affix_is_measured_with_the_spacing_where_trimming_ends() {
+        let runs = [("lorem", 0.), (".", 20.), ("ipsum", 0.)];
+        assert_eq!(
+            truncate_and_paint("lorem.ipsum", &runs, 80., "...", TruncateFrom::End),
+            ("lore...".into(), px(44.))
+        );
+    }
+
+    /// "xe…" would drop the acute of "é" and, its "e" now spaced before the ellipsis, be 44 px
+    /// wide; from the start, "…" and the lone acute would put the mark on the ellipsis.
+    #[test]
+    fn truncation_never_cuts_inside_a_grapheme_cluster() {
+        let text = "xe\u{301}z";
+        assert_eq!(
+            truncate_and_paint(text, &[(text, 10.)], 40., "…", TruncateFrom::End),
+            ("x…".into(), px(26.))
+        );
+        let text = "xe\u{301}";
+        assert_eq!(
+            truncate_and_paint(text, &[(text, 0.)], 20., "…", TruncateFrom::Start),
+            ("…".into(), px(8.))
+        );
+    }
+
+    /// A clamped line that ends at a line break is spaced before the affix that replaces the
+    /// rest: "cd…" is 18 + 18 + 8 = 44 px, over the 40 px.
+    #[test]
+    fn last_kept_cluster_before_a_line_break_is_spaced_before_the_affix() {
+        let shaper = TestShaper::with_families(&[("Test Sans", FamilySpec::FULL)]);
+        let system = text_system(&shaper);
+        let font = font("Test Sans");
+        let text = "ab\ncd\nef";
+        let runs = [TextRun {
+            letter_spacing: px(10.),
+            ..run_of(text, &font)
+        }];
+        let (line, _) = system.line_wrapper(font, px(16.)).truncate_wrapped_line(
+            text.into(),
+            px(40.),
+            2,
+            "…",
+            &runs,
+            TruncateFrom::End,
+        );
+        assert_eq!(line.as_ref(), "ab\nc…");
+    }
 }
 
 mod letter_spacing_wrap {

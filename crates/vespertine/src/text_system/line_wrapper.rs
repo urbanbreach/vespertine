@@ -223,9 +223,12 @@ impl LineWrapper {
 
     /// Determines if a line should be truncated based on its width.
     ///
-    /// Widths follow the shaped line (TXT-010): every grapheme cluster but the last of the line
-    /// is followed by the letter spacing of its run in `runs`, and the affix takes the spacing
-    /// of the run it replaces. Returns the truncation index in `line`.
+    /// The measured width of each candidate is the width of the line truncation paints
+    /// (TXT-010): truncation cuts only between grapheme clusters, every cluster but the last of
+    /// a line is followed by the letter spacing of its run in `runs`, a closing affix follows
+    /// the text that trimming keeps and takes the spacing of the run there, and an opening
+    /// affix takes the spacing of the run it replaces. The affix is taken to start and end
+    /// grapheme clusters of its own. Returns the truncation index in `line`.
     pub fn should_truncate_line(
         &mut self,
         line: &str,
@@ -242,10 +245,14 @@ impl LineWrapper {
         match truncate_from {
             TruncateFrom::Start => {
                 for (ix, c) in line.char_indices().rev() {
-                    // The affix replaces the character at `ix` and precedes the kept end.
-                    let followed = ix + c.len_utf8() < line.len();
-                    if width + affix.width(spacing.at(ix), followed) < truncate_width {
-                        truncate_ix = ix;
+                    // The affix replaces the character at `ix` and precedes the kept end, which
+                    // must start a cluster.
+                    let end = ix + c.len_utf8();
+                    if is_cluster_start(line, end) {
+                        let followed = end < line.len();
+                        if width + affix.width(spacing.at(ix), followed) < truncate_width {
+                            truncate_ix = ix;
+                        }
                     }
 
                     width += self.width_for_char(c) + spacing.after(line, ix, c);
@@ -256,13 +263,18 @@ impl LineWrapper {
                 }
             }
             TruncateFrom::End => {
+                let mut kept = KeptPrefix::default();
                 for (ix, c) in line.char_indices() {
-                    // The affix replaces the character at `ix` and ends the line.
-                    if width + affix.width(spacing.at(ix), false) < truncate_width {
+                    // The affix follows what trimming keeps of the text before `ix`.
+                    if is_cluster_start(line, ix)
+                        && kept.width_with(&affix, &mut spacing) < truncate_width
+                    {
                         truncate_ix = ix;
                     }
 
-                    width += self.width_for_char(c) + spacing.after(line, ix, c);
+                    let gap = spacing.after(line, ix, c);
+                    width += self.width_for_char(c) + gap;
+                    kept.extend(ix, c, width - gap, &mut spacing);
 
                     if width.floor() > truncate_width {
                         return Some(truncate_ix);
@@ -299,16 +311,26 @@ impl LineWrapper {
         let content_budget =
             |affix_spacing: Pixels| truncate_width - affix.width(affix_spacing, true);
 
+        // The kept start ends at a cluster boundary, and the affix follows its last cluster.
         let mut front_width = px(0.);
         let mut front_end_ix = 0usize;
         for (ix, c) in line.char_indices() {
             let end = ix + c.len_utf8();
-            let char_width = self.width_for_char(c) + spacing.after(line, ix, c);
-            if front_width + char_width > content_budget(spacing.at(end)) * (2.0 / 3.0) {
-                break;
+            let char_width = self.width_for_char(c);
+            if is_cluster_start(line, end) {
+                let before_affix = if affix.clusters > 0 {
+                    spacing.at(ix)
+                } else {
+                    Pixels::ZERO
+                };
+                if front_width + char_width + before_affix
+                    > content_budget(spacing.at(end)) * (2.0 / 3.0)
+                {
+                    break;
+                }
+                front_end_ix = end;
             }
-            front_width += char_width;
-            front_end_ix = end;
+            front_width += char_width + spacing.after(line, ix, c);
         }
 
         let content_budget = content_budget(spacing.at(front_end_ix));
@@ -317,15 +339,17 @@ impl LineWrapper {
         }
         let back_budget = content_budget - content_budget * (2.0 / 3.0);
 
+        // The kept end starts at a cluster boundary.
         let mut back_width = px(0.);
         let mut back_start_ix = line.len();
         for (ix, c) in line.char_indices().rev() {
-            let char_width = self.width_for_char(c) + spacing.after(line, ix, c);
-            if back_width + char_width > back_budget {
-                break;
+            back_width += self.width_for_char(c) + spacing.after(line, ix, c);
+            if is_cluster_start(line, ix) {
+                if back_width > back_budget {
+                    break;
+                }
+                back_start_ix = ix;
             }
-            back_width += char_width;
-            back_start_ix = ix;
         }
 
         if front_end_ix >= back_start_ix {
@@ -379,8 +403,7 @@ impl LineWrapper {
                 )),
                 TruncateFrom::End => SharedString::from(format!(
                     "{}{truncation_affix}",
-                    line[..truncate_ix]
-                        .trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
+                    line[..truncate_ix].trim_end_matches(is_trimmed_before_affix)
                 )),
                 TruncateFrom::Middle => unreachable!("Middle truncation is handled above"),
             };
@@ -426,6 +449,10 @@ impl LineWrapper {
 
         let mut spacing = RunSpacing::new(runs);
         let affix = self.affix(truncation_affix);
+        // Widths since the start of the text, so that the kept prefix survives a wrap that
+        // carries it onto the next line; `width` is measured from the current line's start.
+        let mut total = px(0.);
+        let mut kept = KeptPrefix::default();
 
         let mut width = px(0.);
         let mut line = 0usize;
@@ -442,8 +469,7 @@ impl LineWrapper {
                 if line >= max_lines - 1 && !text[ix + 1..].trim().is_empty() {
                     // Newline on the last allowed line with real content
                     // below. Truncate here.
-                    let truncated = text[..truncate_ix]
-                        .trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation());
+                    let truncated = text[..truncate_ix].trim_end_matches(is_trimmed_before_affix);
                     let result = SharedString::from(format!("{truncated}{truncation_affix}"));
                     let mut runs = runs.to_vec();
                     update_runs_after_truncation(
@@ -465,10 +491,12 @@ impl LineWrapper {
                 prev_c = None;
                 indent = None;
                 truncate_ix = ix + 1;
+                kept.start_line(ix + 1, total);
                 continue;
             }
 
-            let char_width = self.width_for_char(c) + spacing.after(&text, ix, c);
+            let gap = spacing.after(&text, ix, c);
+            let char_width = self.width_for_char(c) + gap;
 
             if Self::is_break_candidate(prev_c, c, first_non_whitespace_ix.is_some()) {
                 last_candidate_ix = ix;
@@ -480,6 +508,8 @@ impl LineWrapper {
             }
 
             width += char_width;
+            total += char_width;
+            kept.extend(ix, c, total - gap, &mut spacing);
 
             if line < max_lines - 1 {
                 // Before the last line: replicate wrap_line's boundary logic.
@@ -496,7 +526,7 @@ impl LineWrapper {
                         last_wrap_ix = ix;
                         width = char_width;
                     }
-
+                    kept.start_line(last_wrap_ix, total - width);
                     if let Some(ind) = indent {
                         width += self.width_for_char(' ') * ind as f32;
                     }
@@ -505,17 +535,18 @@ impl LineWrapper {
                     truncate_ix = last_wrap_ix;
                 }
             } else {
-                // On the last line: track the furthest point where the affix
-                // still fits, and stop as soon as the line overflows. The affix
-                // replaces the character after `c` and ends the line.
+                // On the last line: track the furthest cluster boundary where the kept text
+                // and the affix still fit, and stop as soon as the line overflows.
                 let end = ix + c.len_utf8();
-                if width + affix.width(spacing.at(end), false) <= wrap_width {
+                let line_start = total - width;
+                if is_cluster_start(&text, end)
+                    && kept.width_with(&affix, &mut spacing) - line_start <= wrap_width
+                {
                     truncate_ix = end;
                 }
 
                 if width > wrap_width {
-                    let truncated = text[..truncate_ix]
-                        .trim_end_matches(|c: char| c.is_whitespace() || c.is_ascii_punctuation());
+                    let truncated = text[..truncate_ix].trim_end_matches(is_trimmed_before_affix);
                     let result = SharedString::from(format!("{truncated}{truncation_affix}"));
                     let mut runs = runs.to_vec();
                     update_runs_after_truncation(
@@ -780,6 +811,70 @@ fn is_grapheme_boundary(text: &str, ix: usize) -> bool {
     GraphemeCursor::new(ix, text.len(), true)
         .is_boundary(text, 0)
         .unwrap_or(true)
+}
+
+/// Whether a grapheme cluster starts at byte `ix` of `text`; truncation cuts only there. Two
+/// ASCII characters other than CR LF are always separate clusters.
+fn is_cluster_start(text: &str, ix: usize) -> bool {
+    let bytes = text.as_bytes();
+    if ix == 0 || ix >= bytes.len() {
+        return true;
+    }
+    let (before, at) = (bytes[ix - 1], bytes[ix]);
+    if before.is_ascii() && at.is_ascii() {
+        return !(before == b'\r' && at == b'\n');
+    }
+    is_grapheme_boundary(text, ix)
+}
+
+/// Whether truncation trims `c` off the end of the text before a closing affix.
+fn is_trimmed_before_affix(c: char) -> bool {
+    c.is_whitespace() || c.is_ascii_punctuation()
+}
+
+/// What a closing affix follows: the text before the cut up to its last character that
+/// trimming keeps, measured in the caller's width coordinates.
+#[derive(Default)]
+struct KeptPrefix {
+    /// Where the kept text ends: the affix takes the run that covers this byte (see
+    /// `update_runs_after_truncation`).
+    end: usize,
+    /// The width up to `end`, without spacing after the last kept character.
+    width: Pixels,
+    /// The spacing after the last kept character when the affix follows it; zero when the
+    /// current line keeps nothing.
+    spacing: Pixels,
+}
+
+impl KeptPrefix {
+    /// Takes in the character `c` at byte `ix`, whose width ends at `width` before any spacing
+    /// after it.
+    fn extend(&mut self, ix: usize, c: char, width: Pixels, spacing: &mut RunSpacing) {
+        if !is_trimmed_before_affix(c) {
+            self.end = ix + c.len_utf8();
+            self.width = width;
+            self.spacing = spacing.at(ix);
+        }
+    }
+
+    /// Starts a new line at byte `start`, at `width`: a kept text that ends before it is no
+    /// longer on the line the affix closes.
+    fn start_line(&mut self, start: usize, width: Pixels) {
+        if self.end <= start {
+            self.width = width;
+            self.spacing = Pixels::ZERO;
+        }
+    }
+
+    /// The width of the kept text and the affix that ends the line after it.
+    fn width_with(&self, affix: &Affix, spacing: &mut RunSpacing) -> Pixels {
+        let before_affix = if affix.clusters > 0 {
+            self.spacing
+        } else {
+            Pixels::ZERO
+        };
+        self.width + before_affix + affix.width(spacing.at(self.end), false)
+    }
 }
 
 /// The advance and grapheme-cluster count of a truncation affix.
