@@ -21,6 +21,21 @@ struct Sequence {
     counters: Vec<usize>,
     /// Ordinal assigned in this frame to `(spec_index, run_key, match_index_in_run)`.
     assigned: HashMap<(usize, u64, usize), usize>,
+    /// The contexts that joined this frame, in document order, with their counts per
+    /// specification (see [`Numbering::join`]).
+    contexts: Vec<(u64, Vec<SpecCount>)>,
+}
+
+/// The matches of one specification in one context, counted before the frame paints so that
+/// explicit ranges can number after the query matches of every context sharing a numbering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpecCount {
+    /// Query matches in retained text.
+    pub retained_queries: usize,
+    /// Query matches in native text.
+    pub native_queries: usize,
+    /// Explicit-range matches.
+    pub ranges: usize,
 }
 
 struct NativeEntry {
@@ -62,6 +77,7 @@ impl Numbering {
             let mut sequence = self.sequence.borrow_mut();
             sequence.counters.clear();
             sequence.assigned.clear();
+            sequence.contexts.clear();
         }
         let mut native = self.native.borrow_mut();
         native.frame += 1;
@@ -110,22 +126,60 @@ impl Numbering {
         ordinal
     }
 
+    /// Records the match counts of the context `context_key` (one entry per specification) for
+    /// the current frame. Every context sharing the numbering joins in document order before any
+    /// of them paints; a context joining again in the same frame keeps its place.
+    pub fn join(&self, context_key: u64, counts: Vec<SpecCount>) {
+        let mut sequence = self.sequence.borrow_mut();
+        match sequence
+            .contexts
+            .iter_mut()
+            .find(|(key, _)| *key == context_key)
+        {
+            Some((_, existing)) => *existing = counts,
+            None => sequence.contexts.push((context_key, counts)),
+        }
+    }
+
     /// The ordinal of a retained match (index `match_index` of its resolution, identified by
-    /// `resolution_key`): paint order for query matches; for explicit-range matches the
-    /// resolution's static ordinal (retained query total plus supplied order) shifted past the
-    /// `native_matches` query matches of native text, so every range numbers after every query
-    /// match.
+    /// `resolution_key`): paint order for query matches. Explicit-range matches number after the
+    /// query matches (retained and native) of every context that joined the frame, after the
+    /// ranges of the contexts that joined before this one, in the order the ranges were
+    /// supplied. A context that did not join keeps the resolution's static ordinal.
     pub fn retained_ordinal(
         &self,
         resolution_key: u64,
         match_index: usize,
         resolved: &ResolvedMatch,
-        native_matches: usize,
     ) -> usize {
         match resolved.kind {
             MatchKind::Query => self.ordinal_for(resolved.spec_index, resolution_key, match_index),
-            MatchKind::Range => resolved.ordinal + native_matches,
+            MatchKind::Range => self.range_ordinal(resolution_key, resolved),
         }
+    }
+
+    fn range_ordinal(&self, context_key: u64, resolved: &ResolvedMatch) -> usize {
+        let sequence = self.sequence.borrow();
+        let contexts = &sequence.contexts;
+        let Some(position) = contexts.iter().position(|(key, _)| *key == context_key) else {
+            return resolved.ordinal;
+        };
+        let count =
+            |counts: &[SpecCount]| counts.get(resolved.spec_index).copied().unwrap_or_default();
+        let queries: usize = contexts
+            .iter()
+            .map(|(_, counts)| {
+                let count = count(counts);
+                count.retained_queries + count.native_queries
+            })
+            .sum();
+        let ranges_before: usize = contexts[..position]
+            .iter()
+            .map(|(_, counts)| count(counts).ranges)
+            .sum();
+        // The resolution numbers its ranges after its own retained query matches.
+        let supplied_order = resolved.ordinal - count(&contexts[position].1).retained_queries;
+        queries + ranges_before + supplied_order
     }
 
     /// The displayed number of ordinal `ordinal`: `matchIndexOffset + ordinal`.
@@ -229,12 +283,8 @@ mod tests {
         let mut painted = Vec::new();
         let paint_retained = |group_id: u64, painted: &mut Vec<(String, usize)>| {
             for (match_index, _) in resolution.segments_for(group_id, 0) {
-                let ordinal = numbering.retained_ordinal(
-                    key,
-                    match_index,
-                    &resolution.matches[match_index],
-                    0,
-                );
+                let ordinal =
+                    numbering.retained_ordinal(key, match_index, &resolution.matches[match_index]);
                 painted.push((format!("retained{group_id}"), ordinal));
             }
         };
@@ -293,7 +343,6 @@ mod tests {
                     9,
                     match_index,
                     &resolution.matches[match_index],
-                    0,
                 ));
             }
         }
@@ -308,9 +357,9 @@ mod tests {
         let resolution = Resolver::new().resolve(&HighlightDeclaration::from_spec(spec), &groups);
         let numbering = Numbering::new();
         // The range group paints first, then the query matches in reverse of document order.
-        let range_ordinal = numbering.retained_ordinal(5, 2, &resolution.matches[2], 0);
-        let second = numbering.retained_ordinal(5, 1, &resolution.matches[1], 0);
-        let first = numbering.retained_ordinal(5, 0, &resolution.matches[0], 0);
+        let range_ordinal = numbering.retained_ordinal(5, 2, &resolution.matches[2]);
+        let second = numbering.retained_ordinal(5, 1, &resolution.matches[1]);
+        let first = numbering.retained_ordinal(5, 0, &resolution.matches[0]);
         assert_eq!((range_ordinal, second, first), (2, 0, 1));
     }
 
@@ -373,7 +422,7 @@ mod tests {
         let resolution: std::sync::Arc<Resolution> = Resolver::new().resolve(&declaration, &groups);
         let before = resolution.identity;
         let numbering = Numbering::new();
-        numbering.retained_ordinal(1, 1, &resolution.matches[1], 0);
+        numbering.retained_ordinal(1, 1, &resolution.matches[1]);
         assert_eq!(resolution.identity, before);
     }
 }

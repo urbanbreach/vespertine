@@ -2,15 +2,16 @@
 //!
 //! A [`Highlight`] declares one or more [`HighlightSpec`]s for a subtree. Text runs of the
 //! subtree register their text in prepaint (retained text, grouped as logical groups); the host
-//! resolves the declaration over every registered group when it starts painting, reports the match
-//! count, and each run paints rounded washes for the segments that fall inside it, numbered in
-//! paint order. Text generated while a native widget paints is matched against exactly the string
-//! it paints.
+//! resolves the declaration over every registered group when its prepaint ends, reports the match
+//! count when it starts painting, and each run paints rounded washes for the segments that fall
+//! inside it, numbered in paint order. Text generated while a native widget paints is matched
+//! against exactly the string it paints.
 
 use crate::registry::{PaintedHighlight, RunKey};
 use crate::search::matcher::byte_offsets_to_utf16;
 use crate::search::{
-    GroupInput, HighlightDeclaration, HighlightSpec, Numbering, Resolution, Resolver,
+    GroupInput, HighlightDeclaration, HighlightSpec, MatchKind, Numbering, Resolution, Resolver,
+    SpecCount,
 };
 use crate::service::TextService;
 use std::cell::RefCell;
@@ -72,8 +73,6 @@ pub struct HostFrame {
     pieces: RefCell<HashMap<RunKey, (u64, usize)>>,
     /// Native (generated) runs noted in prepaint, with the strings they paint.
     natives: RefCell<HashMap<RunKey, Arc<str>>>,
-    /// Query matches in native text per specification, which explicit ranges number after.
-    native_matches: RefCell<Vec<usize>>,
     resolution: RefCell<Option<Arc<Resolution>>>,
 }
 
@@ -164,18 +163,9 @@ impl HostFrame {
                 for (match_index, segment) in resolution.segments_for(group, piece) {
                     let resolved = &resolution.matches[match_index];
                     let spec = &specs[resolved.spec_index];
-                    let native_matches = self
-                        .native_matches
-                        .borrow()
-                        .get(resolved.spec_index)
-                        .copied()
-                        .unwrap_or(0);
-                    let ordinal = self.numbering.retained_ordinal(
-                        self.key,
-                        match_index,
-                        resolved,
-                        native_matches,
-                    );
+                    let ordinal = self
+                        .numbering
+                        .retained_ordinal(self.key, match_index, resolved);
                     let number = Numbering::display_number(spec, ordinal);
                     let active = Numbering::is_active(spec, number);
                     washes.push(Wash {
@@ -378,7 +368,6 @@ impl Element for Highlight {
                     groups: RefCell::default(),
                     pieces: RefCell::default(),
                     natives: RefCell::default(),
-                    native_matches: RefCell::default(),
                     resolution: RefCell::default(),
                 });
                 *slot.borrow_mut() = Some(frame.clone());
@@ -394,14 +383,17 @@ impl Element for Highlight {
                 self.child.prepaint(window, cx)
             });
         }
-        window.prepaint_effect(
-            cx,
+        window.prepaint_effect(cx, {
+            let slot = slot.clone();
             Rc::new(move |_, _| {
                 if let Some(service) = &service {
                     service.pop_highlight();
+                    if let Some(frame) = slot.borrow().as_ref() {
+                        finish_prepaint(frame, service);
+                    }
                 }
-            }),
-        );
+            })
+        });
         HighlightPrepaint { frame: slot }
     }
 
@@ -424,7 +416,7 @@ impl Element for Highlight {
                 let (Some(service), Some(frame)) = (&service, slot.borrow().clone()) else {
                     return;
                 };
-                begin_painting(&frame, service, on_count.as_ref(), window, cx);
+                begin_painting(&frame, on_count.as_ref(), window, cx);
                 service.push_highlight(frame);
             })
         });
@@ -440,43 +432,61 @@ impl Element for Highlight {
     }
 }
 
-/// Starts painting under `frame`: restarts the numbering once per frame, resolves the
-/// declaration over every group registered in prepaint and reports the match count when its
-/// identity changed.
+/// Ends the host's prepaint, once every run of its subtree registered: restarts the numbering
+/// once per frame, resolves the declaration over the registered groups and joins the numbering
+/// with the match counts, so that explicit ranges number after the query matches of every
+/// context sharing it (R7, R8).
+fn finish_prepaint(frame: &HostFrame, service: &TextService) {
+    frame.numbering.begin_frame_if_new(service.frame_id());
+    if frame.declaration.is_empty() {
+        return;
+    }
+    let resolution = frame
+        .state
+        .borrow_mut()
+        .resolver
+        .resolve(&frame.declaration, &frame.groups.borrow());
+    let specs = frame.declaration.specs();
+    let mut counts = vec![SpecCount::default(); specs.len()];
+    for resolved in &resolution.matches {
+        let count = &mut counts[resolved.spec_index];
+        match resolved.kind {
+            MatchKind::Query => count.retained_queries += 1,
+            MatchKind::Range => count.ranges += 1,
+        }
+    }
+    // Native query matches only shift explicit ranges, so they are counted only for
+    // specifications that have ranges.
+    let natives = frame.natives.borrow();
+    for (spec, count) in specs.iter().zip(&mut counts) {
+        if !spec.ranges.is_empty() {
+            count.native_queries = natives
+                .values()
+                .map(|text| frame.numbering.match_native_text(spec, text).len())
+                .sum();
+        }
+    }
+    frame.numbering.join(frame.key, counts);
+    *frame.resolution.borrow_mut() = Some(resolution);
+}
+
+/// Starts painting under `frame`: reports the match count of the resolution made in prepaint
+/// when its identity changed.
 fn begin_painting(
     frame: &Rc<HostFrame>,
-    service: &TextService,
     on_count: Option<&CountCallback>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let mut state = frame.state.borrow_mut();
-    state.numbering.begin_frame_if_new(service.frame_id());
     if !frame.declaration.is_empty() {
-        let groups = frame.groups.borrow().clone();
-        let resolution = state.resolver.resolve(&frame.declaration, &groups);
+        let Some(resolution) = frame.resolution.borrow().clone() else {
+            return;
+        };
         let fire = (resolution.identity != state.last_identity).then(|| {
             state.last_identity = resolution.identity;
             resolution.total
         });
-        *frame.resolution.borrow_mut() = Some(resolution);
-        // Explicit ranges number after every query match of the frame, native ones included.
-        let natives = frame.natives.borrow();
-        *frame.native_matches.borrow_mut() = frame
-            .declaration
-            .specs()
-            .iter()
-            .map(|spec| {
-                if spec.ranges.is_empty() {
-                    return 0;
-                }
-                natives
-                    .values()
-                    .map(|text| state.numbering.match_native_text(spec, text).len())
-                    .sum()
-            })
-            .collect();
-        drop(natives);
         drop(state);
         if let (Some(total), Some(callback)) = (fire, on_count.cloned()) {
             window.defer(cx, move |window, cx| callback(total, window, cx));

@@ -8,7 +8,7 @@ use std::rc::Rc;
 use support::{Build, Harness, at, near, rgb_at};
 use vespertine::{AnyElement, IntoElement, ParentElement, Styled, div, px, rgb};
 use vespertine_richtext::search::{
-    HighlightDeclaration, HighlightSpec, default_hex_color, find_ranges, scan_count,
+    HighlightDeclaration, HighlightSpec, Numbering, default_hex_color, find_ranges, scan_count,
 };
 use vespertine_richtext::{RichText, highlight, selection_color, text_root};
 
@@ -246,6 +246,43 @@ fn explicit_ranges_number_after_every_query_match_including_native_ones() {
             ("ab".to_owned(), 1, false),
         ]
     );
+}
+
+#[test]
+fn explicit_ranges_of_views_sharing_a_numbering_number_after_all_their_query_matches() {
+    // Two views share one sequence: the query matches "a" number 0 and 1, then the ranges
+    // [1, 2) of the first view ("b") and of the second view ("c") number 2 and 3.
+    let numbering = Numbering::shared();
+    let active_texts = |active: usize| {
+        let numbering = numbering.clone();
+        let spec = spec("a")
+            .with_ranges([1..2])
+            .with_active_index(Some(active));
+        let build: Build = Rc::new(move |_, _| {
+            let view = |id: &'static str, text: &'static str| {
+                highlight(
+                    id,
+                    HighlightDeclaration::from_spec(spec.clone()),
+                    RichText::new(id, text),
+                )
+                .shared_numbering(numbering.clone())
+            };
+            page(div().child(view("upper", "ab")).child(view("lower", "ac")))
+        });
+        let mut harness = Harness::new(WIDTH, 120., build);
+        harness.settle();
+        harness
+            .service()
+            .painted_highlights()
+            .iter()
+            .filter(|w| w.active)
+            .map(|w| (w.text.clone(), w.start))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(active_texts(0), vec![("ab".to_owned(), 0)]);
+    assert_eq!(active_texts(1), vec![("ac".to_owned(), 0)]);
+    assert_eq!(active_texts(2), vec![("ab".to_owned(), 1)]);
+    assert_eq!(active_texts(3), vec![("ac".to_owned(), 1)]);
 }
 
 #[test]

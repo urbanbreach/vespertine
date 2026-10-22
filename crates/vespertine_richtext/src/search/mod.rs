@@ -10,6 +10,6 @@ pub mod spec;
 
 pub use find::{FindCursor, find_ranges};
 pub use matcher::{GroupMatcher, Query, is_word_char, scan_count};
-pub use numbering::Numbering;
+pub use numbering::{Numbering, SpecCount};
 pub use resolve::{GroupInput, MatchKind, Resolution, ResolvedMatch, Resolver, Segment};
 pub use spec::{DEFAULT_RADIUS, HighlightDeclaration, HighlightSpec, default_hex_color};
