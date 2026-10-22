@@ -1986,7 +1986,7 @@ impl X11Client {
                 xproto::PropMode::REPLACE,
                 x_window,
                 state.atoms.XdndAware,
-                state.atoms.XA_ATOM,
+                xproto::AtomEnum::ATOM,
                 &[5],
             ),
         )
@@ -3495,5 +3495,80 @@ mod tests {
 
         // Assert pressing space while on the Czech layout still types a space.
         assert_eq!(key_event_state.key_get_utf8(space), " ");
+    }
+
+    #[test]
+    fn window_announces_xdnd_version_5_with_the_predefined_atom_type() {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use vespertine::{App, AppContext as _, Application, WindowOptions, WindowingModes};
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        struct Empty;
+        impl vespertine::Render for Empty {
+            fn render(
+                &mut self,
+                _: &mut vespertine::Window,
+                _: &mut vespertine::Context<Self>,
+            ) -> impl vespertine::IntoElement {
+                vespertine::Empty
+            }
+        }
+
+        // The platform of this test uses the process-wide clipboard connection that the clipboard
+        // tests serialize on.
+        let _serial = crate::linux::x11::clipboard::tests::SERIAL.lock();
+        let (inspector, _) = x11rb::connect(None)
+            .expect("this test needs a reachable X server (DISPLAY, e.g. XWayland)");
+        let atoms = XcbAtoms::new(&inspector).unwrap().reply().unwrap();
+        let announced = Rc::new(RefCell::new(None));
+        Application::with_platform(crate::linux_platform(WindowingModes::X11)).run({
+            let announced = announced.clone();
+            move |cx: &mut App| {
+                cx.spawn(async move |cx: &mut vespertine::AsyncApp| {
+                    cx.update(|cx| {
+                        let handle = cx
+                            .open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty))
+                            .expect("the window opens");
+                        let window = handle
+                            .update(cx, |_, window, _| {
+                                match window.window_handle().unwrap().as_raw() {
+                                    RawWindowHandle::Xcb(handle) => handle.window.get(),
+                                    other => panic!("not an X11 window: {other:?}"),
+                                }
+                            })
+                            .unwrap();
+                        let reply = inspector
+                            .get_property(
+                                false,
+                                window,
+                                atoms.XdndAware,
+                                xproto::AtomEnum::ANY,
+                                0,
+                                1,
+                            )
+                            .unwrap()
+                            .reply()
+                            .unwrap();
+                        *announced.borrow_mut() = Some((
+                            reply.type_,
+                            reply
+                                .value32()
+                                .map(|values| values.collect::<Vec<_>>())
+                                .unwrap_or_default(),
+                        ));
+                        handle
+                            .update(cx, |_, window, _| window.remove_window())
+                            .unwrap();
+                        cx.quit();
+                    });
+                })
+                .detach();
+            }
+        });
+        assert_eq!(
+            announced.take(),
+            Some((u32::from(xproto::AtomEnum::ATOM), vec![5])),
+            "XdndAware holds XDND version 5 with the predefined ATOM type"
+        );
     }
 }

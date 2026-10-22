@@ -43,7 +43,6 @@ mod composition;
 
 x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
-        XA_ATOM,
         XdndAware,
         XdndStatus,
         XdndEnter,
