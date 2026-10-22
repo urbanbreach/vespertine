@@ -13,7 +13,9 @@
 //! [`TooltipTrigger`] is the ready-made wrapper entity for any other element.
 
 use super::text::{TextTooltip, TooltipSpec};
-use crate::floating::{EscapeHandler, EscapeOutcome, LayerRegistration, TriggerBounds};
+use crate::floating::{
+    DismissHandler, EscapeHandler, EscapeOutcome, LayerRegistration, TriggerBounds,
+};
 use crate::tokens::ComponentTokens;
 use std::rc::Rc;
 use vespertine::{
@@ -42,6 +44,7 @@ pub struct FocusTooltip {
     bounds: TriggerBounds,
     layer: Option<LayerRegistration>,
     escape: EscapeHandler,
+    dismiss: DismissHandler,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -70,16 +73,23 @@ impl FocusTooltip {
             });
         });
         let owner = cx.weak_entity();
-        let escape: EscapeHandler = Rc::new(move |window, cx| {
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
             if let Some(owner) = owner.upgrade() {
                 owner.update(cx, |owner, cx| this(owner).hide(window, cx));
             }
-            EscapeOutcome::Dismissed
         });
+        let escape: EscapeHandler = {
+            let dismiss = dismiss.clone();
+            Rc::new(move |window, cx| {
+                dismiss(window, cx);
+                EscapeOutcome::Dismissed
+            })
+        };
         Self {
             bounds: TriggerBounds::new(),
             layer: None,
             escape,
+            dismiss,
             _subscriptions: vec![focus_in, focus_out],
         }
     }
@@ -94,7 +104,12 @@ impl FocusTooltip {
         if self.layer.is_some() {
             return;
         }
-        self.layer = Some(LayerRegistration::new(window, cx, self.escape.clone()));
+        self.layer = Some(LayerRegistration::new(
+            window,
+            cx,
+            self.escape.clone(),
+            self.dismiss.clone(),
+        ));
         cx.notify();
         window.refresh();
     }

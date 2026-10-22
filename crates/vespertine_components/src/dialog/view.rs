@@ -28,8 +28,8 @@
 use super::model::{ActionKind, Activation, DialogAction, DialogModel, Dismissal, DismissalPolicy};
 use crate::controls::Button;
 use crate::floating::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, OutsidePress,
-    TriggerBounds, containment_limits, is_top_layer, open_layer, set_layer_bounds,
+    DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions,
+    OutsidePress, TriggerBounds, containment_limits, is_top_layer, open_layer, set_layer_bounds,
 };
 use crate::text::{TextField, TextFieldEvent};
 use crate::tokens::ComponentTokens;
@@ -397,15 +397,24 @@ impl Dialog {
             return;
         }
         let view = cx.entity().downgrade();
-        let escape: EscapeHandler = Rc::new(move |window, cx| match view.upgrade() {
-            Some(view) => view.update(cx, |this, cx| this.escape(window, cx)),
-            None => EscapeOutcome::Dismissed,
+        let escape: EscapeHandler = {
+            let view = view.clone();
+            Rc::new(move |window, cx| match view.upgrade() {
+                Some(view) => view.update(cx, |this, cx| this.escape(window, cx)),
+                None => EscapeOutcome::Dismissed,
+            })
+        };
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |this, cx| this.close(window, cx));
+            }
         });
         let layer = open_layer(
             window,
             cx,
             LayerOptions {
                 escape,
+                dismiss,
                 layer_focus: self.popup_focus.clone(),
                 trigger: self.trigger.clone(),
                 initial_focus: self.initial_focus.clone(),
@@ -422,7 +431,8 @@ impl Dialog {
 
     /// Closes the dialog without calling the cancel callback: Escape stops reaching it at once,
     /// the popup unmounts and focus is restored after the current event (R15). The open-change
-    /// callback runs with `false`.
+    /// callback runs with `false`. [`dismiss_layer`](crate::floating::dismiss_layer) closes an
+    /// open dialog this way, also one that ignores Escape.
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = self.open.take() else {
             return;

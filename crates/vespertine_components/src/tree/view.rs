@@ -23,9 +23,9 @@ use super::style::{
     RowVisual, STATUS_SIZE, TreeTheme, TreeWashes, chevron, guide_x, row_padding_left,
 };
 use crate::floating::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, ListKey, OutsidePress,
-    Placement, Popup, PopupMenuItem, SurfaceMotion, anchored_menu_at, classify_key, close_popup,
-    menu_item_row, open_layer,
+    DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, ListKey,
+    OutsidePress, Placement, Popup, PopupMenuItem, SurfaceMotion, anchored_menu_at, classify_key,
+    close_popup, menu_item_row, open_layer,
 };
 use crate::scroll::{ListRail, RailBar, RailOrientation, render_rail, track_hover};
 use crate::text::{TextField, TextFieldEvent};
@@ -858,17 +858,24 @@ impl Tree {
             previous.layer.close(window, cx);
         }
         let view = cx.entity().downgrade();
-        let escape: EscapeHandler = Rc::new(move |window, cx| {
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
             if let Some(view) = view.upgrade() {
                 view.update(cx, |this, cx| this.close_context_menu(window, cx));
             }
-            EscapeOutcome::Dismissed
         });
+        let escape: EscapeHandler = {
+            let dismiss = dismiss.clone();
+            Rc::new(move |window, cx| {
+                dismiss(window, cx);
+                EscapeOutcome::Dismissed
+            })
+        };
         let layer = open_layer(
             window,
             cx,
             LayerOptions {
                 escape,
+                dismiss,
                 layer_focus: self.menu_focus.clone(),
                 trigger: Some(self.focus_handle.clone()),
                 initial_focus: FocusTarget::Default,

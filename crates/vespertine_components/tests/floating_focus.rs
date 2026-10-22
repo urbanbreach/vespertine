@@ -129,6 +129,7 @@ impl Rig {
                     cx,
                     LayerOptions {
                         escape: Rc::new(|_, _| EscapeOutcome::Dismissed),
+                        dismiss: Rc::new(|_, _| {}),
                         layer_focus: layer,
                         trigger: with_trigger.then_some(trigger),
                         initial_focus: initial,

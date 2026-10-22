@@ -227,6 +227,7 @@ fn escape_hides_a_shown_card_before_the_layer_below_it() {
                         below.set(below.get() + 1);
                         EscapeOutcome::Consumed
                     }),
+                    Rc::new(|_, _| {}),
                 );
             }
         })

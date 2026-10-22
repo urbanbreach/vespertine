@@ -8,8 +8,8 @@
 //! 140 ms entrance / 100 ms exit with an occluding exit overlay.
 
 use super::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, OutsidePress, Placement,
-    Popup, SurfaceMotion, TriggerBounds, close_popup,
+    DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions,
+    OutsidePress, Placement, Popup, SurfaceMotion, TriggerBounds, close_popup,
     keys::{ListKey, classify_key},
     menu::{AnchoredMenu, ROW_GAP},
     open_layer,
@@ -228,17 +228,24 @@ impl PopupMenu {
             return;
         }
         let view = cx.entity().downgrade();
-        let escape: EscapeHandler = Rc::new(move |window, cx| {
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
             if let Some(view) = view.upgrade() {
                 view.update(cx, |this, cx| this.close(window, cx));
             }
-            EscapeOutcome::Dismissed
         });
+        let escape: EscapeHandler = {
+            let dismiss = dismiss.clone();
+            Rc::new(move |window, cx| {
+                dismiss(window, cx);
+                EscapeOutcome::Dismissed
+            })
+        };
         let layer = open_layer(
             window,
             cx,
             LayerOptions {
                 escape,
+                dismiss,
                 layer_focus: self.layer_focus.clone(),
                 trigger: Some(self.trigger_focus.clone()),
                 initial_focus: FocusTarget::Default,

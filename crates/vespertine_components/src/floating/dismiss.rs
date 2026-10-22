@@ -19,6 +19,12 @@
 //! the focus path whose key context contains [`ESCAPE_OWNER_CONTEXT`] (an inline draft that
 //! cancels itself on Escape). The layer receives the next Escape once they are gone.
 //!
+//! **Dismissal by identity.** Every layer also carries its owner's full dismissal, so code other
+//! than the owner can close it: [`dismiss_layer`] closes one layer and [`dismiss_all_layers`]
+//! every layer of a window, the top one first (before a modal dialog opens, say, or when a
+//! navigation replaces the screen). Unlike Escape, a dismissal never only steps back and runs no
+//! Escape callback of the owner's caller.
+//!
 //! The registry also records each layer's painted bounds so that presses inside a layer above
 //! another count as inside the lower one (see [`press_is_inside`]).
 
@@ -56,9 +62,15 @@ pub enum EscapeOutcome {
 /// the step-back.
 pub type EscapeHandler = Rc<dyn Fn(&mut Window, &mut App) -> EscapeOutcome>;
 
+/// A layer's full dismissal, run by [`dismiss_layer`]: closes the whole layer the way its owner
+/// closes it (the layer unregisters itself and the owner learns that it closed), without a
+/// step-back and without the Escape callbacks of the owner's caller.
+pub type DismissHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 struct Entry {
     id: LayerId,
     escape: EscapeHandler,
+    dismiss: DismissHandler,
     /// The layer's focus container: focus inside it is focus inside the layer.
     scope: Option<FocusHandle>,
     bounds: Option<Bounds<Pixels>>,
@@ -102,14 +114,20 @@ fn read(cx: &App) -> Option<Shared> {
 /// Registers a layer above every layer already registered in `window` and returns its identity.
 /// Registration is the moment the popup mounts; pair it with [`unregister_layer`] on close, or
 /// use [`LayerRegistration`] to tie the layer to the lifetime of its owner.
-pub fn register_layer(window: &Window, cx: &mut App, escape: EscapeHandler) -> LayerId {
-    register(window, cx, escape, None)
+pub fn register_layer(
+    window: &Window,
+    cx: &mut App,
+    escape: EscapeHandler,
+    dismiss: DismissHandler,
+) -> LayerId {
+    register(window, cx, escape, dismiss, None)
 }
 
 fn register(
     window: &Window,
     cx: &mut App,
     escape: EscapeHandler,
+    dismiss: DismissHandler,
     scope: Option<FocusHandle>,
 ) -> LayerId {
     let shared = shared(cx);
@@ -133,6 +151,7 @@ fn register(
             .push(Entry {
                 id,
                 escape,
+                dismiss,
                 scope,
                 bounds: None,
             });
@@ -198,6 +217,38 @@ pub fn unregister_layer(window: &Window, cx: &mut App, id: LayerId) -> bool {
         .remove(window.window_handle().window_id(), id)
 }
 
+/// Dismisses layer `id` of `window` the way its owner closes it (see [`DismissHandler`]): the
+/// whole layer closes where Escape might only step back (a submenu, a search) or be refused (a
+/// dialog that ignores Escape). Returns whether `id` was registered in `window`.
+///
+/// The dismissal updates the layer's owner, so call it outside the owner's updates, as the
+/// registry does for Escape.
+pub fn dismiss_layer(window: &mut Window, cx: &mut App, id: LayerId) -> bool {
+    let dismiss = read(cx).and_then(|shared| {
+        shared
+            .0
+            .borrow()
+            .windows
+            .get(&window.window_handle().window_id())
+            .and_then(|layers| layers.iter().find(|entry| entry.id == id))
+            .map(|entry| entry.dismiss.clone())
+    });
+    // The registry is not borrowed while the owner closes: closing unregisters the layer.
+    let Some(dismiss) = dismiss else {
+        return false;
+    };
+    dismiss(window, cx);
+    true
+}
+
+/// Dismisses every layer of `window`, the top one first (see [`dismiss_layer`]). A layer that a
+/// dismissal above it already closed (a nested menu closing with its parent) is skipped.
+pub fn dismiss_all_layers(window: &mut Window, cx: &mut App) {
+    for id in layers(window, cx).into_iter().rev() {
+        dismiss_layer(window, cx, id);
+    }
+}
+
 /// A dismissal layer that stays registered for as long as this value lives. Dropping it
 /// unregisters the layer, so a popup owner that is released while its popup is open leaves no
 /// layer behind to swallow later Escapes.
@@ -209,8 +260,13 @@ pub struct LayerRegistration {
 
 impl LayerRegistration {
     /// Registers a layer above every layer already registered in `window`.
-    pub fn new(window: &Window, cx: &mut App, escape: EscapeHandler) -> Self {
-        Self::scoped(window, cx, escape, None)
+    pub fn new(
+        window: &Window,
+        cx: &mut App,
+        escape: EscapeHandler,
+        dismiss: DismissHandler,
+    ) -> Self {
+        Self::scoped(window, cx, escape, dismiss, None)
     }
 
     /// Registers a layer whose focus container is `scope`.
@@ -218,9 +274,10 @@ impl LayerRegistration {
         window: &Window,
         cx: &mut App,
         escape: EscapeHandler,
+        dismiss: DismissHandler,
         scope: Option<FocusHandle>,
     ) -> Self {
-        let id = register(window, cx, escape, scope);
+        let id = register(window, cx, escape, dismiss, scope);
         Self {
             id,
             window: window.window_handle().window_id(),

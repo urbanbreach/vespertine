@@ -1,6 +1,6 @@
 //! Opening and closing focus of a dismissal layer (CMP-002 R9-R11).
 
-use super::dismiss::{EscapeHandler, LayerId, LayerRegistration, unregister_layer};
+use super::dismiss::{DismissHandler, EscapeHandler, LayerId, LayerRegistration, unregister_layer};
 use std::rc::{Rc, Weak};
 use vespertine::{App, FocusHandle, Window};
 
@@ -57,6 +57,9 @@ impl From<FocusHandle> for FocusTarget {
 pub struct LayerOptions {
     /// Runs the caller's Escape handler, then dismisses or steps back (R7, R8).
     pub escape: EscapeHandler,
+    /// Closes the layer the way its owner does, for
+    /// [`dismiss_layer`](super::dismiss::dismiss_layer).
+    pub dismiss: DismissHandler,
     /// The layer's own focus handle (its container). Focus inside it counts as "inside the
     /// layer" when closing, and it is the default initial focus target.
     pub layer_focus: FocusHandle,
@@ -108,6 +111,7 @@ pub fn open_layer(window: &mut Window, cx: &mut App, options: LayerOptions) -> L
         window,
         cx,
         options.escape,
+        options.dismiss,
         Some(options.layer_focus.clone()),
     );
     let handle = LayerHandle(Rc::new(LayerState {

@@ -12,8 +12,8 @@
 
 use super::viewer::ImageView;
 use crate::floating::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerId, LayerOptions, WeakLayerHandle,
-    is_top_layer, open_layer, set_layer_bounds,
+    DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerId, LayerOptions,
+    WeakLayerHandle, is_top_layer, open_layer, set_layer_bounds,
 };
 use crate::tokens::ComponentTokens;
 use std::cell::OnceCell;
@@ -89,8 +89,9 @@ pub struct LightboxLayer {
 
 /// Opens the full-view layer: joins the dismissal stack above everything already open and takes
 /// focus into `focus` once the overlay is attached. `trigger` is the owning control, the focus
-/// fallback when the captured focus owner is gone. `on_close` runs once for Escape and for a
-/// plain click; render [`lightbox`] with the returned handle for as long as the view is open.
+/// fallback when the captured focus owner is gone. `on_close` runs once for Escape, for a plain
+/// click and for [`dismiss_layer`](crate::floating::dismiss_layer); render [`lightbox`] with the
+/// returned handle for as long as the view is open.
 pub fn open_lightbox(
     window: &mut Window,
     cx: &mut App,
@@ -99,10 +100,10 @@ pub fn open_lightbox(
     on_close: impl Fn(&mut Window, &mut App) + 'static,
 ) -> LightboxLayer {
     let on_close: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(on_close);
-    // The Escape handler lives in the registry entry, so it holds the layer weakly: a strong
-    // handle there would keep the layer registered after its owner dropped it.
+    // The Escape and dismissal handlers live in the registry entry, so they hold the layer
+    // weakly: a strong handle there would keep the layer registered after its owner dropped it.
     let slot: Rc<OnceCell<WeakLayerHandle>> = Rc::new(OnceCell::new());
-    let escape: EscapeHandler = {
+    let dismiss: DismissHandler = {
         let slot = slot.clone();
         let on_close = on_close.clone();
         Rc::new(move |window, cx| {
@@ -111,6 +112,12 @@ pub fn open_lightbox(
             {
                 on_close(window, cx);
             }
+        })
+    };
+    let escape: EscapeHandler = {
+        let dismiss = dismiss.clone();
+        Rc::new(move |window, cx| {
+            dismiss(window, cx);
             EscapeOutcome::Dismissed
         })
     };
@@ -119,6 +126,7 @@ pub fn open_lightbox(
         cx,
         LayerOptions {
             escape,
+            dismiss,
             layer_focus: focus.clone(),
             trigger,
             initial_focus: FocusTarget::Default,

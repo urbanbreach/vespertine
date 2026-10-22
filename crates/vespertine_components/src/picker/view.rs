@@ -34,8 +34,8 @@ use super::{
 };
 use crate::controls::Button;
 use crate::floating::{
-    EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions, OutsidePress,
-    is_top_layer, open_layer, stepping::StepDirection,
+    DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle, LayerOptions,
+    OutsidePress, is_top_layer, open_layer, stepping::StepDirection,
 };
 use crate::text::{TextField, TextFieldEvent, actions::Submit};
 use crate::tokens::ComponentTokens;
@@ -541,9 +541,18 @@ impl Picker {
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.at_end = false;
         let view = cx.entity().downgrade();
-        let escape: EscapeHandler = Rc::new(move |window, cx| match view.upgrade() {
-            Some(view) => view.update(cx, |this, cx| this.escape(window, cx)),
-            None => EscapeOutcome::Dismissed,
+        let escape: EscapeHandler = {
+            let view = view.clone();
+            Rc::new(move |window, cx| match view.upgrade() {
+                Some(view) => view.update(cx, |this, cx| this.escape(window, cx)),
+                None => EscapeOutcome::Dismissed,
+            })
+        };
+        // A dismissal closes the picker at any depth; Escape steps back one depth at a time.
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
+            if let Some(view) = view.upgrade() {
+                view.update(cx, |this, cx| this.close(window, cx));
+            }
         });
         let field_focus = self.field.read(cx).focus_handle(cx);
         let layer = open_layer(
@@ -551,6 +560,7 @@ impl Picker {
             cx,
             LayerOptions {
                 escape,
+                dismiss,
                 layer_focus: self.focus.clone(),
                 trigger: None,
                 initial_focus: FocusTarget::Handle(field_focus),

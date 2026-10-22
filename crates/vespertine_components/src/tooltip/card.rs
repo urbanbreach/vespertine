@@ -11,8 +11,8 @@
 
 use super::hover_card::{HideAnswer, HoverCards, InteractiveHide, Reaction};
 use crate::floating::{
-    AnchoredMenu, BESIDE_OFFSET, ContainedAlign, EscapeHandler, EscapeOutcome, LayerRegistration,
-    Placement, TriggerBounds, containment_limits, set_layer_bounds,
+    AnchoredMenu, BESIDE_OFFSET, ContainedAlign, DismissHandler, EscapeHandler, EscapeOutcome,
+    LayerRegistration, Placement, TriggerBounds, containment_limits, set_layer_bounds,
 };
 use crate::tokens::ComponentTokens;
 use std::{collections::HashMap, hash::Hash, rc::Rc, time::Duration, time::Instant};
@@ -400,16 +400,22 @@ impl<K: Clone + Eq + Hash + 'static> Render for HoverCardHost<K> {
             Some(layer) => layer.id(),
             None => {
                 let host = cx.entity().downgrade();
-                let escape: EscapeHandler = Rc::new(move |window, cx| {
+                let dismiss: DismissHandler = Rc::new(move |window, cx| {
                     if let Some(host) = host.upgrade() {
                         host.update(cx, |this, cx| {
                             this.layer = None;
                             this.dismiss_cold(window, cx);
                         });
                     }
-                    EscapeOutcome::Dismissed
                 });
-                let registration = LayerRegistration::new(window, cx, escape);
+                let escape: EscapeHandler = {
+                    let dismiss = dismiss.clone();
+                    Rc::new(move |window, cx| {
+                        dismiss(window, cx);
+                        EscapeOutcome::Dismissed
+                    })
+                };
+                let registration = LayerRegistration::new(window, cx, escape, dismiss);
                 let id = registration.id();
                 self.layer = Some(registration);
                 id

@@ -10,10 +10,10 @@ use super::model::{
 };
 use crate::floating::menu::{AnchoredMenu, MENU_PADDING, ROW_GAP};
 use crate::floating::{
-    BoundsObserver, ContainedAlign, EscapeHandler, EscapeOutcome, FocusTarget, LayerHandle,
-    LayerOptions, MenuPart, OutsidePress, Placement, Popup, SurfaceMotion, TriggerBounds,
-    classify_key, close_popup, contained_max_size, containment_limits, keys::ListKey, open_layer,
-    rows_max_height,
+    BoundsObserver, ContainedAlign, DismissHandler, EscapeHandler, EscapeOutcome, FocusTarget,
+    LayerHandle, LayerOptions, MenuPart, OutsidePress, Placement, Popup, SurfaceMotion,
+    TriggerBounds, classify_key, close_popup, contained_max_size, containment_limits,
+    keys::ListKey, open_layer, rows_max_height,
 };
 use crate::tokens::ComponentTokens;
 use crate::tooltip::text::TextTooltipExt;
@@ -329,17 +329,24 @@ impl Select {
             self.trigger_focus.focus(window, cx);
         }
         let view = cx.entity().downgrade();
-        let escape: EscapeHandler = Rc::new(move |window, cx| {
+        let dismiss: DismissHandler = Rc::new(move |window, cx| {
             if let Some(view) = view.upgrade() {
                 view.update(cx, |this, cx| this.close(window, cx));
             }
-            EscapeOutcome::Dismissed
         });
+        let escape: EscapeHandler = {
+            let dismiss = dismiss.clone();
+            Rc::new(move |window, cx| {
+                dismiss(window, cx);
+                EscapeOutcome::Dismissed
+            })
+        };
         let layer = open_layer(
             window,
             cx,
             LayerOptions {
                 escape,
+                dismiss,
                 layer_focus: self.layer_focus.clone(),
                 trigger: Some(self.trigger_focus.clone()),
                 // The trigger keeps keyboard focus while the menu is open.

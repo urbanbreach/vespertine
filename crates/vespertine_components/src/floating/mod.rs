@@ -13,7 +13,8 @@
 //!
 //! * [`lifecycle`]: the unmounted/open/closing popup value, press note and reap (R13, R15).
 //! * [`motion`]: entrance and exit motion, reduced motion (R16).
-//! * [`dismiss`]: the window-scoped dismissal-layer registry and Escape ownership (R6-R8).
+//! * [`dismiss`]: the window-scoped dismissal-layer registry, Escape ownership (R6-R8) and
+//!   dismissal by identity.
 //! * [`focus`]: opening and closing focus, the focus-target contract (R9-R11).
 //! * [`trigger`]: trigger bounds and the outside-press probe (R13, R14).
 //! * [`menu`]: anchored and contained menu surfaces (R1, R2, R5, R16, R18-R21).
@@ -44,8 +45,9 @@ pub use rank::{filter_and_rank, match_rank};
 pub use stepping::{Edge, StepDirection, edge_available, step_available, step_slice};
 
 pub use dismiss::{
-    ESCAPE_OWNER_CONTEXT, EscapeHandler, EscapeOutcome, LayerId, LayerRegistration, is_top_layer,
-    layers, press_is_inside, register_layer, set_layer_bounds, top_layer, unregister_layer,
+    DismissHandler, ESCAPE_OWNER_CONTEXT, EscapeHandler, EscapeOutcome, LayerId, LayerRegistration,
+    dismiss_all_layers, dismiss_layer, is_top_layer, layers, press_is_inside, register_layer,
+    set_layer_bounds, top_layer, unregister_layer,
 };
 pub use focus::{FocusPick, FocusTarget, LayerHandle, LayerOptions, WeakLayerHandle, open_layer};
 pub use lifecycle::{Popup, close_popup, schedule_reap};

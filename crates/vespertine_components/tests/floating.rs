@@ -8,8 +8,9 @@ use vespertine::{
     Pixels, Point, Render, StatefulInteractiveElement, Styled, Window, div, point, px, size,
 };
 use vespertine_components::floating::{
-    BoundsObserver, ContainedAlign, EscapeOutcome, MenuPart, Placement, PopupMenu, PopupMenuItem,
-    layers, register_layer, top_layer, unregister_layer,
+    BoundsObserver, ContainedAlign, EscapeOutcome, LayerId, MenuPart, Placement, PopupMenu,
+    PopupMenuItem, dismiss_all_layers, dismiss_layer, layers, register_layer, top_layer,
+    unregister_layer,
 };
 use vespertine_test_host::{HostOptions, PaintLog, TestHost, require_backend};
 
@@ -602,6 +603,7 @@ fn a2_escape_goes_to_the_top_layer_only_and_is_consumed() {
                         unregister_layer(window, cx, id);
                         EscapeOutcome::Dismissed
                     }),
+                    Rc::new(|_, _| {}),
                 )
             })
             .unwrap()
@@ -656,6 +658,7 @@ fn escape_step_back_keeps_the_layer_and_hides_focus_indicators() {
                             EscapeOutcome::Dismissed
                         }
                     }),
+                    Rc::new(|_, _| {}),
                 )
             })
             .unwrap()
@@ -693,6 +696,141 @@ fn escape_step_back_keeps_the_layer_and_hides_focus_indicators() {
         .update_window(window, |_, window, cx| !layers(window, cx).contains(&id))
         .unwrap();
     assert!(gone);
+}
+
+// ---- Dismissal by identity ------------------------------------------------------------------
+
+/// Registers a layer whose Escape only steps back (it counts the Escapes it receives) and whose
+/// dismissal unregisters it, logging `name` and how many layers were registered at that moment.
+fn step_back_layer(
+    f: &mut Fixture,
+    name: &'static str,
+    escapes: &Rc<Cell<u32>>,
+    dismissals: &Rc<RefCell<Vec<(&'static str, usize)>>>,
+) -> LayerId {
+    let window = f.host.window();
+    let own = Rc::new(Cell::new(None));
+    let id = f
+        .host
+        .app()
+        .update_window(window, |_, window, cx| {
+            let escapes = escapes.clone();
+            let dismissals = dismissals.clone();
+            let own = own.clone();
+            register_layer(
+                window,
+                cx,
+                Rc::new(move |_, _| {
+                    escapes.set(escapes.get() + 1);
+                    EscapeOutcome::SteppedBack
+                }),
+                Rc::new(move |window, cx| {
+                    dismissals
+                        .borrow_mut()
+                        .push((name, layers(window, cx).len()));
+                    if let Some(id) = own.get() {
+                        unregister_layer(window, cx, id);
+                    }
+                }),
+            )
+        })
+        .unwrap();
+    own.set(Some(id));
+    id
+}
+
+#[test]
+fn dismissing_a_layer_by_identity_closes_it_where_escape_would_only_step_back() {
+    require_backend!();
+    let mut f = fixture(
+        (400., 300.),
+        window_bounds(0., 200., 400., 100.),
+        vec![MenuSpec::new((12., 12.), three_rows())],
+    );
+    f.host.motion_pause();
+    f.host.flush();
+    f.open(0);
+    let window = f.host.window();
+    let menu = f
+        .host
+        .app()
+        .update_window(window, |_, window, cx| top_layer(window, cx))
+        .unwrap()
+        .expect("the menu's layer");
+    let escapes = Rc::new(Cell::new(0));
+    let dismissals = Rc::new(RefCell::new(Vec::new()));
+    let panel = step_back_layer(&mut f, "panel", &escapes, &dismissals);
+
+    // The layer above the menu closes in one dismissal and its Escape handling never runs.
+    let dismiss = |f: &mut Fixture, id| {
+        f.host
+            .app()
+            .update_window(window, |_, window, cx| dismiss_layer(window, cx, id))
+            .unwrap()
+    };
+    assert!(dismiss(&mut f, panel));
+    assert_eq!(*dismissals.borrow(), vec![("panel", 2)]);
+    assert_eq!(escapes.get(), 0);
+    let stack = f
+        .host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx))
+        .unwrap();
+    assert_eq!(stack, vec![menu]);
+    assert!(f.is_open(0), "a lower layer stays open");
+
+    // A menu dismissed by identity closes as its owner closes it.
+    assert!(dismiss(&mut f, menu));
+    f.host.flush();
+    assert!(!f.is_open(0));
+    let stack = f
+        .host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx))
+        .unwrap();
+    assert!(stack.is_empty());
+    assert!(
+        !dismiss(&mut f, menu),
+        "a closed layer is no longer registered"
+    );
+}
+
+#[test]
+fn dismissing_every_layer_closes_menus_and_layers_top_first() {
+    require_backend!();
+    let mut f = fixture(
+        (400., 300.),
+        window_bounds(0., 200., 400., 100.),
+        vec![
+            MenuSpec::new((12., 12.), three_rows()),
+            MenuSpec::new((212., 12.), three_rows()),
+        ],
+    );
+    f.host.motion_pause();
+    f.host.flush();
+    let escapes = Rc::new(Cell::new(0));
+    let dismissals = Rc::new(RefCell::new(Vec::new()));
+    step_back_layer(&mut f, "bottom", &escapes, &dismissals);
+    f.open(0);
+    f.open(1);
+    step_back_layer(&mut f, "top", &escapes, &dismissals);
+
+    let window = f.host.window();
+    f.host
+        .app()
+        .update_window(window, |_, window, cx| dismiss_all_layers(window, cx))
+        .unwrap();
+    f.host.flush();
+    // The top layer went first, with all four registered; the bottom one last, alone.
+    assert_eq!(*dismissals.borrow(), vec![("top", 4), ("bottom", 1)]);
+    assert!(!f.is_open(0) && !f.is_open(1));
+    let stack = f
+        .host
+        .app()
+        .update_window(window, |_, window, cx| layers(window, cx))
+        .unwrap();
+    assert!(stack.is_empty());
+    assert_eq!(escapes.get(), 0);
 }
 
 // ---- Focus (R9, R10) --------------------------------------------------------------------------

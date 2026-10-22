@@ -370,6 +370,7 @@ fn a7_a_layer_above_owns_escape_and_the_backdrop_click(cx: &mut TestAppContext) 
                 escapes.set(escapes.get() + 1);
                 EscapeOutcome::Consumed
             }),
+            Rc::new(|_, _| {}),
         )
     });
     vcx.simulate_keystrokes("escape");

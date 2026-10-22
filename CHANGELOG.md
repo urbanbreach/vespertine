@@ -8,6 +8,14 @@ and examples that verify each one.
 
 ### Changed
 
+- Dismissal layers can be closed by identity (CMP-002): `dismiss_layer` closes one layer the way
+  its owner closes it, never as a mere step-back and without the Escape callbacks of the owner's
+  caller, and `dismiss_all_layers` closes every layer of a window, the top one first, for a modal
+  dialog that opens or a navigation that replaces the screen. Every layer now carries its
+  owner's full dismissal (`DismissHandler`): `LayerOptions` has a `dismiss` field and
+  `register_layer` and `LayerRegistration::new` take a `dismiss` argument. The components that
+  open layers supply theirs; a dialog closes without its cancel callback, also when it ignores
+  Escape, the picker closes at any depth and a lightbox runs its close callback.
 - `docs/key_dispatch.md` and the docs of `Context::on_focus_lost` and
   `Window::focus_lost_restore_target` explain that focus stays on an element that unmounted, so
   dispatch starts at the root, and how a focus-lost listener moves focus to the closest
