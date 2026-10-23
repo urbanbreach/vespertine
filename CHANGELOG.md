@@ -4,7 +4,12 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
-## Unreleased
+## 0.2.0-alpha.3 - 2026-10-23
+
+The third early alpha. It narrows the keyboard-focus dim to tab stops, lets any code dismiss a
+floating layer by its identity, and documents focus recovery after an unmount, the box-shadow blur
+radius and the source patches that applications must repeat. Every crate and JavaScript package
+carries `0.2.0-alpha.3`.
 
 ### Changed
 

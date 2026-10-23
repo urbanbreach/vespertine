@@ -46,7 +46,7 @@ members = [
 exclude = ["third_party"]
 
 [workspace.package]
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 publish = false
 edition = "2024"
 
@@ -572,7 +572,7 @@ path = "crates/vespertine_bench_metrics"
 
 [workspace.dependencies.vespertine_collections]
 path = "crates/vespertine_collections"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 
 [workspace.dependencies.vespertine_components]
 path = "crates/vespertine_components"

@@ -1,6 +1,6 @@
 {
   "name": "@vespertine/solid",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "description": "Solid adapter for the Vespertine native retained renderer",
   "license": "Apache-2.0",
   "type": "module",

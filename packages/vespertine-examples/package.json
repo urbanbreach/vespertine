@@ -1,6 +1,6 @@
 {
   "name": "@vespertine/examples",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "description": "Reference example surfaces for the Vespertine adapters: task list, hierarchical mosaic, direct image and a synchronized multi-pane editing surface",
   "license": "Apache-2.0",
   "type": "module",

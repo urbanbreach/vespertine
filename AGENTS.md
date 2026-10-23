@@ -9,7 +9,7 @@ on Vulkan) are verified. The macOS and Windows backends are preserved from upstr
 type-checked. iOS and WebAssembly are not supported.
 
 - The project is an early alpha, so APIs may break without deprecation.
-- Releases are git tags only (e.g. `v0.2.0-alpha.2`), with nothing published to crates.io or npm. Downstream apps (e.g. `../agent-harness`) depend on every crate at the **same tag**.
+- Releases are git tags only (e.g. `v0.2.0-alpha.3`), with nothing published to crates.io or npm. Downstream apps (e.g. `../agent-harness`) depend on every crate at the **same tag**.
 - Read `README.md` before structural work, and `crates/vespertine/docs/contexts.md` before touching entity or context code.
 
 ## Architecture & Data Flow
