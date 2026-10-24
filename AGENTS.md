@@ -54,7 +54,8 @@ anything from them or depend on them.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace --lib --bins --tests    # tests; examples are built by clippy/build, not the test gate
+cargo test --workspace --doc                         # doctests (nextest does not run them)
 cargo test -p vespertine_test_host --test host <test_name>    # one integration test
 cargo test -p <crate> -- --list                               # exact names for FEATURES.md rows
 cargo build --workspace --all-targets --release
@@ -129,6 +130,7 @@ cargo test -p vespertine_js_node   # builds the test addon and runs the package 
   - Use standard `#[test]`, with unit tests in-source and integration tests in `crates/*/tests/*.rs`.
   - `TestAppContext` runs on a seedable `TestDispatcher` with a fake HTTP client, so tests stay deterministic. Never use wall-clock sleeps.
   - Visual tests use `VisualTestContext` / `TestHost` (`vespertine_test_host`, feature `offscreen`) and assert pixels directly. There are no golden-image files, so don't read reference images from outside the repo.
+  - The gate runs on cargo-nextest (`.config/nextest.toml`): every test runs in its own process, so cross-test serialization must be declared as a nextest test group, not only as an in-process mutex. Doctests run separately: `cargo test --workspace --doc`.
 - **Tests must assert real behavior.** Don't write circular tests, such as comparing a parser with itself or keeping a Rust mirror of shader formulas just to test it. Recent history deleted tests like these.
 - **JS:** packages use `node --test test/*.test.js` (Solid adds `--conditions=browser`). They need an addon built with `--test-host`.
 - **Performance:** `vsp-bench --verify` checks that the retained output matches a full render. For perf-sensitive changes (shaping, layout, scene), measure with `vsp-bench` or a `PERF-*` scene before and after, and record the numbers in `CHANGELOG.md`. There's no automated perf gate.

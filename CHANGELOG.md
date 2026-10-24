@@ -4,6 +4,22 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
+## Unreleased
+
+### Changed
+
+- The test gate runs on cargo-nextest: `cargo nextest run --workspace --lib --bins --tests`
+  replaces `cargo test --workspace`, and doctests run separately through
+  `cargo test --workspace --doc` (nextest does not run doctests). `.config/nextest.toml`
+  serializes the `vespertine_linux` tests that own selections and windows on the real X server,
+  which a process-wide mutex serialized under the old runner, and starts the slowest suites (the
+  scripted workbench run, the JavaScript adapter suites) first. Building examples is left to
+  `cargo clippy --workspace --all-targets` and `cargo build --workspace --all-targets --release`,
+  so an edit no longer relinks the 148 examples on every test build. The JavaScript test harness
+  of `vespertine_js_node` takes a per-workspace file lock around `npm install` and the addon
+  build, and installs the addon by renaming a staged copy, so its tests are safe to run
+  concurrently as separate processes.
+
 ## 0.2.0-alpha.3 - 2026-10-23
 
 The third early alpha. It narrows the keyboard-focus dim to tab stops, lets any code dismiss a

@@ -218,6 +218,7 @@ JavaScript packages (an npm workspace under `packages/`):
   `libjson-glib-dev`; Fedora `webkit2gtk4.1-devel`, `json-glib-devel`). Set
   `VSP_WEBKIT_HELPER_BINARY` to embed a prebuilt helper instead of compiling `helper/*.c`.
 - For the JavaScript packages: Node 20 or later, or Bun.
+- [cargo-nextest](https://nexte.st) (`cargo install cargo-nextest`) runs the test gate.
 
 ## Using Vespertine
 
@@ -270,8 +271,9 @@ The JavaScript packages are not on npm: build them from a checkout (see [Build a
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo build --workspace --all-targets --release
+cargo nextest run --workspace --lib --bins --tests   # tests (nextest runs each in its own process)
+cargo test --workspace --doc                         # doctests; nextest does not run them
+cargo build --workspace --all-targets --release     # examples among the release targets
 # The macOS and Windows backends type-check from Linux
 # (rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc):
 cargo check -p vespertine_windows --lib --no-default-features --target x86_64-pc-windows-msvc

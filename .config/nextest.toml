@@ -1,0 +1,23 @@
+# cargo-nextest configuration (https://nexte.st). Nextest runs every test in its own process, so
+# tests that share a resource outside the process need an explicit group here.
+
+# The tests of `vespertine_linux` that own selections and windows on the session's real X server
+# serialize on a process-wide mutex under `cargo test`; the group provides the same guarantee
+# across nextest's one-process-per-test runs (also against each other's X clients).
+[test-groups]
+x11-server = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(vespertine_linux) & test(/^linux::x11::/)'
+test-group = 'x11-server'
+
+# Start the runs that dominate wall time first, so they overlap with the rest instead of
+# extending it at the end. (The JS adapter suites build the addon and run npm suites in child
+# processes; the workbench test replays a 60-second scripted session.)
+[[profile.default.overrides]]
+filter = 'binary_id(vespertine_components::workbench)'
+priority = 100
+
+[[profile.default.overrides]]
+filter = 'package(vespertine_js_node)'
+priority = 90
