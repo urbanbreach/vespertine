@@ -29,11 +29,28 @@ pub fn packages_dir() -> PathBuf {
     workspace_root().join("packages")
 }
 
+/// Holds an exclusive lock, shared by every test process of this workspace, while the harness
+/// installs dependencies or builds and installs the addon. Nextest runs each test in its own
+/// process, so the in-process `OnceLock`s alone would let two `npm install`s run in one
+/// workspace at once.
+fn setup_lock() -> std::fs::File {
+    let workspace: String = workspace_root()
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let path = std::env::temp_dir().join(format!("vespertine-js-harness{workspace}.lock"));
+    let file = std::fs::File::create(&path).expect("create the harness lock file");
+    file.lock().expect("lock the harness lock file");
+    file
+}
+
 /// Installs the npm workspace dependencies (once per process; npm keeps its own cache, so a
 /// repeated install is quick and works offline once the packages were fetched).
 pub fn install_dependencies() {
     static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INSTALLED.get_or_init(|| {
+        let _lock = setup_lock();
         let status = Command::new("npm")
             .current_dir(packages_dir())
             .args(["install", "--no-audit", "--no-fund", "--prefer-offline"])
@@ -64,8 +81,10 @@ pub fn run_package(
 
 /// Builds the addon, with the offscreen test renderer the JavaScript tests drive, with cargo and
 /// installs it as `<target>/vespertine-js/vespertine_js.node` (the extension Node requires to
-/// load a native module). Returns its path.
+/// load a native module). Returns its path. The install renames a fresh copy over the old file,
+/// so a runtime of a concurrent test process that has the old addon loaded keeps its mapping.
 pub fn build_addon(release: bool) -> PathBuf {
+    let _lock = setup_lock();
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let mut command = Command::new(cargo);
     command
@@ -111,7 +130,9 @@ pub fn build_addon(release: bool) -> PathBuf {
         .join("vespertine-js");
     std::fs::create_dir_all(&directory).expect("create addon directory");
     let addon = directory.join("vespertine_js.node");
-    std::fs::copy(&library, &addon).expect("install the addon");
+    let staged = directory.join(format!("vespertine_js.node.{}", std::process::id()));
+    std::fs::copy(&library, &staged).expect("stage the addon");
+    std::fs::rename(&staged, &addon).expect("install the addon");
     addon
 }
 
