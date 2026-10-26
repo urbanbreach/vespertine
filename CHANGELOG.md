@@ -4,7 +4,11 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
-## Unreleased
+## 0.2.1 - 2026-10-26
+
+Accessibility on Linux works with AT-SPI clients: windows report their geometry, and text and
+clickable elements are exposed without annotations. The test gate moves to cargo-nextest. Every
+crate and JavaScript package carries `0.2.1`.
 
 ### Changed
 

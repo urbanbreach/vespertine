@@ -230,10 +230,10 @@ and `vespertine_platform` with the Linux backends; `vespertine_components` is op
 
 ```toml
 [dependencies]
-vespertine = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.3" }
-vespertine_platform = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.3", features = ["wayland", "x11"] }
+vespertine = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.1" }
+vespertine_platform = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.1", features = ["wayland", "x11"] }
 # Without `browser`, the components need no WebKitGTK.
-vespertine_components = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.0-alpha.3", default-features = false, features = ["diagram", "math"] }
+vespertine_components = { git = "https://github.com/urbanbreach/vespertine", tag = "v0.2.1", default-features = false, features = ["diagram", "math"] }
 ```
 
 The application's workspace root `Cargo.toml` also needs the source patches of this repository's

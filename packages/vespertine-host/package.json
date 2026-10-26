@@ -1,6 +1,6 @@
 {
   "name": "@vespertine/host",
-  "version": "0.2.0-alpha.3",
+  "version": "0.2.1",
   "description": "JavaScript host runtime for Vespertine: native renderer loader, mutation queue, event routing, observers, frame loop and idle GC",
   "license": "Apache-2.0",
   "type": "module",
