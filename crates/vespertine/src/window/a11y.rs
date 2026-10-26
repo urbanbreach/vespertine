@@ -58,6 +58,17 @@
 //! accessibility tree. We try to warn when using accessibility APIs on
 //! [`div()`] without setting an ID.
 //!
+//! Text is the exception (A11Y-003): an element without an id that draws text
+//! ([`Element::a11y_text`]) becomes a label leaf of the node on top of the
+//! stack. Its [`NodeId`] is derived from the path hash of the nearest identified
+//! element (the *scope*) and an ordinal: the number of such leaves the scope
+//! received before it in the frame.
+//!
+//! The root of the tree is the window node, whose bounds are the visible part
+//! of the window; the platform adapter learns the window's geometry through
+//! [`PlatformWindow::a11y_update_window_bounds`] when the adapter is created and
+//! whenever the window is resized, moved or rescaled.
+//!
 //! This all happens in [`Drawable::prepaint`]. The [`A11y`] struct maintains a
 //! stack of nodes during prepainting, which we can use to calculate the
 //! [`NodeId`]s, and record parent-child relationships. Once all [`Element`]s in
@@ -99,11 +110,13 @@
 //! A retained view does not prepaint again, so its accessibility nodes would be
 //! missing from the tree. Every operation the tree builder receives is therefore
 //! also written to an ordered log ([`A11yOp`]): push a node, add a synthetic child,
-//! finish a node, associate a focus handle with the current node, claim the active
-//! descendant. A view's prepaint output records the stretch of that log it produced;
-//! replaying a view replays the stretch through the ordinary builder (which logs it
-//! again for the next frame), attaches the nodes to whichever node is open and
-//! re-evaluates focus claims against the current focus.
+//! add a text leaf, finish a node, associate a focus handle with the current node,
+//! claim the active descendant. A view's prepaint output records the stretch of that
+//! log it produced; replaying a view replays the stretch through the ordinary builder
+//! (which logs it again for the next frame), attaches the nodes to whichever node is
+//! open and re-evaluates focus claims against the current focus. A text leaf is
+//! numbered within its scope again, in tree order, so it gets the id a full rebuild
+//! would give it.
 //!
 //! [`NodeId`]: accesskit::NodeId
 
@@ -123,6 +136,35 @@ use vespertine_collections::{FxHashMap, FxHashSet};
 
 /// The fixed AccessKit node ID used for the root of every window's a11y tree.
 pub(crate) const ROOT_NODE_ID: NodeId = NodeId(0);
+
+/// The description of the tree sent with every update: its root and the toolkit that builds it,
+/// which AT-SPI reports as the application's toolkit name and version (A11Y-003).
+pub(crate) fn tree_description() -> accesskit::Tree {
+    accesskit::Tree {
+        root: ROOT_NODE_ID,
+        toolkit_name: Some("Vespertine".to_owned()),
+        toolkit_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+    }
+}
+
+/// The node id of the text leaf numbered `ordinal` within `scope` (A11Y-003).
+fn text_node_id(scope: u64, ordinal: u32) -> NodeId {
+    let mut hasher = std::hash::DefaultHasher::default();
+    "vespertine-text".hash(&mut hasher);
+    scope.hash(&mut hasher);
+    ordinal.hash(&mut hasher);
+    NodeId(hasher.finish())
+}
+
+/// The bounds of `bounds` in the device pixels AccessKit expects.
+pub(crate) fn device_rect(bounds: Bounds<Pixels>, scale_factor: f32) -> accesskit::Rect {
+    accesskit::Rect {
+        x0: (bounds.origin.x.0 * scale_factor) as f64,
+        y0: (bounds.origin.y.0 * scale_factor) as f64,
+        x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale_factor) as f64,
+        y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale_factor) as f64,
+    }
+}
 
 /// A listener for an accessibility action on a specific node.
 pub(crate) type A11yActionListener =
@@ -308,10 +350,12 @@ impl A11y {
         }
     }
 
-    /// Clear per-frame state and push the root node to start a new frame.
-    pub(crate) fn begin_frame(&mut self) {
+    /// Clear per-frame state and push the root node to start a new frame. `root_bounds` is the
+    /// visible content area of the window in device pixels: the window node's extents.
+    pub(crate) fn begin_frame(&mut self, root_bounds: accesskit::Rect) {
         self.focus_ids.clear();
-        self.nodes.begin_frame(self.window_title.as_ref());
+        self.nodes
+            .begin_frame(self.window_title.as_ref(), root_bounds);
     }
 
     /// The number of operations logged so far in the frame being built.
@@ -381,6 +425,20 @@ impl A11y {
                         }
                     }
                 }
+                A11yOp::Text {
+                    scope,
+                    mut node,
+                    #[cfg(debug_assertions)]
+                    info,
+                } => {
+                    translate_bounds(&mut node, translation);
+                    self.nodes.push_text(
+                        scope,
+                        node,
+                        #[cfg(debug_assertions)]
+                        info,
+                    );
+                }
                 A11yOp::SetCurrent { mut node } => {
                     translate_bounds(&mut node, translation);
                     self.nodes.replace_current_properties(node);
@@ -437,6 +495,16 @@ pub(crate) enum A11yOp {
         node: accesskit::Node,
         /// The leaf carries bounds that cannot be assumed to move with the current node.
         independent_bounds: bool,
+        #[cfg(debug_assertions)]
+        info: Option<debug::NodeDebugInfo>,
+    },
+    /// A text leaf of an element without an id was added to the current node (A11Y-003). Its id
+    /// is not logged: the builder numbers it within `scope` again, so a replay in tree order
+    /// gives it the id a full rebuild would.
+    Text {
+        /// The path hash of the nearest identified element around the text.
+        scope: u64,
+        node: accesskit::Node,
         #[cfg(debug_assertions)]
         info: Option<debug::NodeDebugInfo>,
     },
@@ -569,6 +637,9 @@ pub(crate) struct A11yNodeBuilder {
     pub(crate) ops: Vec<A11yOp>,
     /// The operations of the preceding frame: the source of replays.
     pub(crate) previous_ops: Vec<A11yOp>,
+    /// How many text leaves of elements without an id each scope received in the frame being
+    /// built: the next leaf of a scope takes the count as its ordinal (A11Y-003).
+    text_ordinals: FxHashMap<u64, u32>,
     #[cfg(debug_assertions)]
     node_info: FxHashMap<NodeId, debug::NodeDebugInfo>,
 }
@@ -584,6 +655,7 @@ impl A11yNodeBuilder {
             active_descendant: None,
             ops: Vec::new(),
             previous_ops: Vec::new(),
+            text_ordinals: FxHashMap::default(),
             #[cfg(debug_assertions)]
             node_info: FxHashMap::default(),
         }
@@ -682,6 +754,39 @@ impl A11yNodeBuilder {
         true
     }
 
+    /// Adds a text leaf of an element without an id as a child of the current node (A11Y-003).
+    /// Its id is derived from `scope`, the path hash of the nearest identified element around
+    /// the text, and from the number of such leaves the scope received before it in this frame,
+    /// so the id is stable while the text keeps its place among the anonymous text of its
+    /// scope.
+    pub(crate) fn push_text(
+        &mut self,
+        scope: u64,
+        node: accesskit::Node,
+        #[cfg(debug_assertions)] info: Option<debug::NodeDebugInfo>,
+    ) {
+        let ordinal = self.text_ordinals.entry(scope).or_default();
+        let id = text_node_id(scope, *ordinal);
+        *ordinal += 1;
+        if !self.can_push(id) {
+            return;
+        }
+        if let Some(parent) = self.nodes_stack.last_mut() {
+            parent.push_child(id);
+        }
+        #[cfg(debug_assertions)]
+        if let Some(info) = &info {
+            self.node_info.insert(id, info.clone());
+        }
+        self.ops.push(A11yOp::Text {
+            scope,
+            node: node.clone(),
+            #[cfg(debug_assertions)]
+            info,
+        });
+        self.all_nodes.push((id, node));
+    }
+
     pub(crate) fn current_node_mut(&mut self) -> Option<&mut accesskit::Node> {
         self.nodes_stack.last_mut()
     }
@@ -723,19 +828,21 @@ impl A11yNodeBuilder {
     }
 
     /// Push the root node to start a new frame.
-    fn begin_frame(&mut self, window_title: Option<&SharedString>) {
+    fn begin_frame(&mut self, window_title: Option<&SharedString>, root_bounds: accesskit::Rect) {
         std::mem::swap(&mut self.ops, &mut self.previous_ops);
         self.ops.clear();
         self.all_nodes.clear();
         self.ids_stack.clear();
         self.nodes_stack.clear();
         self.seen_ids.clear();
+        self.text_ordinals.clear();
         #[cfg(debug_assertions)]
         self.node_info.clear();
         let mut root_node = accesskit::Node::new(accesskit::Role::Window);
         if let Some(title) = window_title {
             root_node.set_label(title.to_string());
         }
+        root_node.set_bounds(root_bounds);
 
         self.ids_stack.push(ROOT_NODE_ID);
         self.nodes_stack.push(root_node);
@@ -832,7 +939,7 @@ impl A11yNodeBuilder {
         let nodes = std::mem::take(&mut self.all_nodes);
         let update = TreeUpdate {
             nodes,
-            tree: Some(accesskit::Tree::new(ROOT_NODE_ID)),
+            tree: Some(tree_description()),
             tree_id: accesskit::TreeId::ROOT,
             focus,
         };
@@ -900,15 +1007,19 @@ mod tests {
         accesskit::Node::new(Role::GenericContainer)
     }
 
+    fn window_rect() -> accesskit::Rect {
+        accesskit::Rect::new(0., 0., 800., 600.)
+    }
+
     fn new_builder() -> A11yNodeBuilder {
         let mut builder = A11yNodeBuilder::new();
-        builder.begin_frame(None);
+        builder.begin_frame(None, window_rect());
         builder
     }
 
     fn new_a11y() -> A11y {
         let mut a11y = A11y::new(Arc::new(AtomicBool::new(true)), false, None);
-        a11y.begin_frame();
+        a11y.begin_frame(window_rect());
         a11y
     }
 

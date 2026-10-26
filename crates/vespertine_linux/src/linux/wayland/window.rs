@@ -2619,7 +2619,15 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn a11y_update_window_bounds(&self) {
-        // Wayland doesn't expose window position, so this is a no-op
+        // Wayland keeps a window's position on the screen from its clients, so the surface is
+        // placed at the origin: screen and window coordinates coincide (as with winit). The size
+        // is the surface in device pixels, the unit of the node bounds.
+        let mut state = self.borrow_mut();
+        let size = state.bounds.size.to_device_pixels(state.scale);
+        let surface = accesskit::Rect::new(0.0, 0.0, size.width.0.into(), size.height.0.into());
+        if let Some(adapter) = state.accesskit_adapter.as_mut() {
+            adapter.set_root_window_bounds(surface, surface);
+        }
     }
 }
 

@@ -35,8 +35,9 @@ clocks were measured. Debug builds are not comparable with release builds.
 are drawn through identical steps from fresh state and every frame the expanded scene primitives
 (paint order, clipping, geometry, color, text layout, and what each sprite shows, with atlas
 packing ignored), hit-test results and listener-observed positions are compared. `--a11y` adds
-the accessibility tree, `--pixels` the GPU-rendered pixels. `--fault SEED` places a seeded
-one-pixel fault in the retained window; the run must fail. New checks implement
+the accessibility tree (node ids compared by their order of first appearance, since each window
+derives them from identities of its own), `--pixels` the GPU-rendered pixels. `--fault SEED`
+places a seeded one-pixel fault in the retained window; the run must fail. New checks implement
 `verify::FrameCheck` and are added with `Lockstep::with_check`.
 
 ### Workloads

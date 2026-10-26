@@ -16,7 +16,7 @@ use vespertine::{
     KeyDownEvent, KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
     Style, Styled, TransformationMatrix, Window, anchored, deferred, div, file_icon_image, fill,
-    point, px, relative, size,
+    point, prelude::FluentBuilder, px, relative, size,
 };
 
 struct AreaElement {
@@ -383,6 +383,9 @@ impl Render for TextArea {
             .line_height(metrics.line_height)
             .text_color(if disabled { theme.muted } else { theme.text })
             .role(self.role_value())
+            .when_some(self.accessible_label_ref().cloned(), |root, label| {
+                root.aria_label(label)
+            })
             .aria_value(SharedString::from(self.source().to_owned()))
             .aria_placeholder(self.placeholder_ref().clone())
             .aria_read_only(self.is_read_only())

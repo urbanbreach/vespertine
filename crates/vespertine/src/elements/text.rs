@@ -34,7 +34,12 @@ use vespertine_util::ResultExt;
 /// the accessibility tree, which allows the text to be visible to screen
 /// readers and other assistive technologies.
 ///
-/// This ID is stable across frames. If the same text, with the same ID, is
+/// Plain strings and [`StyledText`] are accessible too, without an ID of their
+/// own: their node's ID is derived from the nearest element with an ID and the
+/// text's place among the other plain text inside it (A11Y-003). An explicit
+/// ID keeps the node's identity independent of that place.
+///
+/// The ID of a [`Text`] is stable across frames. If the same text, with the same ID, is
 /// present in two consecutive frames, no updates are reported to the screen
 /// reader. If the text changes, but the ID stays the same, then the screen
 /// reader will be notified that a text node's content has changed. **However**,
@@ -82,13 +87,13 @@ impl Text {
 
     /// Create a new [`Text`] element that is inaccessible to screen readers.
     ///
-    /// In order for text to be accessible to screen readers, it must have an ID
-    /// provided. If you want text to be accessible, either use [`text`] to have
-    /// an ID automatically assigned, or use [`Text::new`] to manually assign an
-    /// ID.
+    /// Text is accessible by default: [`text!`](macro@crate::text) and [`Text::new`] assign an ID,
+    /// and plain strings get a node of their own. This function draws text that
+    /// assistive technology must not see.
     ///
     /// This function is intended for use inside custom UI components, where
-    /// accessible properties may be set on parent containers.
+    /// accessible properties may be set on parent containers, so the text is not
+    /// reported twice.
     #[inline]
     pub const fn new_inaccessible(text: SharedString) -> Self {
         Self { id: None, text }
@@ -264,6 +269,10 @@ impl Element for &'static str {
         None
     }
 
+    fn a11y_text(&self) -> Option<&str> {
+        Some(self)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -336,6 +345,10 @@ impl Element for SharedString {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
+    }
+
+    fn a11y_text(&self) -> Option<&str> {
+        Some(self)
     }
 
     fn request_layout(
@@ -551,6 +564,10 @@ impl Element for StyledText {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
+    }
+
+    fn a11y_text(&self) -> Option<&str> {
+        Some(&self.text)
     }
 
     fn request_layout(

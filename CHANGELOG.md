@@ -19,6 +19,38 @@ and examples that verify each one.
   of `vespertine_js_node` takes a per-workspace file lock around `npm install` and the addon
   build, and installs the addon by renaming a staged copy, so its tests are safe to run
   concurrently as separate processes.
+- Accessibility trees describe the whole window (A11Y-003). Text drawn without an id (plain
+  strings, `StyledText`, and `RichText` runs of code, Markdown, diffs and host text) is exposed
+  as label nodes, children of the nearest node, so assistive technology can read the window's
+  content and buttons take their names from their text. A text's node id comes from the nearest
+  element with an id and the text's place among the other text without an id inside it.
+  `Element::a11y_text` exposes the text of a custom element without an id, and
+  `Text::new_inaccessible` still keeps text out of the tree. An element that handles clicks and
+  has no role is exposed as a button with the click action; an explicit role wins, and the
+  `none` and `presentation` role tokens keep the element out. `TextArea::accessible_label` and
+  `set_accessible_label` label a multiline input, as `TextField` already could, and the
+  `textarea` host puts its `aria-label` on the editor's node, as the `input` host does. The tree
+  names its toolkit (`Vespertine`) and version, which AT-SPI reports for the application.
+  Frames drawn while no assistive technology is connected cost the same as before. With one
+  connected, each exposed node adds about 0.8 µs to a frame that builds it and 0.4 µs to a frame
+  that replays it: a 400-row view of text and buttons (1,201 nodes, release build, test
+  platform) went from 2.3 to 3.2 ms per rebuilt frame and from 0.07 to 0.55 ms per replayed
+  frame.
+- `vsp-bench --verify --a11y` compares node ids by their order of first appearance (DEV-003): a
+  node's id derives from identities each window holds on its own, such as a list's state, so
+  trees under a list differed in their ids alone.
+
+### Fixed
+
+- AT-SPI clients saw every window with invalid extents (A11Y-003): the window node had no
+  bounds, and nothing called `PlatformWindow::a11y_update_window_bounds`, so the Linux adapters
+  never learned the window's geometry, and clients that find windows by their size, such as
+  computer-use agents, found none. The window node now covers the visible window (without the
+  shadow margin of client decorations), and the adapter is updated when it is created and
+  whenever the window is resized, moved or rescaled. Wayland, which keeps window positions from
+  its clients, places the surface at the origin, so screen and window coordinates coincide. X11
+  converts node bounds with the X window's own rectangle, to which they are relative, instead of
+  one inset by the shadow margin.
 
 ## 0.2.0-alpha.3 - 2026-10-23
 

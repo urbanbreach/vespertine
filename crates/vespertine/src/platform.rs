@@ -1645,7 +1645,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Provide a TreeUpdate to the accessibility adapter.
     fn a11y_tree_update(&self, _tree_update: accesskit::TreeUpdate) {}
 
-    /// Inform the adapter of updated window bounds.
+    /// Inform the adapter of updated window bounds: the window's rectangle on the screen in
+    /// device pixels, which the adapter adds to node bounds (relative to the surface origin) to
+    /// report screen coordinates. Called after [`Self::a11y_init`] and whenever the window is
+    /// resized, moved or rescaled.
     fn a11y_update_window_bounds(&self) {}
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]

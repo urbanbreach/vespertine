@@ -64,6 +64,11 @@
 //! [`role`][Element::a11y_role]. This is used to inform assistive technology
 //! what *sort* of node it is (button, label, table, etc.). You can use
 //! [`div().id(...).role()`][StatefulInteractiveElement::role] to set the role.
+//! An element that handles clicks
+//! ([`.on_click()`][StatefulInteractiveElement::on_click]) and has no role is
+//! reported as a [`Role::Button`], so assistive technology can find and press
+//! it; give it another role when it is something else, or suppress its node
+//! with the `none` or `presentation` role token (see [`DeclarativeAria`]).
 //!
 //! Nodes with the same global ID *across frames* are considered to be "the
 //! same" node. For example:
@@ -100,11 +105,22 @@
 //! In other words, by controlling the ID of an element, you can control whether
 //! a change to a UI element is considered meaningful. You can also control
 //! whether elements are reported to assistive technology *at all* by setting
-//! the [`role`][Element::a11y_role], since nodes with no role are not reported.
+//! the [`role`][Element::a11y_role], since elements with no role are not
+//! reported (text and clickable elements excepted, as described here).
 //!
 //! #### IDs and text
 //!
 //! Special care must be taken when dealing with text.
+//!
+//! Text without an ID of its own is reported: plain strings (`&'static str`,
+//! [`SharedString`], `String`) and [`StyledText`] become [`Role::Label`] nodes
+//! holding the text, children of the nearest enclosing element that has a
+//! node. Their IDs are derived from the nearest enclosing element with an ID
+//! and the text's place among the other text without an ID inside it: a text
+//! whose content changes keeps its node, while text added before it inside the
+//! same element moves it to another node. Text that is empty or only
+//! whitespace is not reported. When a text needs an identity of its own, give
+//! it an ID, as described below.
 //!
 //! VESPERTINE provides the [`text!`] macro, which wraps strings in the [`Text`] type,
 //! but automatically derives an ID. Usually, this is what you want. However,
@@ -182,10 +198,10 @@
 //! ID, and the global ID takes into account the IDs of all ancestors, this
 //! works too.
 //!
-//! Occasionally, you will need to create a [`Text`] element with *no* ID. You
-//! can achieve this with [`Text::new_inaccessible`]. If you are creating a
-//! custom UI component (e.g. a button), you may want this so that you can set a
-//! label property on a parent [`div`] without duplicating the text in the
+//! Occasionally, you will need text that is *not* reported. You can achieve
+//! this with [`Text::new_inaccessible`]. If you are creating a custom UI
+//! component (e.g. a button), you may want this so that you can set a label
+//! property on a parent [`div`] without duplicating the text in the
 //! accessibility tree.
 //!
 //! ### Handling actions
@@ -237,6 +253,19 @@
 //! [`Window::set_a11y_active_for_tests`] marks accessibility active (unless the
 //! app was created without accessibility) and [`Window::debug_a11y_tree_json`]
 //! dumps the tree, including each node's `author_id`.
+//!
+//! ## The window node
+//!
+//! The root of every window's tree is a [`Role::Window`] node labelled with the
+//! window title. Its bounds are the visible part of the window: the viewport
+//! without the invisible shadow margin of a client-decorated window (see
+//! [`Window::set_client_inset`]). Like the bounds of every node, they are in
+//! device pixels, relative to the origin of the window's surface, as AccessKit
+//! expects. The platform adapter places the tree on the screen: on X11 at the
+//! window's position, and on Wayland, which keeps window positions from its
+//! clients, at the origin, so that screen and window coordinates coincide. The
+//! tree names its toolkit (`Vespertine`) and version, which AT-SPI reports for
+//! the application.
 //!
 //! ## Synthetic children
 //!

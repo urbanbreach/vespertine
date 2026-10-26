@@ -147,7 +147,9 @@ impl FrameCheck for ListenerCheck {
 
 /// The accessibility tree both windows deliver to an assistive technology (A11Y-002). Opt-in:
 /// it connects a simulated assistive technology to both windows, which forces accessibility
-/// frames.
+/// frames. Node ids are compared by their order of first appearance: a node's id derives from
+/// identities each window holds on its own (a list's state, for one), so the ids differ between
+/// the windows while the trees they identify must not.
 pub struct AccessibilityCheck {
     connected: bool,
 }
@@ -179,13 +181,39 @@ impl FrameCheck for AccessibilityCheck {
                 ));
             }
             let update = harness.app().last_accessibility_update(window)?;
-            Ok(format!("{update:#?}"))
+            Ok(normalize_node_ids(&format!("{update:#?}")))
         };
         let connect = !self.connected;
         let (retained, full) = (tree(retained, connect)?, tree(full, connect)?);
         self.connected = true;
         Ok(Comparison::of_texts(&retained, &full))
     }
+}
+
+/// Replaces every node id (`#` and digits) of a debug-printed tree update by `#n` and the
+/// order of the id's first appearance.
+fn normalize_node_ids(text: &str) -> String {
+    let mut ids: Vec<&str> = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('#') {
+        out.push_str(&rest[..at]);
+        let digits = rest[at + 1..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map_or(&rest[at + 1..], |end| &rest[at + 1..at + 1 + end]);
+        rest = &rest[at + 1 + digits.len()..];
+        if digits.is_empty() {
+            out.push('#');
+            continue;
+        }
+        let ordinal = ids.iter().position(|id| *id == digits).unwrap_or_else(|| {
+            ids.push(digits);
+            ids.len() - 1
+        });
+        out.push_str(&format!("#n{ordinal}"));
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The GPU-rendered pixels of both windows. Needs windows opened with a renderer

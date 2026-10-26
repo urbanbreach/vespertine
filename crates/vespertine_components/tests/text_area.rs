@@ -586,3 +586,28 @@ fn read_only_and_disabled_editors_keep_the_core_semantics() {
     };
     assert!(menu.copy && !menu.cut && !menu.paste && menu.select_all);
 }
+
+#[test]
+fn accessible_label_names_the_multiline_input_node() {
+    // A11Y-003 A6: a text area is labelled like a text field.
+    require_backend!();
+    let mut fx = fixture(300.0, 200.0, false, |area| {
+        area.value("draft").accessible_label("Message")
+    });
+    let input_label = |fx: &mut Fixture| {
+        let tree = fx.host.accessibility_tree().unwrap().unwrap();
+        let inputs: Vec<serde_json::Value> = tree["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .map(|entry| &entry[1])
+            .filter(|node| node["role"] == "multilineTextInput")
+            .map(|node| node["properties"]["label"].clone())
+            .collect();
+        assert_eq!(inputs.len(), 1, "{tree}");
+        inputs[0].as_str().map(str::to_owned)
+    };
+    assert_eq!(input_label(&mut fx).as_deref(), Some("Message"));
+    fx.with(|area, _, cx| area.set_accessible_label(None, cx));
+    assert_eq!(input_label(&mut fx), None);
+}

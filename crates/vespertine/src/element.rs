@@ -120,6 +120,20 @@ pub trait Element: 'static + IntoElement {
     /// See the [accessibility guide](crate::_accessibility) for an overview.
     fn write_a11y_info(&self, _node: &mut accesskit::Node) {}
 
+    /// The text this element draws, for assistive technology (A11Y-003).
+    ///
+    /// An element without an [`id`](Element::id) that returns text here appears in the
+    /// accessibility tree as a [`Label`](accesskit::Role::Label) node whose value is the text,
+    /// a child of the nearest enclosing element that has a node. Text that is empty or only
+    /// whitespace is left out. Elements with an id describe themselves through
+    /// [`a11y_role`](Element::a11y_role) and [`write_a11y_info`](Element::write_a11y_info)
+    /// instead.
+    ///
+    /// See the [accessibility guide](crate::_accessibility) for an overview.
+    fn a11y_text(&self) -> Option<&str> {
+        None
+    }
+
     /// Add synthetic child nodes to an [`Element`] that has an
     /// [`.id()`][Element::id] and a [`.role()`][Element::a11y_role].
     ///
@@ -420,35 +434,70 @@ impl<E: Element> Drawable<E> {
                 let bounds = window.layout_bounds(layout_id);
                 let mut pushed_a11y_node = false;
                 if window.a11y.is_active() && window.inert_depth == 0 {
-                    if let Some(global_id) = global_id.as_ref() {
-                        if let Some(role) = self.element.a11y_role() {
-                            let node_id = global_id.accesskit_node_id();
-                            let mut node = accesskit::Node::new(role);
-                            let scale = window.scale_factor();
-                            node.set_bounds(accesskit::Rect {
-                                x0: (bounds.origin.x.0 * scale) as f64,
-                                y0: (bounds.origin.y.0 * scale) as f64,
-                                x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale) as f64,
-                                y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
-                            });
-                            self.element.write_a11y_info(&mut node);
-                            pushed_a11y_node = window.a11y.nodes.push(node_id, node);
-                            #[cfg(debug_assertions)]
-                            if pushed_a11y_node {
-                                let view = window
-                                    .a11y
-                                    .view_type_names
-                                    .get(&window.current_view())
-                                    .copied();
-                                let source_location = self.element.source_location();
-                                window.a11y.nodes.record_node_info(
-                                    node_id,
-                                    crate::window::a11y::debug::NodeDebugInfo {
-                                        synthetic: false,
-                                        view,
-                                        element_id: global_id.last().map(|id| format!("{id:?}")),
-                                        source_location,
-                                    },
+                    match global_id.as_ref() {
+                        Some(global_id) => {
+                            if let Some(role) = self.element.a11y_role() {
+                                let node_id = global_id.accesskit_node_id();
+                                let mut node = accesskit::Node::new(role);
+                                node.set_bounds(crate::window::a11y::device_rect(
+                                    bounds,
+                                    window.scale_factor(),
+                                ));
+                                self.element.write_a11y_info(&mut node);
+                                pushed_a11y_node = window.a11y.nodes.push(node_id, node);
+                                #[cfg(debug_assertions)]
+                                if pushed_a11y_node {
+                                    let view = window
+                                        .a11y
+                                        .view_type_names
+                                        .get(&window.current_view())
+                                        .copied();
+                                    let source_location = self.element.source_location();
+                                    window.a11y.nodes.record_node_info(
+                                        node_id,
+                                        crate::window::a11y::debug::NodeDebugInfo {
+                                            synthetic: false,
+                                            view,
+                                            element_id: global_id
+                                                .last()
+                                                .map(|id| format!("{id:?}")),
+                                            source_location,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        // Text of an element without an id: a label leaf numbered within the
+                        // nearest identified element (A11Y-003).
+                        None => {
+                            if let Some(text) = self
+                                .element
+                                .a11y_text()
+                                .filter(|text| !text.trim().is_empty())
+                            {
+                                let mut node = accesskit::Node::new(accesskit::Role::Label);
+                                node.set_bounds(crate::window::a11y::device_rect(
+                                    bounds,
+                                    window.scale_factor(),
+                                ));
+                                node.set_value(text);
+                                let scope = window.element_id_stack.hash();
+                                #[cfg(debug_assertions)]
+                                let info = Some(crate::window::a11y::debug::NodeDebugInfo {
+                                    synthetic: false,
+                                    view: window
+                                        .a11y
+                                        .view_type_names
+                                        .get(&window.current_view())
+                                        .copied(),
+                                    element_id: None,
+                                    source_location: self.element.source_location(),
+                                });
+                                window.a11y.nodes.push_text(
+                                    scope,
+                                    node,
+                                    #[cfg(debug_assertions)]
+                                    info,
                                 );
                             }
                         }

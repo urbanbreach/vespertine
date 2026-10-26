@@ -255,6 +255,15 @@ impl Element for RichText {
         None
     }
 
+    /// A run is a label holding its displayed text (A11Y-003).
+    fn a11y_role(&self) -> Option<vespertine::Role> {
+        Some(vespertine::Role::Label)
+    }
+
+    fn write_a11y_info(&self, node: &mut vespertine::accesskit::Node) {
+        node.set_value(self.original.displayed());
+    }
+
     fn request_layout(
         &mut self,
         global_id: Option<&GlobalElementId>,

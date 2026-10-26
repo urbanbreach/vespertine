@@ -352,6 +352,7 @@ struct TextareaAdapter {
     max_rows: usize,
     submit_mode: SubmitMode,
     applied_look: Option<(FieldTheme, TextMetrics)>,
+    applied_label: Option<SharedString>,
     applied_rows: Option<(usize, usize)>,
     applied_submit: Option<SubmitMode>,
 }
@@ -372,6 +373,7 @@ impl Default for TextareaAdapter {
             max_rows: 10,
             submit_mode: SubmitMode::default(),
             applied_look: None,
+            applied_label: None,
             applied_rows: None,
             applied_submit: None,
         }
@@ -442,6 +444,7 @@ impl ElementAdapter for TextareaAdapter {
             }
         };
         let look = look(&context, window, cx);
+        let new_label = label(&context);
         let rows = (self.min_rows, self.max_rows.max(self.min_rows));
         area.update(cx, |area, cx| {
             if let Some(value) = self.pending.take() {
@@ -455,6 +458,10 @@ impl ElementAdapter for TextareaAdapter {
             }
             if area.is_disabled() != self.disabled {
                 area.set_disabled(self.disabled, cx);
+            }
+            if self.applied_label != new_label {
+                area.set_accessible_label(new_label.clone(), cx);
+                self.applied_label = new_label.clone();
             }
             if self.applied_look.as_ref() != Some(&look) {
                 area.set_theme(Some(look.0), cx);
@@ -473,7 +480,11 @@ impl ElementAdapter for TextareaAdapter {
                 area.set_tab_stop(tab_stop, cx);
             }
         });
-        // The multiline editor exposes no label of its own: the host surface carries it.
+        // The editor's own node carries the label; the surface around it stays unlabelled.
+        let mut context = context;
+        let mut properties = (*context.properties).clone();
+        properties.remove("aria-label");
+        context.properties = Arc::new(properties);
         host_surface(context, area.into_any_element())
     }
 

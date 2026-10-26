@@ -171,6 +171,15 @@ with them.
 - `UniformListScrollHandle::set_offset_from_scrollbar` sets an offset that retained list rows count
   as scrolling; other programmatic offset changes leave an owner's notification to rebuild the
   visible rows.
+- Accessibility (A11Y-003): text drawn by an element without an id (`&'static str`,
+  `SharedString`, `StyledText`, through the new `Element::a11y_text`) is a `Label` node numbered
+  within its nearest identified element, where upstream exposed only `text!` text; an element
+  that handles clicks and has no role is a `Button`, where upstream left it out of the tree.
+  The window node carries the visible window's bounds and the tree names its toolkit. The window
+  calls `PlatformWindow::a11y_update_window_bounds`, which upstream declares but never calls,
+  after creating the adapter and from `bounds_changed`; Wayland implements it with the surface
+  at the origin, and X11 converts with the X window's own rectangle instead of one inset by the
+  client shadow margin, since node bounds are relative to the X window.
 - Removed features `vespertine_platform/multithreaded`,
   `vespertine_scheduler/wasm-threads`, and `vespertine_ztracing/web`.
 - Removed only these browser-transport tests:

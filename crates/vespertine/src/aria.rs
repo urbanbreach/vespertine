@@ -295,13 +295,16 @@ impl Interactivity {
 
     /// The role exported for this element's own node, or `None` when it exports
     /// none. `GenericContainer` never forces a node, so assigning it behaves
-    /// like assigning no role.
+    /// like assigning no role. An element that handles clicks and has no role is
+    /// a [`Role::Button`] (A11Y-003), so assistive technology can find and press
+    /// it; a suppressing role token (`none`, `presentation`) keeps it out.
     pub(crate) fn a11y_role(&self) -> Option<Role> {
         if self.aria().suppress_node {
             return None;
         }
         self.override_role
             .filter(|role| *role != Role::GenericContainer)
+            .or_else(|| (!self.click_listeners.is_empty()).then_some(Role::Button))
     }
 
     /// Writes the image alternative text as the label when no label was given:

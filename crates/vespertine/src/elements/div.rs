@@ -4635,6 +4635,10 @@ where
         self.element.write_a11y_info(node);
     }
 
+    fn a11y_text(&self) -> Option<&str> {
+        self.element.a11y_text()
+    }
+
     fn a11y_synthetic_children(
         &mut self,
         prepaint: &mut Self::PrepaintState,

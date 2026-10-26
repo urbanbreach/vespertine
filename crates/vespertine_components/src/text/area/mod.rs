@@ -184,6 +184,7 @@ pub struct TextArea {
     disabled: bool,
     tab_stop: bool,
     role: Role,
+    accessible_label: Option<SharedString>,
     metrics: TextMetrics,
     theme: Option<FieldTheme>,
     font: Option<Font>,
@@ -293,6 +294,7 @@ impl TextArea {
             disabled: false,
             tab_stop: true,
             role: Role::MultilineTextInput,
+            accessible_label: None,
             metrics: TextMetrics::default(),
             theme: None,
             font: None,
@@ -443,6 +445,14 @@ impl TextArea {
     /// Sets the accessibility role (default multiline text input).
     pub fn accessibility_role(mut self, role: Role) -> Self {
         self.role = role;
+        self
+    }
+
+    /// Sets the accessible label announced for the input node (a text area is otherwise
+    /// unlabelled), as [`TextField::accessible_label`](crate::text::TextField::accessible_label)
+    /// does for a single line.
+    pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessible_label = Some(label.into());
         self
     }
 
@@ -726,6 +736,12 @@ impl TextArea {
     /// Sets the placeholder.
     pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.placeholder = text.into();
+        cx.notify();
+    }
+
+    /// Sets or clears the accessible label of the input node.
+    pub fn set_accessible_label(&mut self, label: Option<SharedString>, cx: &mut Context<Self>) {
+        self.accessible_label = label;
         cx.notify();
     }
 
@@ -1982,6 +1998,10 @@ impl TextArea {
 
     pub(crate) fn role_value(&self) -> Role {
         self.role
+    }
+
+    pub(crate) fn accessible_label_ref(&self) -> Option<&SharedString> {
+        self.accessible_label.as_ref()
     }
 
     pub(crate) fn placeholder_ref(&self) -> &SharedString {

@@ -71,6 +71,8 @@ use vespertine_util::{ResultExt, measure};
 
 pub(crate) mod a11y;
 #[cfg(test)]
+mod a11y_content_tests;
+#[cfg(test)]
 mod a11y_retained_tests;
 #[cfg(test)]
 mod a11y_scroll_tests;
@@ -2019,7 +2021,7 @@ impl Window {
             }
             let initial_tree = accesskit::TreeUpdate {
                 nodes: vec![(ROOT_NODE_ID, initial_root_node)],
-                tree: Some(accesskit::Tree::new(ROOT_NODE_ID)),
+                tree: Some(a11y::tree_description()),
                 tree_id: accesskit::TreeId::ROOT,
                 focus: ROOT_NODE_ID,
             };
@@ -2050,6 +2052,9 @@ impl Window {
                     })
                 },
             });
+            // The adapter places the window node and converts node bounds to screen coordinates
+            // with the window's geometry; later changes arrive through `bounds_changed`.
+            platform_window.a11y_update_window_bounds();
 
             // A11y can be activated at any time, and so we cannot compute a
             // correct `TreeUpdate` on-demand. When this happens, we return a
@@ -3268,12 +3273,14 @@ impl Window {
     /// Notify the window that its bounds have changed.
     ///
     /// This updates internal state like `viewport_size` and `scale_factor` from
-    /// the platform window, then notifies observers. Normally called automatically
-    /// by the platform's resize callback, but exposed publicly for test infrastructure.
+    /// the platform window, hands the new geometry to the accessibility adapter, then
+    /// notifies observers. Normally called automatically by the platform's resize and move
+    /// callbacks, but exposed publicly for test infrastructure.
     pub fn bounds_changed(&mut self, cx: &mut App) {
         self.scale_factor = self.platform_window.scale_factor();
         self.viewport_size = self.platform_window.content_size();
         self.mouse_position = self.platform_window.mouse_position();
+        self.platform_window.a11y_update_window_bounds();
 
         self.refresh();
 
@@ -4402,6 +4409,21 @@ impl Window {
         self.refresh();
     }
 
+    /// The window node's bounds (A11Y-003): the viewport without the invisible shadow margin of
+    /// a client-decorated window, in device pixels relative to the surface origin, so assistive
+    /// technology sees the window where the compositor shows it.
+    fn a11y_window_bounds(&self) -> accesskit::Rect {
+        let inset = self.effective_client_inset();
+        let visible = Bounds::from_corners(
+            point(inset.left, inset.top),
+            point(
+                self.viewport_size.width - inset.right,
+                self.viewport_size.height - inset.bottom,
+            ),
+        );
+        a11y::device_rect(visible, self.scale_factor)
+    }
+
     fn draw_roots(&mut self, cx: &mut App) {
         self.glyph_store.begin_frame();
         self.invalidator.set_phase(DrawPhase::Prepaint);
@@ -4409,7 +4431,8 @@ impl Window {
         self.tooltip_bounds.take();
 
         if self.a11y.is_active() {
-            self.a11y.begin_frame();
+            let root_bounds = self.a11y_window_bounds();
+            self.a11y.begin_frame(root_bounds);
         }
 
         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());

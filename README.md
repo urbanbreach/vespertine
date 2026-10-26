@@ -143,8 +143,10 @@ validation and image-derived palette hints.
 ### Accessibility (A11Y)
 
 Declarative accessibility properties and leaf metadata on elements (AccessKit), and accessibility
-tree replay that cooperates with retained frames. See the `_accessibility` module documentation of
-`vespertine`.
+tree replay that cooperates with retained frames. Text and clickable elements are exposed without
+annotations, and the window node carries the window's geometry, so AT-SPI clients such as screen
+readers and computer-use agents find the window and its contents. See the `_accessibility` module
+documentation of `vespertine`.
 
 ## Crates
 

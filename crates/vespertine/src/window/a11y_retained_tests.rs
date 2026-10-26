@@ -413,8 +413,8 @@ fn every_accessible_frame_delivers_a_full_tree_with_current_focus(cx: &mut TestA
     let full = node_count(cx).expect("an update was delivered");
     assert_eq!(
         full,
-        1 + 2 + 2 * 4 + 1,
-        "root, dashboard, panels and buttons"
+        1 + 2 + 2 * 4 * 2 + 1,
+        "root, dashboard, panels, buttons and the buttons' text"
     );
     for frame in 0..10 {
         fixture.focus_without_refresh(cx, window, Some(frame % 8));
