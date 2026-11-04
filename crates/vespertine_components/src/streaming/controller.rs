@@ -246,11 +246,12 @@ impl FollowController {
                 match hold.phase {
                     HoldPhase::Entering | HoldPhase::Holding => hold.phase = HoldPhase::Released,
                     HoldPhase::Released => {
-                        // The hold re-arms only when the user returns to the hold position
-                        // moving toward it (the item's top at or below inset - 2 px - 2 px).
+                        // The hold re-arms only when the user scrolls back down to the hold
+                        // position (the item's top within inset + 2 px + 2 px); reading above it
+                        // must not re-arm, or the hold pulls the view back down.
                         if let Some(bounds) = self.list.bounds_for_item(hold.item) {
                             let top = f32::from(bounds.top() - self.list.viewport_bounds().top());
-                            if top >= hold.inset - HOLD_SLACK - HOLD_TOLERANCE {
+                            if top <= hold.inset + HOLD_SLACK + HOLD_TOLERANCE {
                                 hold.phase = HoldPhase::Holding;
                             }
                         }

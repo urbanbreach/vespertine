@@ -386,6 +386,33 @@ fn a12_an_anchored_send_rests_the_item_at_its_inset_and_hands_off_when_filled() 
 }
 
 #[test]
+fn a12_scrolling_up_from_an_anchored_send_stays_up_and_returning_re_arms_the_hold() {
+    require_backend!();
+    let mut f = fixture(uniform(30, 40.0));
+    f.frames(2);
+    f.append(60.0);
+    let controller = f.controller.clone();
+    f.with_window(move |window, cx| controller.begin_anchored_send(30, 20.0, window, cx));
+    f.frames(120);
+    let viewport_top = f32::from(f.list.viewport_bounds().top());
+    // Several notches up: the reader stays where they scrolled.
+    for _ in 0..3 {
+        f.wheel(40.0);
+    }
+    f.frames(120);
+    let top = f.top_of(30) - viewport_top;
+    assert!(
+        top > 20.0 + 100.0,
+        "the hold pulled the view back, top = {top}"
+    );
+    assert!(!f.controller.has_hold());
+    // Back down to the hold position: the hold re-arms.
+    f.wheel(-(top - 20.0));
+    f.frames(120);
+    assert!(f.controller.has_hold());
+}
+
+#[test]
 fn a_stepper_glides_a_not_quite_live_tail_to_the_end_and_goes_idle() {
     require_backend!();
     let mut f = fixture(uniform(30, 40.0));
