@@ -4,6 +4,18 @@ Entries are grouped by release, newest first, and summarize what changed by area
 identifiers (for example `RND-003`) are the rows of [FEATURES.md](FEATURES.md), which lists the tests
 and examples that verify each one.
 
+## 0.2.2 - 2026-11-04
+
+Scrolling up from a just-sent message works again. Every crate and JavaScript package carries
+`0.2.2`.
+
+### Fixed
+
+- Scrolling up from an anchored send (CMP-029 R12, R13) stays where the reader scrolled. The
+  released hold re-armed on the next wheel step whenever the item sat below its inset, which is
+  every position above the hold, and then pulled the view back down to the sent item. It now
+  re-arms only when the reader scrolls back down to the hold position.
+
 ## 0.2.1 - 2026-10-26
 
 Accessibility on Linux works with AT-SPI clients: windows report their geometry, and text and
